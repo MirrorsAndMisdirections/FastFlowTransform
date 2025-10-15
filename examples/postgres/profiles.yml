@@ -1,0 +1,5 @@
+stg:
+  engine: postgres
+  postgres:
+    dsn: postgresql+psycopg://postgres:postgres@localhost:5432/ffdb
+    schema: public

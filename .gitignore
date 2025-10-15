@@ -1,0 +1,41 @@
+# Envs & Secrets
+.env
+.env.*
+
+# Local DBs / Artifacts
+*.duckdb
+/local/**
+.local/
+
+# Virtual Environments
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.build/
+.eggs/
+.DS_Store
+
+# Tooling Caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage*
+htmlcov/
+
+# Build Artifacts
+build/
+dist/
+
+# Editors / IDEs
+.vscode/
+.idea/
+
+# Docs Output
+examples/**/docs/
+FlowForge.md

@@ -1,0 +1,3 @@
+id,email,is_gmail
+1,x@gmail.com,true
+2,a@example.com,false

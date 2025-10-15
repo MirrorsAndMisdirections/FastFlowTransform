@@ -1,0 +1,131 @@
+[build-system]
+requires = ["hatchling>=1.25,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "flowforge"
+version = "0.1.0"
+description = "FlowForge PoC: SQL+Python Models, DAG, DuckDB executor"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [ { name = "Your Name", email = "you@example.com" } ]
+requires-python = ">=3.12"
+keywords = ["data", "etl", "elt", "analytics", "dbt", "streaming", "dag"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Topic :: Software Development :: Build Tools",
+]
+dependencies = [
+  "typer>=0.12",
+  "jinja2>=3.1",
+  "duckdb>=1.0",
+  "pandas>=2.0",
+  "pyyaml>=6.0",
+  "google-cloud-bigquery>=3.25",
+  "sqlalchemy>=2.0",
+  "psycopg[binary]>=3.1",
+  "psycopg2-binary>=2.9",
+  "pydantic>=2.8",
+  "pydantic-settings>=2.4",
+  "python-dotenv>=1.0",
+  "pyspark>=4.0.1",
+  "snowflake>=1.8.0",
+  "snowflake-snowpark-python>=1.40.0",
+  "bigframes>=2.24.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "ruff>=0.6",
+  "mypy>=1.11",
+  "pandas-stubs>=2.1",
+  "types-PyYAML>=6.0.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/<org>/<repo>"
+Issues = "https://github.com/<org>/<repo>/issues"
+Repository = "https://github.com/<org>/<repo>.git"
+
+[project.scripts]
+flowforge = "flowforge.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/flowforge"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/flowforge/**", "pyproject.toml", "README.md"]
+
+[tool.black]
+line-length = 100
+
+# ---------------------------
+# Ruff (linter + formatter)
+# ---------------------------
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "F",   # pyflakes
+  "E", "W",  # pycodestyle
+  "I",   # isort
+  "UP",  # pyupgrade
+  "B",   # bugbear
+  "SIM", # flake8-simplify
+  "PL",  # pylint-ish checks
+  "RUF", # ruff-specific
+]
+ignore = [
+  "E203", # whitespace before ':', compatible with black-like formatting
+]
+fixable = ["ALL"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["flowforge"]
+combine-as-imports = true
+
+# Keep __init__.py tidy without false positives on re-exports.
+[tool.ruff.lint.per-file-ignores]
+"src/flowforge/__init__.py" = ["F401"]
+
+# ---------------------------
+# MyPy (type checker)
+# ---------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+pretty = true
+show_error_codes = true
+color_output = true
+# 3rd-party libs can be noisy; keep focused on your codebase first:
+ignore_missing_imports = true
+follow_imports = "silent"
+
+# Only type-check your src by default (tests can be added incrementally)
+files = ["src"]
+
+# module/package-specific overrides (examples)
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true
+
+[tool.twine]
+repository = "pypi"
+
+[tool.pytest.ini_options]
+addopts = "-q"

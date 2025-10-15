@@ -1,0 +1,20 @@
+dev:
+  engine: duckdb
+  duckdb:
+    path: ":memory:"
+
+stg:
+  engine: postgres
+  postgres:
+    dsn: postgresql+psycopg://user:pass@localhost:5432/ffdb
+    schema: analytics
+
+prod:
+  engine: bigquery
+  bigquery:
+    dataset: my_company_analytics
+    location: EU
+
+# Fallback
+default:
+  engine: duckdb

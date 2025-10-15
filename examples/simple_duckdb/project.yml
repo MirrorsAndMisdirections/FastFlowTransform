@@ -1,0 +1,49 @@
+name: simple_duckdb
+version: 0.1
+models_dir: models
+
+tests:
+  # Batch‑Tabellen
+  - type: not_null
+    table: users
+    column: id
+    tags: [batch]
+
+  - type: unique
+    table: users
+    column: id
+    tags: [batch]
+
+  - type: row_count_between
+    table: users_enriched
+    min: 1
+    tags: [batch]
+
+  # Streaming‑Tabelle (aus streaming.py)
+  - type: greater_equal
+    table: fct_sessions_streaming
+    column: revenue
+    threshold: 0
+    tags: [streaming]
+
+  - type: greater_equal
+    table: mart_orders_enriched
+    column: valid_amt
+    threshold: 0
+    tags: [batch]
+
+  - type: non_negative_sum
+    table: mart_orders_enriched
+    column: valid_amt
+    tags: [batch]
+
+  - type: non_negative_sum
+    table: fct_sessions_streaming
+    column: revenue
+    tags: [streaming]
+
+  - type: freshness
+    table: fct_sessions_streaming
+    column: session_end
+    max_delay_minutes: 15
+    tags: [streaming]

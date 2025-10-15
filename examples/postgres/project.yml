@@ -1,0 +1,13 @@
+name: example_postgres
+version: 0.1
+models_dir: models
+
+tests:
+  - type: not_null
+    table: users
+    column: id
+    tags: [batch]
+  - type: unique
+    table: users
+    column: id
+    tags: [batch]

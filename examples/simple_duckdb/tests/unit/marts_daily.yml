@@ -1,0 +1,29 @@
+model: marts_daily.ff           # node name (filename including .ff)
+
+defaults:
+  inputs:
+    users_enriched:             # physical relation (ref('users_enriched') -> "users_enriched")
+      rows:
+        - {id: 1, email: "a@example.com", is_gmail: false}
+        - {id: 2, email: "b@gmail.com",   is_gmail: true}
+  expect:
+    relation: mart_users        # important because the SQL materialises this table
+    order_by: [id]
+    any_order: false
+    ignore_columns: []
+
+cases:
+  - name: passthrough_columns
+    expect:
+      rows:
+        - {id: 1, email: "a@example.com", is_gmail: false}
+        - {id: 2, email: "b@gmail.com",   is_gmail: true}
+
+  - name: override_upstream
+    inputs:
+      users_enriched:
+        rows:
+          - {id: 10, email: "x@gmail.com", is_gmail: true}
+    expect:
+      rows:
+        - {id: 10, email: "x@gmail.com", is_gmail: true}
