@@ -14,8 +14,8 @@ def project_root(start: Path | None = None) -> Path:
     raise RuntimeError("Cannot determine project root; missing marker file?")
 
 
+ROOT = project_root(Path(__file__))
 
-ROOT = ROOT = project_root(Path(__file__))
 
 def run(cmd: list[str], env: dict | None = None) -> subprocess.CompletedProcess:
     e = os.environ.copy()

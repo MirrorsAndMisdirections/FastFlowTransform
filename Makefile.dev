@@ -1,0 +1,59 @@
+# Developer tooling, testing, and CI helpers
+
+.PHONY: install dev-venv ci test-pg-batch unittest utest utest-duckdb fmt lint fix type pre-commit act-commit
+
+UV ?= uv
+
+install:
+	$(UV) pip install --upgrade pip
+	$(UV) pip install --editable .
+
+# Optional: local virtual environment bootstrap
+dev-venv:
+	$(UV) venv .venv
+	$(UV) pip install --python .venv/bin/python --upgrade pip
+	$(UV) pip install --python .venv/bin/python --editable .
+
+# Lightweight local CI entrypoint (full matrix lives in GitHub Actions)
+ci:
+	pytest -q
+
+test-pg-batch:
+	FLOWFORGE_SQL_DEBUG=1 $(UV) run pytest -q tests/test_smoke_postgres.py::test_pg_batch_tests_green
+
+unittest:
+	FLOWFORGE_SQL_DEBUG=1 $(UV) run pytest -q tests
+
+utest:
+	flowforge utest "$(FF_PROJECT)" --env "$(FF_ENV)"
+
+utest-duckdb:
+	flowforge utest "$(FF_PROJECT)" --env "$(FF_ENV)" --model users_enriched
+
+# Lint & format helpers
+fmt:
+	$(UV) run ruff format src tests
+
+lint:
+	$(UV) run ruff check src tests --no-cache
+
+fix:
+	$(UV) run ruff check src tests --fix
+	$(UV) run ruff format src tests
+
+type:
+	$(UV) run mypy --config-file=pyproject.toml
+
+pre-commit-install:
+	(UV) run pre-commit install 
+
+pre-commit:
+	$(UV) run pre-commit run --all-files
+
+act-commit:
+	act pull_request \
+	-W .github/workflows/CI.yml -j checks \
+	--bind --container-architecture linux/arm64 \
+	-P ubuntu-latest=ghcr.io/catthehacker/ubuntu:act-22.04 \
+	--env UV_PROJECT_ENVIRONMENT=/tmp/uv-venv \
+	--env VIRTUAL_ENV=

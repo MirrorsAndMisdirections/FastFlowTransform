@@ -1,11 +1,11 @@
 # tests/test_python_model_materialized_view.py
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 from flowforge.core import REGISTRY
 from flowforge.executors.duckdb_exec import DuckExecutor
+
 
 @pytest.mark.duckdb
 def test_python_model_materialized_as_view(tmp_path: Path, monkeypatch):
@@ -34,8 +34,7 @@ def build(df: pd.DataFrame) -> pd.DataFrame:
 
     # Consumer SQL model to use the view
     (m / "mart.ff.sql").write_text(
-        "{{ config(materialized='table') }}\n"
-        "select id, is_gmail from {{ ref('py_users.ff') }};",
+        "{{ config(materialized='table') }}\nselect id, is_gmail from {{ ref('py_users.ff') }};",
         encoding="utf-8",
     )
 
@@ -58,7 +57,8 @@ def build(df: pd.DataFrame) -> pd.DataFrame:
 
     # Assert: py_users is a VIEW
     is_view_rows = ex.con.execute(
-        "select count(*) from information_schema.tables where table_type='VIEW' and lower(table_name)='py_users'"
+        "select count(*) from information_schema.tables where table_type='VIEW' "
+        "and lower(table_name)='py_users'"
     ).fetchone()
     assert is_view_rows is not None
     is_view = is_view_rows[0]

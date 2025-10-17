@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 import bigframes  # Package: google-cloud-bigquery-dataframes
+from bigframes._config.bigquery_options import BigQueryOptions
 from google.api_core.exceptions import BadRequest, NotFound
 from google.cloud import bigquery
 
@@ -14,7 +15,7 @@ from ._shims import BigQueryConnShim
 from .base import BaseExecutor
 
 if TYPE_CHECKING:
-    from bigframes.dataframe import DataFrame as BFDataFrame  # type: ignore
+    from bigframes.dataframe import DataFrame as BFDataFrame
 else:
     BFDataFrame = Any
 
@@ -27,9 +28,11 @@ class BigQueryBFExecutor(BigQueryIdentifierMixin, BaseExecutor[BFDataFrame]):
         self.client = bigquery.Client(project=project, location=location)
 
         try:
-            from bigframes.options import BigQueryOptions  # type: ignore
-
-            ctx = BigQueryOptions(project=project, default_dataset=dataset, location=location)
+            ctx = BigQueryOptions(
+                project=project,
+                # default_dataset=dataset,
+                location=location,
+            )
             self.session = bigframes.Session(context=ctx)
         except Exception:
             # Fallback: session without explicit context (ADC/default project),
@@ -70,7 +73,7 @@ class BigQueryBFExecutor(BigQueryIdentifierMixin, BaseExecutor[BFDataFrame]):
             "BigQuery DataFrames: Ergebnis nicht materialisierbar. "
             "Erwarte df.to_gbq(...) oder df.materialize(...)."
         )
-    
+
     def _validate_required(
         self, node_name: str, inputs: Any, requires: dict[str, set[str]]
     ) -> None:
@@ -87,7 +90,7 @@ class BigQueryBFExecutor(BigQueryIdentifierMixin, BaseExecutor[BFDataFrame]):
         errs: list[str] = []
         if self._is_frame(inputs):
             need = next(iter(requires.values()), set())
-            miss = need - cols(inputs)  # type: ignore[arg-type]
+            miss = need - cols(inputs)
             if miss:
                 errs.append(f"- missing columns: {sorted(miss)}")
         else:
@@ -166,4 +169,3 @@ class BigQueryBFExecutor(BigQueryIdentifierMixin, BaseExecutor[BFDataFrame]):
             f"CREATE OR REPLACE VIEW {view_id} AS SELECT * FROM {back_id}",
             location=self.location,
         ).result()
-        raise TypeError(f"Unsupported sql for BigQuery shim: {type(sql_or_stmts)}")

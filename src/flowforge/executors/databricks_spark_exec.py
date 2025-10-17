@@ -28,7 +28,7 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         df.write.mode("overwrite").saveAsTable(relation)
 
     def _create_view_over_table(self, view_name: str, backing_table: str, node: Node) -> None:
-        self.spark.sql(f'CREATE OR REPLACE VIEW `{view_name}` AS SELECT * FROM `{backing_table}`')
+        self.spark.sql(f"CREATE OR REPLACE VIEW `{view_name}` AS SELECT * FROM `{backing_table}`")
 
     def _validate_required(
         self, node_name: str, inputs: Any, requires: dict[str, set[str]]
@@ -89,9 +89,7 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
     ) -> str:
         ident = cfg["identifier"]
         db = cfg.get("database")
-        return (
-            f"{self._q_ident(db)}.{self._q_ident(ident)}" if db else self._q_ident(ident)
-        )
+        return f"{self._q_ident(db)}.{self._q_ident(ident)}" if db else self._q_ident(ident)
 
     def _create_or_replace_view(self, target_sql: str, select_body: str, node: Node) -> None:
         self.spark.sql(f"CREATE OR REPLACE VIEW {target_sql} AS {select_body}")
@@ -102,6 +100,4 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
     def _create_or_replace_view_from_table(
         self, view_name: str, backing_table: str, node: Node
     ) -> None:
-        self.spark.sql(
-            f"CREATE OR REPLACE VIEW `{view_name}` AS SELECT * FROM `{backing_table}`"
-        )
+        self.spark.sql(f"CREATE OR REPLACE VIEW `{view_name}` AS SELECT * FROM `{backing_table}`")

@@ -2,7 +2,7 @@ model: mart_orders_enriched
 
 defaults:
   inputs:
-    users_enriched:             
+    users_enriched:
       rows:
         - {id: 1, email: "x@gmail.com", is_gmail: true}
     orders:

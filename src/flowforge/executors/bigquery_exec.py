@@ -1,7 +1,7 @@
 # src/flowforge/executors/bigquery_exec.py
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from typing import Any
 
 import pandas as pd
@@ -10,8 +10,8 @@ from google.cloud import bigquery
 from google.cloud.bigquery import Client, LoadJobConfig
 
 from ..core import Node, relation_for
-from ._shims import BigQueryConnShim
 from ._bigquery_mixin import BigQueryIdentifierMixin
+from ._shims import BigQueryConnShim
 from .base import BaseExecutor
 
 
@@ -72,7 +72,7 @@ class BigQueryExecutor(BigQueryIdentifierMixin, BaseExecutor[pd.DataFrame]):
             job.result()
         except BadRequest as e:
             raise RuntimeError(f"BigQuery write failed: {table_id}\n{e}") from e
-        
+
     def _create_view_over_table(self, view_name: str, backing_table: str, node: Node) -> None:
         view_id = self._qualified_identifier(view_name)
         back_id = self._qualified_identifier(backing_table)

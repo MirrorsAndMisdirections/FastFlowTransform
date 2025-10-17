@@ -5,9 +5,8 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-import pandas as pd
-
 import duckdb
+import pandas as pd
 
 
 class FileTailSource:
@@ -20,7 +19,7 @@ class FileTailSource:
 
     def consume(
         self, on_batch: Callable[[pd.DataFrame], None], batch_size: int = 100, poll_sec: float = 1.0
-    ):
+    ) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.touch(exist_ok=True)
         with self.path.open("r", encoding="utf-8") as f:
@@ -55,7 +54,7 @@ class StreamSessionizer:
             """
         )
 
-    def process_batch(self, df: pd.DataFrame):
+    def process_batch(self, df: pd.DataFrame) -> None:
         if df.empty:
             return
         self.con.register("_events_batch", df)
@@ -80,8 +79,8 @@ class StreamSessionizer:
             any_value(source)               as source,
             min(event_ts)                   as session_start,
             max(event_ts)                   as session_end,
-            sum(case when event_type='page_view' then 1 else 0 end)                      as pageviews,
-            sum(coalesce(amount,0)) filter (where event_type='purchase')                  as revenue
+            sum(case when event_type='page_view' then 1 else 0 end) as pageviews,
+            sum(coalesce(amount,0)) filter (where event_type='purchase') as revenue
             from _events_norm
             group by session_id;
 

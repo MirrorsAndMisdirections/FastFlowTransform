@@ -1,9 +1,12 @@
 # src/flowforge/validation.py (neu)
+from __future__ import annotations
+
+from typing import Any
 
 import pandas as pd
 
 
-def validate_required_columns(node_name: str, inputs, requires: dict[str, set[str]]):
+def validate_required_columns(node_name: str, inputs: Any, requires: dict[str, set[str]]) -> None:
     """
     inputs: entweder ein DataFrame (bei 1 Dep) oder dict[str, DataFrame] (bei >1 Deps)
     requires: Mapping physische_relations_name -> set[columns]
@@ -13,7 +16,7 @@ def validate_required_columns(node_name: str, inputs, requires: dict[str, set[st
     errors = []
 
     if isinstance(inputs, pd.DataFrame):
-        # 1 Dep – requires muss genau 1 key haben
+        # 1 Dep - requires muss genau 1 key haben
         need = next(iter(requires.values())) if requires else set()
         have = set(inputs.columns)
         miss = need - have

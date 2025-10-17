@@ -1,19 +1,22 @@
 from __future__ import annotations
-from pathlib import Path
-import pytest
-import duckdb
 
-from flowforge.core import REGISTRY, Node
-from flowforge.executors.duckdb_exec import DuckExecutor
+from pathlib import Path
+
+import pytest
+
+from flowforge.core import REGISTRY
 from flowforge.dag import topo_sort
+from flowforge.executors.duckdb_exec import DuckExecutor
 from flowforge.seeding import seed_project
 
 pytestmark = pytest.mark.duckdb  # uses DuckDB
+
 
 def _w(p: Path, txt: str) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(txt, encoding="utf-8")
     return p
+
 
 def test_ephemeral_inlining_end_to_end(tmp_path: Path):
     proj = tmp_path
@@ -25,23 +28,34 @@ def test_ephemeral_inlining_end_to_end(tmp_path: Path):
     _w(seeds / "base.csv", "id\n1\n3\n")
 
     # sources.yml
-    _w(proj / "sources.yml", "crm:\n  users:\n    identifier: seed_users\ncore:\n  base:\n    identifier: base\n")
+    _w(
+        proj / "sources.yml",
+        "crm:\n  users:\n    identifier: seed_users\ncore:\n  base:\n    identifier: base\n",
+    )
 
     # models
     # users from source → materialized table
-    _w(models / "users.ff.sql",
-       "create or replace table users as\nselect id, email from {{ source('crm','users') }}")
+    _w(
+        models / "users.ff.sql",
+        "create or replace table users as\nselect id, email from {{ source('crm','users') }}",
+    )
     # ephemeral model: list of ids from base
-    _w(models / "ephemeral_ids.ff.sql",
-       "{{ config(materialized='ephemeral') }}\nselect id from {{ source('core','base') }}")
+    _w(
+        models / "ephemeral_ids.ff.sql",
+        "{{ config(materialized='ephemeral') }}\nselect id from {{ source('core','base') }}",
+    )
     # view referencing users and ephemeral → must inline the ephemeral subquery
-    _w(models / "v_users.ff.sql",
-       "{{ config(materialized='view') }}\n"
-       "select u.id from {{ ref('users.ff') }} u "
-       "join {{ ref('ephemeral_ids.ff') }} e using(id)")
+    _w(
+        models / "v_users.ff.sql",
+        "{{ config(materialized='view') }}\n"
+        "select u.id from {{ ref('users.ff') }} u "
+        "join {{ ref('ephemeral_ids.ff') }} e using(id)",
+    )
     # final mart table selecting from the view
-    _w(models / "mart.ff.sql",
-       "create or replace table mart as\nselect * from {{ ref('v_users.ff') }}")
+    _w(
+        models / "mart.ff.sql",
+        "create or replace table mart as\nselect * from {{ ref('v_users.ff') }}",
+    )
 
     # Load project (registry, jinja env, deps)
     REGISTRY.load_project(proj)
@@ -66,7 +80,10 @@ def test_ephemeral_inlining_end_to_end(tmp_path: Path):
     assert rows == [(1,)]
 
     # ephemeral relation must NOT exist as a table/view
-    existing = [r[0] for r in con.execute(
-        "select table_name from information_schema.tables where table_schema in ('main','temp')"
-    ).fetchall()]
+    existing = [
+        r[0]
+        for r in con.execute(
+            "select table_name from information_schema.tables where table_schema in ('main','temp')"
+        ).fetchall()
+    ]
     assert "ephemeral_ids" not in existing

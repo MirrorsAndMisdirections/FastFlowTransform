@@ -1,0 +1,137 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  # ---------- fast checks: lint, type, unit ----------
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        if: ${{ env.ACT != 'true' }}
+        uses: actions/checkout@v4
+
+      # uv + Python 3.12
+      - name: Setup uv (and Python)
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Diagnose Working Directory
+        run: |
+          echo "PWD=$(pwd)"
+          ls -la
+          test -f pyproject.toml || (echo "pyproject.toml fehlt!" && exit 1)
+
+      # Install Dev extras (ruff, mypy, pytest, …)
+      - name: Sync deps (dev)
+        run: uv sync --extra dev --frozen
+
+      - name: Show tool versions
+        run: |
+          uv run python -V
+          uv run ruff --version
+          uv run mypy --version
+          uv run pytest --version
+
+      - name: "Debug: commit & tree"
+        run: |
+          echo "PWD=$(pwd)"
+          git rev-parse --short HEAD
+          git log -1 --stat
+
+      - name: "Debug: ensure pyproject present"
+        run: |
+          test -f pyproject.toml || (echo "pyproject.toml fehlt!" && exit 1)
+          ls -la
+
+      - name: "Debug: Ruff version & scope"
+        run: |
+          uv run ruff --version
+          echo "---- Ruff will lint these files (no cache) ----"
+          uv run ruff check src tests --no-cache --show-files
+
+      - name: Ruff (lint)
+        run: uv run ruff check src tests --no-cache --output-format=github
+
+      - name: Mypy (type check)
+        run: uv run mypy src --config-file=pyproject.toml
+
+      - name: Unit tests (fast)
+        env:
+          PYTHONWARNINGS: default
+        run: uv run pytest -q -m "not slow and not postgres" --maxfail=1
+
+  # ---------- smoke: examples/simple_duckdb with view + ephemeral ----------
+  smoke-duckdb:
+    runs-on: ubuntu-latest
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv (and Python)
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync deps
+        run: uv sync
+
+      - name: Prepare ephemeral + view models in example
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT="examples/simple_duckdb"
+          mkdir -p "${PROJECT}/models"
+
+          cat > "${PROJECT}/models/ephemeral_ids.ff.sql" <<'SQL'
+          {{ config(materialized='ephemeral') }}
+          select id from {{ source('crm','users') }}
+          SQL
+
+          cat > "${PROJECT}/models/v_users.ff.sql" <<'SQL'
+          {{ config(materialized='view') }}
+          select u.id
+          from {{ ref('users.ff') }} u
+          join {{ ref('ephemeral_ids.ff') }} e using(id)
+          SQL
+
+      - name: Seed example (DuckDB file db)
+        env:
+          FF_ENGINE: duckdb
+          FF_DUCKDB_PATH: examples/simple_duckdb/.local/demo.duckdb
+        run: uv run flowforge seed examples/simple_duckdb --env dev
+
+      - name: Run models (ephemeral inline + view materialization)
+        env:
+          FF_ENGINE: duckdb
+          FF_DUCKDB_PATH: examples/simple_duckdb/.local/demo.duckdb
+        run: uv run flowforge run examples/simple_duckdb --env dev
+
+      - name: Smoke assertions (query DuckDB)
+        run: |
+          uv run python - <<'PY'
+          import duckdb, pathlib
+          db = "examples/simple_duckdb/.local/demo.duckdb"
+          assert pathlib.Path(db).exists(), "DuckDB file not found"
+          con = duckdb.connect(db)
+          n = con.execute("select count(*) from v_users").fetchone()[0]
+          assert n >= 1, f"v_users empty (count={n})"
+          existing = {r[0] for r in con.execute(
+              "select table_name from information_schema.tables where table_schema in ('main','temp')"
+          ).fetchall()}
+          assert "ephemeral_ids" not in existing, "ephemeral_ids should not be materialized"
+          print("✓ smoke ok: v_users present, ephemeral inlined")
+          PY
+
+      - name: Build DAG (optional sanity)
+        env:
+          FF_ENGINE: duckdb
+          FF_DUCKDB_PATH: examples/simple_duckdb/.local/demo.duckdb
+        run: |
+          uv run flowforge dag examples/simple_duckdb --env dev --html
+          test -f examples/simple_duckdb/site/dag/index.html

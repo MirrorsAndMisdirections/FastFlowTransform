@@ -1,0 +1,38 @@
+# .pre-commit-config.yaml (vereinheitlicht mit uv)
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff (format)
+        entry: uv run ruff format
+        language: system
+        pass_filenames: false
+        types_or: [python]
+
+      - id: ruff-lint
+        name: ruff (lint)
+        entry: uv run ruff check src tests --no-cache --output-format=github
+        language: system
+        pass_filenames: false
+        types_or: [python]
+
+      - id: mypy
+        name: mypy
+        entry: uv run mypy --config-file=pyproject.toml
+        language: system
+        pass_filenames: false
+        types_or: [python]
+
+      # Optional: dieselben Checks auch beim Push fürs „CI-Gefühl“
+      - id: prepush-ruff
+        name: ruff (pre-push)
+        entry: uv run ruff check src tests
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+      - id: prepush-mypy
+        name: mypy (pre-push)
+        entry: uv run mypy --config-file=pyproject.toml
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

@@ -11,6 +11,8 @@ from flowforge.streaming import StreamSessionizer
 @pytest.mark.streaming
 @pytest.mark.slow
 def test_stream_sessionizer_produces_sessions():
+    delay_amt = 15
+    expected_rows_count = 2
     con = duckdb.connect(":memory:")
     sess = StreamSessionizer(con)
 
@@ -53,7 +55,7 @@ def test_stream_sessionizer_produces_sessions():
     row = con.execute("select count(*) from fct_sessions_streaming").fetchone()
     assert row is not None, "Query lieferte keine Zeile"
     rows = int(row[0])
-    assert rows >= 2
+    assert rows >= expected_rows_count
 
     # Basis-Checks (funktionieren in DuckDB & PG)
     testing.greater_equal(con, "fct_sessions_streaming", "revenue", 0)
@@ -62,7 +64,8 @@ def test_stream_sessionizer_produces_sessions():
     # Freshness: DuckDB-sichere Variante direkt im Test (um SQL-Dialekte zu umgehen)
     # DuckDB: date_diff('minute', max(ts), now())
     delay_min = con.execute(
-        "select date_diff('minute', max(session_end), current_timestamp) from fct_sessions_streaming"
+        "select date_diff('minute', max(session_end), current_timestamp) "
+        "from fct_sessions_streaming"
     ).fetchone()
     delay_min = int(delay_min[0]) if delay_min is not None else None
-    assert delay_min is not None and delay_min <= 15, f"freshness too old: {delay_min} min"
+    assert delay_min is not None and delay_min <= delay_amt, f"freshness too old: {delay_min} min"

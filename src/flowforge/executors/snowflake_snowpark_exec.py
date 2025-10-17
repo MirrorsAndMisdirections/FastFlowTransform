@@ -4,7 +4,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from jinja2 import Environment
 from snowflake.snowpark import DataFrame as SNDF, Session
 
 from ..core import Node, relation_for
@@ -109,6 +108,4 @@ class SnowflakeSnowparkExecutor(BaseExecutor[SNDF]):
     ) -> None:
         view_id = self._qualified(view_name)
         back_id = self._qualified(backing_table)
-        self.session.sql(
-            f"CREATE OR REPLACE VIEW {view_id} AS SELECT * FROM {back_id}"
-        ).collect()
+        self.session.sql(f"CREATE OR REPLACE VIEW {view_id} AS SELECT * FROM {back_id}").collect()

@@ -16,7 +16,7 @@ down:
 
 seed:
 	FF_ENGINE=postgres FF_PG_DSN="$(PG_DSN)" flowforge seed "$(PROJECT)" --env stg
-	
+
 run:
 	FF_ENGINE=postgres FF_PG_DSN=$(PG_DSN) flowforge run examples/postgres --env stg
 

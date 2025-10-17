@@ -1,15 +1,17 @@
 # flowforge/core.py
 from __future__ import annotations
 
+import ast
 import importlib.util
+import re
 import types
-import jinja2.runtime
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from contextlib import suppress
 from dataclasses import dataclass, field
-from importlib.machinery import ModuleSpec
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
+import jinja2.runtime
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
@@ -34,21 +36,21 @@ class Registry:
         self.sources: dict[str, dict[str, Any]] = {}
         self.py_requires: dict[str, dict[str, set[str]]] = {}
         self.macros: dict[str, Path] = {}  # macro_name -> file path
-        self.project_vars: dict[str, Any] = {}   # project.yml: vars
-        self.cli_vars: dict[str, Any] = {}       # CLI --vars overrides
+        self.project_vars: dict[str, Any] = {}  # project.yml: vars
+        self.cli_vars: dict[str, Any] = {}  # CLI --vars overrides
 
     def get_project_dir(self) -> Path:
         """Return the project directory after load_project(), or raise if not set."""
         if self.project_dir is None:
             raise RuntimeError("Project directory not initialized. Call load_project() first.")
         return self.project_dir
-    
+
     def get_env(self) -> Environment:
         """Return the initialized Jinja Environment, or raise if not loaded."""
         if self.env is None:
             raise RuntimeError("Jinja environment not initialized. Call load_project() first.")
         return self.env
-    
+
     def get_node(self, name: str) -> Node:
         # exact match
         n = self.nodes.get(name)
@@ -62,12 +64,12 @@ class Registry:
         if n:
             return n
         raise KeyError(name)
-    
+
     def set_cli_vars(self, overrides: dict[str, Any]) -> None:
         """Set CLI --vars overrides (highest precedence)."""
         self.cli_vars = dict(overrides or {})
 
-    def load_project(self, project_dir: Path):
+    def load_project(self, project_dir: Path) -> None:
         self.nodes.clear()
         self.py_funcs.clear()
         self.py_requires.clear()
@@ -88,6 +90,7 @@ class Registry:
 
         # Make sure macros are available to all templates before model discovery.
         self._load_macros(models_dir)
+        self._load_py_macros(models_dir)
 
         # load sources
         src_path = project_dir / "sources.yml"
@@ -108,13 +111,12 @@ class Registry:
             deps = self._scan_sql_deps(p)
             meta = self._parse_model_config(p)
             self._add_node_or_fail(name, "sql", p, deps, meta=meta)
-            
         for p in models_dir.rglob("*.ff.py"):
-            mod = self._load_py_module(p)
+            self._load_py_module(p)
             for _, func in list(self.py_funcs.items()):
                 func_path = Path(getattr(func, "__ff_path__", "")).resolve()
                 if func_path == p.resolve():
-                    name = func.__ff_name__
+                    name = getattr(func, "__ff_name__", func.__name__)
                     deps = getattr(func, "__ff_deps__", [])
                     self._add_node_or_fail(name, "python", p, deps, meta={})
 
@@ -128,25 +130,62 @@ class Registry:
     # --- Macros ---------------------------------------------------------
     def _load_macros(self, models_dir: Path) -> None:
         """
-        Load all Jinja macros from 'models/macros/**/*.sql' and register them
+        Load all Jinja macros from 'models/macros/**/*.(sql|sql.j2)' and register them
         into env.globals so they can be called directly as {{ my_macro(...) }}.
         """
         env = self.get_env()
         macros_dir = models_dir / "macros"
         if not macros_dir.exists():
             return
-        for p in macros_dir.rglob("*.sql"):
-            rel = p.relative_to(models_dir).as_posix()  # e.g., "macros/utils.sql"
-            tmpl = self.env.get_template(rel)  # type: ignore[arg-type]
-            module = tmpl.make_module({})  # render context not needed for macro extraction
-            for name, obj in module.__dict__.items():
-                # Jinja stores macro callables as jinja2.runtime.Macro
-                if getattr(jinja2.runtime, "Macro", None) and isinstance(obj, jinja2.runtime.Macro):  # type: ignore[arg-type]
-                    if name in self.macros:
-                        # Last one wins; could be changed to raise if you prefer strictness.
-                        pass
-                    env.globals[name] = obj  # publish globally
-                    self.macros[name] = p
+
+        files = _collect_macro_files(macros_dir)
+        if not files:
+            return
+
+        for path in files:
+            rel = _relative_name(path, models_dir)
+            tmpl = _get_or_build_template(env, path, rel)
+            mod = _template_module_or_none(tmpl)
+            if mod is None:
+                continue
+
+            for name, obj in _iter_public_attrs(mod):
+                if _is_jinja_macro(obj):
+                    env.globals[name] = obj  # last-one-wins ok
+                    self.macros[name] = path
+
+    def _load_py_macros(self, models_dir: Path) -> None:
+        """
+        Load Python helpers from 'models/macros_py/**/*.py' and register all public
+        callables as Jinja globals & filters.
+        """
+        env = self.get_env()
+        py_dir = models_dir / "macros_py"
+        if not py_dir.exists():
+            return
+
+        for p in sorted(py_dir.rglob("*.py")):
+            # unique module name to avoid caching collisions across tests/runs
+            mod_name = f"ff_macros_{p.stem}_{abs(hash(str(p.resolve()))):x}"
+
+            spec = importlib.util.spec_from_file_location(mod_name, p)
+            if not spec or not spec.loader:
+                continue
+
+            mod = importlib.util.module_from_spec(spec)
+            try:
+                spec.loader.exec_module(mod)  # executes user code
+            except Exception as e:
+                # In Tests willst du das sehen; wenn du es leise ignorieren willst -> 'continue'
+                raise RuntimeError(f"Failed to import macro helper {p}: {e}") from e
+
+            for name, obj in vars(mod).items():
+                if name.startswith("_") or not callable(obj):
+                    continue
+                env.globals[name] = obj
+                with suppress(Exception):
+                    env.filters[name] = obj
+                self.macros[name] = p
 
     def _load_py_module(self, path: Path) -> types.ModuleType:
         """
@@ -163,14 +202,14 @@ class Registry:
         if spec.loader is None:
             raise ModuleLoadError(f"Module spec has no loader for {path}")
 
-        # At this point spec is a ModuleSpec and loader is guaranteed to exist
-        spec = cast(ModuleSpec, spec)
         mod = importlib.util.module_from_spec(spec)
         # exec_module is part of the loader protocol; Pylance now knows the type
-        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        spec.loader.exec_module(mod)
         return mod
 
-    def _add_node_or_fail(self, name: str, kind: str, path: Path, deps: list[str], *, meta: dict[str, Any]):
+    def _add_node_or_fail(
+        self, name: str, kind: str, path: Path, deps: list[str], *, meta: dict[str, Any]
+    ) -> None:
         if name in self.nodes:
             other = self.nodes[name].path
             raise ModuleLoadError(
@@ -184,24 +223,22 @@ class Registry:
 
     def _scan_sql_deps(self, path: Path) -> list[str]:
         txt = path.read_text(encoding="utf-8")
-        # very simple ref() parser
-        import re
-
-        pattern = re.compile(r"ref\s*\(\s*['\"]([a-zA-Z0-9_\-]+)['\"]\s*\)")
+        pattern = re.compile(r"ref\s*\(\s*['\"]([A-Za-z0-9_.\-]+)['\"]\s*\)")
         return pattern.findall(txt)
-    
+
     # -------- {{ config(...) }} Head-Parser --------
     def _parse_model_config(self, path: Path) -> dict[str, Any]:
         """
         Reads the leading line {{ config(materialized='view', key=1) }}.
         Safely parses via ast.literal_eval for keyword arguments. Errors → {}.
         """
-        import re, ast
         try:
             head = path.read_text(encoding="utf-8", errors="ignore")[:2000]
         except Exception:
             return {}
-        m = re.search(r"^\s*\{\{\s*config\s*\((?P<args>.*?)\)\s*\}\}", head, flags=re.IGNORECASE | re.DOTALL)
+        m = re.search(
+            r"^\s*\{\{\s*config\s*\((?P<args>.*?)\)\s*\}\}", head, flags=re.IGNORECASE | re.DOTALL
+        )
         if not m:
             return {}
         args = m.group("args").strip()
@@ -231,7 +268,7 @@ class Registry:
         missing_map: dict[str, list[str]] = {}
         known = set(self.nodes.keys())
         for node in self.nodes.values():
-            # Only validate actual model refs – source() targets are not nodes
+            # Only validate actual model refs - source() targets are not nodes
             missing = [dep for dep in (node.deps or []) if dep not in known]
             if missing:
                 missing_map[node.name] = missing
@@ -253,3 +290,54 @@ def relation_for(node_name: str) -> str:
       - otherwise: return unchanged
     """
     return node_name[:-3] if node_name.endswith(".ff") else node_name
+
+
+# ----------------- Helper -----------------
+
+
+def _collect_macro_files(macros_dir: Path) -> list[Path]:
+    files = list(macros_dir.rglob("*.sql"))
+    files += list(macros_dir.rglob("*.sql.j2"))
+    return sorted(files)
+
+
+def _relative_name(path: Path, models_dir: Path) -> str:
+    with suppress(Exception):
+        return path.relative_to(models_dir).as_posix()
+    return path.name
+
+
+def _get_or_build_template(env: jinja2.Environment, path: Path, rel: str) -> jinja2.Template:
+    with suppress(Exception):
+        return env.get_template(rel)
+    src = path.read_text(encoding="utf-8")
+    tmpl = env.from_string(src)
+    tmpl.name = rel
+    return tmpl
+
+
+def _template_module_or_none(tmpl: jinja2.Template) -> Any:
+    with suppress(Exception):
+        return tmpl.module
+    return None
+
+
+def _iter_public_attrs(obj: object) -> Iterable[tuple[str, object]]:
+    for name in dir(obj):
+        if not name.startswith("_"):
+            yield name, getattr(obj, name, None)
+
+
+def _is_jinja_macro(obj: object) -> bool:
+    if obj is None:
+        return False
+    # 1) Klassenname-Match (funktioniert ohne direkten Import)
+    cls = getattr(obj, "__class__", None)
+    if getattr(cls, "__name__", "") == "Macro":
+        return True
+    # 2) isinstance gegen jinja2.runtime.Macro (falls vorhanden)
+    MacroClass = getattr(jinja2.runtime, "Macro", None)
+    if MacroClass is not None:
+        with suppress(Exception, TypeError):
+            return isinstance(obj, MacroClass)
+    return False

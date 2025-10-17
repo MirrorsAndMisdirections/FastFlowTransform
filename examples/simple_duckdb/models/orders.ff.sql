@@ -1,4 +1,3 @@
--- materialises a table "orders"
 create or replace table orders as
-select *
-from {{ source('crm', 'orders') }};
+select order_id, user_id, amount
+from {{ source('erp','orders') }};

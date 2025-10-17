@@ -1,9 +1,11 @@
 # src/flowforge/seeding.py
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import Any
 
+import duckdb as _dd
 import pandas as pd
 import yaml
 
@@ -27,12 +29,14 @@ def _apply_schema(df: pd.DataFrame, table: str, schema_cfg: dict | None) -> pd.D
         try:
             return df.astype(cast_map)
         except Exception:
-            # Soft-fail: load the data instead of aborting – logging might be useful here
+            # Soft-fail: load the data instead of aborting - logging might be useful here
             pass
     return df
 
 
-def materialize_seed(table: str, df: pd.DataFrame, executor: Any, schema: str | None = None):
+def materialize_seed(
+    table: str, df: pd.DataFrame, executor: Any, schema: str | None = None
+) -> None:
     """
     Engine-agnostic materialization:
     - DuckDB: register + CREATE OR REPLACE TABLE
@@ -42,15 +46,11 @@ def materialize_seed(table: str, df: pd.DataFrame, executor: Any, schema: str | 
     con = getattr(executor, "con", None)
     if con is not None:
         try:
-            import duckdb as _dd
-
             is_duck_con = isinstance(con, _dd.DuckDBPyConnection)
         except Exception:
             # Fallback: treat as "duckdb-like" when register/execute exist
             is_duck_con = all(hasattr(con, m) for m in ("register", "execute"))
         if is_duck_con:
-            import uuid
-
             tmp = f"_ff_seed_{uuid.uuid4().hex[:8]}"
             con.register(tmp, df)
             con.execute(f"create or replace table {table} as select * from {tmp}")
@@ -67,7 +67,7 @@ def materialize_seed(table: str, df: pd.DataFrame, executor: Any, schema: str | 
         return
 
     # Fallback: try feeding executor.execute(sql) with VALUES statements (for small seeds)
-    # (Optional – usually not needed if handled above)
+    # (Optional - usually not needed if handled above)
     raise RuntimeError("No compatible executor connection for seeding found.")
 
 

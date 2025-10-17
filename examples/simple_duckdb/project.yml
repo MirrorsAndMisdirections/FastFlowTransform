@@ -2,6 +2,14 @@ name: simple_duckdb
 version: 0.1
 models_dir: models
 
+docs:
+  dag_dir: site/dag
+
+# variables exposed to var('key')
+vars:
+  day: "2000-01-01"
+  min_amount: 0
+
 tests:
   # Batch‑Tabellen
   - type: not_null

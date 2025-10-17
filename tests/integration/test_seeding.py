@@ -18,7 +18,6 @@ def test_duckdb_unit_seeding(tmp_path, duckdb_project):
     ex = DuckExecutor(db_path=":memory:")
     # Load registry + Jinja so run() works later
     REGISTRY.load_project(duckdb_project)
-    jenv = _make_env(duckdb_project)
 
     # Load seeds directly (without the CLI)
     n = seed_project(duckdb_project, ex)

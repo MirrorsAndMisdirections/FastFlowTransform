@@ -40,9 +40,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8",
-  "ruff>=0.6",
-  "mypy>=1.11",
+  "pytest==8.4.*",
+  "ruff==0.14.*",
+  "mypy==1.18.*",
+  "pre-commit==3.*",
   "pandas-stubs>=2.1",
   "types-PyYAML>=6.0.12",
 ]
@@ -90,7 +91,11 @@ fixable = ["ALL"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["flowforge"]
+known-third-party = ["duckdb", "pandas"]
 combine-as-imports = true
+
+[tool.ruff.lint.pylint]
+max-args = 7
 
 # Keep __init__.py tidy without false positives on re-exports.
 [tool.ruff.lint.per-file-ignores]

@@ -1,4 +1,4 @@
-model: marts_daily.ff           # node name (filename including .ff)
+model: mart_users.ff           # node name (filename including .ff)
 
 defaults:
   inputs:

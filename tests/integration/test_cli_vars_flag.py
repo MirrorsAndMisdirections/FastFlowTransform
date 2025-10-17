@@ -1,13 +1,15 @@
 # tests/test_cli_vars_flag.py
 from pathlib import Path
+
 import pytest
 from typer.testing import CliRunner
 
-from flowforge.core import REGISTRY
 from flowforge.cli import app
+from flowforge.core import REGISTRY
 from flowforge.executors.duckdb_exec import DuckExecutor
 
 runner = CliRunner()
+
 
 @pytest.mark.cli
 def test_cli_vars_available_in_templates(tmp_path: Path, monkeypatch):
@@ -23,7 +25,9 @@ def test_cli_vars_available_in_templates(tmp_path: Path, monkeypatch):
     )
 
     # Run CLI with override
-    result = runner.invoke(app, ["run", str(tmp_path), "--env", "dev", "--vars", "day='2025-10-01'"])
+    result = runner.invoke(
+        app, ["run", str(tmp_path), "--env", "dev", "--vars", "day='2025-10-01'"]
+    )
     assert result.exit_code == 0, result.output
 
     # Verify materialized data via a quick DuckDB read (in-memory run path may vary in your setup)

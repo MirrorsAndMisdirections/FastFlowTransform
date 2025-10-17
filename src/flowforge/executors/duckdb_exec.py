@@ -1,10 +1,13 @@
 # flowforge/executors/duckdb_exec.py
+from collections.abc import Iterable
+from contextlib import suppress
+from pathlib import Path
 from typing import Any
 
-import pandas as pd
-
 import duckdb
+import pandas as pd
 from duckdb import CatalogException
+
 from flowforge.core import Node, relation_for
 
 from .base import BaseExecutor
@@ -16,17 +19,21 @@ def _q(ident: str) -> str:
 
 class DuckExecutor(BaseExecutor[pd.DataFrame]):
     def __init__(self, db_path: str = ":memory:"):
+        if db_path and db_path != ":memory:" and "://" not in db_path:
+            with suppress(Exception):
+                Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.con = duckdb.connect(db_path)
 
     # ---- Frame hooks ----
-    def _read_relation(self, relation: str, node: Node, deps):
+    def _read_relation(self, relation: str, node: Node, deps: Iterable[str]) -> pd.DataFrame:
         try:
             return self.con.table(relation).df()
         except CatalogException as e:
             existing = [
                 r[0]
                 for r in self.con.execute(
-                    "select table_name from information_schema.tables where table_schema in ('main','temp')"
+                    "select table_name from information_schema.tables "
+                    "where table_schema in ('main','temp')"
                 ).fetchall()
             ]
             raise RuntimeError(
@@ -49,9 +56,7 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
     def _create_or_replace_view_from_table(
         self, view_name: str, backing_table: str, node: Node
     ) -> None:
-        self.con.execute(
-            f'create or replace view "{view_name}" as select * from "{backing_table}"'
-        )
+        self.con.execute(f'create or replace view "{view_name}" as select * from "{backing_table}"')
 
     def _frame_name(self) -> str:
         return "pandas"

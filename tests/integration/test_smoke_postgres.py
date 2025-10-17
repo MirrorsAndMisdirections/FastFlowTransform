@@ -1,14 +1,12 @@
 import os
-from pathlib import Path
-
-from sqlalchemy import create_engine, text
 
 import pytest
+from sqlalchemy import create_engine, text
 
-from tests.common.utils import run, ROOT
+from tests.common.utils import ROOT, run
 
 PROJECT = ROOT / "examples" / "postgres"
-DOCS = PROJECT / "docs"
+DOCS = PROJECT / "site" / "dag"
 
 PG_DSN = os.environ.get(
     "FF_PG_DSN",

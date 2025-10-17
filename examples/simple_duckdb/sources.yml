@@ -1,5 +1,6 @@
 crm:
   users:
     identifier: seed_users
+erp:
   orders:
     identifier: seed_orders

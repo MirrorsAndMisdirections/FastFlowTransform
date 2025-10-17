@@ -23,22 +23,19 @@ def test_materializations_and_ephemeral_inlining_duckdb(tmp_path: Path):
 
     # View model
     (models / "v_users.ff.sql").write_text(
-        "{{ config(materialized='view') }}\n"
-        "select id, email from {{ ref('base.ff') }};",
+        "{{ config(materialized='view') }}\nselect id, email from {{ ref('base.ff') }};",
         encoding="utf-8",
     )
 
     # Ephemeral model (will not be materialized)
     (models / "e_only.ff.sql").write_text(
-        "{{ config(materialized='ephemeral') }}\n"
-        "select id from {{ ref('base.ff') }};",
+        "{{ config(materialized='ephemeral') }}\nselect id from {{ ref('base.ff') }};",
         encoding="utf-8",
     )
 
     # Consumer model that inlines the ephemeral
     (models / "mart.ff.sql").write_text(
-        "select u.id from {{ ref('v_users.ff') }} u "
-        "join {{ ref('e_only.ff') }} e using(id);",
+        "select u.id from {{ ref('v_users.ff') }} u join {{ ref('e_only.ff') }} e using(id);",
         encoding="utf-8",
     )
 
@@ -63,8 +60,7 @@ def test_materializations_and_ephemeral_inlining_duckdb(tmp_path: Path):
 
     # Assert: ephemeral not materialized (no table or view named e_only)
     e_count_rows = ex.con.execute(
-        "select count(*) from information_schema.tables "
-        "where lower(table_name)='e_only'"
+        "select count(*) from information_schema.tables where lower(table_name)='e_only'"
     ).fetchone()
     assert e_count_rows is not None, "e_only should not be materialized (ephemeral)"
     e_count = e_count_rows[0]

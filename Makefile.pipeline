@@ -1,0 +1,34 @@
+# FlowForge pipeline and project lifecycle targets
+
+
+.PHONY: seed run dag demo demo-open test clean
+
+FLOWFORGE := FF_ENGINE=duckdb FF_DUCKDB_PATH="$(FF_DB)" flowforge
+
+seed:
+	$(FLOWFORGE) seed "$(FF_PROJECT)" --env dev
+
+# Run/DAG/Test reuse the same duckdb path (FF_ENV can switch engine)
+run:
+	$(FLOWFORGE) run "$(FF_PROJECT)" --env "$(FF_ENV)"
+
+dag:
+	$(FLOWFORGE) dag "$(FF_PROJECT)" --env "$(FF_ENV)" --html
+
+# Opens the generated DAG HTML on macOS/Linux; Windows users open it manually.
+demo-open:
+	@if [ -f "$(FF_PROJECT)/site/dag/index.html" ]; then \
+		$(OPENER) "$(FF_PROJECT)/site/dag/index.html" 2>/dev/null || echo "Öffne manuell: $(FF_PROJECT)/site/dag/index.html"; \
+	else \
+		echo "Keine HTML-Datei gefunden: $(FF_PROJECT)/site/dag/index.html"; \
+	fi
+
+test:
+	$(FLOWFORGE) test "$(FF_PROJECT)" --env "$(FF_ENV)" --select batch
+
+# End-to-end showcase: Seed → Run → DAG → Open → Tests
+demo: seed run dag demo-open test
+	@echo "\n✓ Demo fertig: Tabellen gebaut, DAG generiert, Tests gelaufen."
+
+clean:
+	rm -rf .local "$(FF_PROJECT)/docs" dist build *.egg-info

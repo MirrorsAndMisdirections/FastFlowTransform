@@ -1,22 +1,30 @@
 # src/flowforge/testing.py
 from __future__ import annotations
 
-import os, logging
+import logging
+import os
 from collections.abc import Iterable, Sequence
-from typing import Any
+from typing import Any, cast
 
+from sqlalchemy import text
+from sqlalchemy.engine import Connection as _SAConn
+from sqlalchemy.sql.elements import ClauseElement
 
 # ===== Debug toggle =====================================================
 
+
 def _dprint(*a):
-    if logging.getLogger("flowforge.sql").isEnabledFor(logging.DEBUG) or os.getenv("FLOWFORGE_SQL_DEBUG") == "1":
+    if (
+        logging.getLogger("flowforge.sql").isEnabledFor(logging.DEBUG)
+        or os.getenv("FLOWFORGE_SQL_DEBUG") == "1"
+    ):
         print("[DQ]", *a)
 
 
 # ===== Execution helpers (consistent for DuckDB / Postgres / BigQuery) ==
 
 
-def _exec(con: Any, sql: Any):
+def _exec(con: Any, sql: Any) -> Any:
     """
     Execute SQL robustly and consistently.
     Accepts:
@@ -30,53 +38,42 @@ def _exec(con: Any, sql: Any):
     # 1) Direct delegation to existing con.execute (e.g. DuckDB, our PG/BQ shims)
     if hasattr(con, "execute"):
         _dprint("con.execute <-", _pretty_sql(sql))
-
         try:
-            # SQLAlchemy-safe: wrap strings in text() when working with SA connections
-            from sqlalchemy import text as _sa_text
-            from sqlalchemy.engine import Connection as _SAConn
-        except Exception:
-            _sa_text = None
-            _SAConn = tuple()  # type: ignore
-        try:
-            if _sa_text and (isinstance(con, _SAConn) or "sqlalchemy" in type(con).__module__):
+            if isinstance(con, _SAConn) or "sqlalchemy" in type(con).__module__:
+                sql_tuple_len = 2
                 if isinstance(sql, str):
-                    return con.execute(_sa_text(sql))
+                    return con.execute(text(sql))
                 if (
                     isinstance(sql, tuple)
-                    and len(sql) == 2
+                    and len(sql) == sql_tuple_len
                     and isinstance(sql[0], str)
                     and isinstance(sql[1], dict)
                 ):
-                    return con.execute(_sa_text(sql[0]), sql[1])
-            return con.execute(sql)
+                    return con.execute(text(sql[0]), sql[1])
+            return cast(Any, con).execute(sql)
         except Exception:
             # The check name is unknown at this point → the caller adds that context
             raise
 
     # 2) Fallback: generic SQLAlchemy handling
-    from sqlalchemy import text as _sa_text
 
-    try:
-        from sqlalchemy.sql.elements import ClauseElement
-    except Exception:
-        ClauseElement = tuple()  # type: ignore
+    statement_tuple_len = 2
 
-    def _exec_one(c, stmt: Any):
+    def _exec_one(c: Any, stmt: Any) -> Any:
         if (
             isinstance(stmt, tuple)
-            and len(stmt) == 2
+            and len(stmt) == statement_tuple_len
             and isinstance(stmt[0], str)
             and isinstance(stmt[1], dict)
         ):
             _dprint("run (sql, params):", stmt[0], stmt[1])
-            return c.execute(_sa_text(stmt[0]), stmt[1])
+            return c.execute(text(stmt[0]), stmt[1])
         if isinstance(stmt, ClauseElement):
             _dprint("run ClauseElement")
             return c.execute(stmt)
         if isinstance(stmt, str):
             _dprint("run sql:", stmt)
-            return c.execute(_sa_text(stmt))
+            return c.execute(text(stmt))
         # Sequences (recursive)
         if isinstance(stmt, Iterable) and not isinstance(stmt, (bytes, bytearray, str)):
             res = None
@@ -92,7 +89,7 @@ def _exec(con: Any, sql: Any):
     return _exec_one(con, sql)
 
 
-def _scalar(con: Any, sql: Any):
+def _scalar(con: Any, sql: Any) -> Any:
     """Execute SQL and return the first column of the first row (or None)."""
     try:
         res = _exec(con, sql)
@@ -103,7 +100,7 @@ def _scalar(con: Any, sql: Any):
     return None if row is None else row[0]
 
 
-def _fail(check: str, table: str, column: str | None, sql: str, detail: str):
+def _fail(check: str, table: str, column: str | None, sql: str, detail: str) -> None:
     raise TestFailure(
         f"[{check}] {table}{('.' + column) if column else ''}: {detail}\nSQL:\n{sql.strip()}"
     )
@@ -111,14 +108,11 @@ def _fail(check: str, table: str, column: str | None, sql: str, detail: str):
 
 def _pretty_sql(sql: Any) -> str:
     """Compact, human-readable rendering for debugging."""
-    try:
-        from sqlalchemy.sql.elements import ClauseElement
-    except Exception:
-        ClauseElement = tuple()  # type: ignore
+    sql_tuple_len = 2
 
     if isinstance(sql, str):
         return sql.strip()
-    if isinstance(sql, tuple) and len(sql) == 2 and isinstance(sql[0], str):
+    if isinstance(sql, tuple) and len(sql) == sql_tuple_len and isinstance(sql[0], str):
         return f"{sql[0].strip()}  -- params={sql[1]}"
     if isinstance(sql, ClauseElement):
         return "<SQLAlchemy ClauseElement>"
@@ -149,7 +143,8 @@ def _wrap_db_error(
     if "undefinedcolumn" in txt and "having" in sql.lower():
         msg.append(
             "Hinweis: Postgres erlaubt Alias-Nutzung im HAVING nicht. "
-            "Lösung: Alias außerhalb verwenden (Subquery) oder die Bedingung in WHERE der äußeren Abfrage prüfen."
+            "Lösung: Alias außerhalb verwenden (Subquery) oder die Bedingung "
+            "in WHERE der äußeren Abfrage prüfen."
         )
     if "f405" in txt or "textual sql expression" in txt:
         msg.append("Hinweis: SQLAlchemy 2.0 verlangt text('...') für rohe SQL-Strings.")
@@ -157,19 +152,19 @@ def _wrap_db_error(
     return TestFailure("\n".join(msg))
 
 
-def not_null(con: Any, table: str, column: str):
+def not_null(con: Any, table: str, column: str) -> None:
     sql = f"select count(*) from {table} where {column} is null"
     try:
         c = _scalar(con, sql)
     except Exception as e:
-        raise _wrap_db_error("not_null", table, column, sql, e)
+        raise _wrap_db_error("not_null", table, column, sql, e) from e
     c = _scalar(con, sql)
     _dprint("not_null:", sql, "=>", c)
     if c and c != 0:
         _fail("not_null", table, column, sql, f"hat {c} NULL-Werte")
 
 
-def unique(con: Any, table: str, column: str):
+def unique(con: Any, table: str, column: str) -> None:
     sql = (
         "select count(*) from ("
         f"  select {column}, count(*) as c"
@@ -180,13 +175,13 @@ def unique(con: Any, table: str, column: str):
     try:
         c = _scalar(con, sql)
     except Exception as e:
-        raise _wrap_db_error("unique", table, column, sql, e)
+        raise _wrap_db_error("unique", table, column, sql, e) from e
     _dprint("unique:", sql, "=>", c)
     if c and c != 0:
         _fail("unique", table, column, sql, f"enthält {c} Duplikate")
 
 
-def greater_equal(con: Any, table: str, column: str, threshold: float = 0.0):
+def greater_equal(con: Any, table: str, column: str, threshold: float = 0.0) -> None:
     sql = f"select count(*) from {table} where {column} < {threshold}"
     c = _scalar(con, sql)
     _dprint("greater_equal:", sql, "=>", c)
@@ -194,7 +189,7 @@ def greater_equal(con: Any, table: str, column: str, threshold: float = 0.0):
         raise TestFailure(f"{table}.{column} has {c} values < {threshold}")
 
 
-def non_negative_sum(con: Any, table: str, column: str):
+def non_negative_sum(con: Any, table: str, column: str) -> None:
     sql = f"select coalesce(sum({column}),0) from {table}"
     s = _scalar(con, sql)
     _dprint("non_negative_sum:", sql, "=>", s)
@@ -202,7 +197,7 @@ def non_negative_sum(con: Any, table: str, column: str):
         raise TestFailure(f"sum({table}.{column}) is negative: {s}")
 
 
-def row_count_between(con: Any, table: str, min_rows: int = 1, max_rows: int | None = None):
+def row_count_between(con: Any, table: str, min_rows: int = 1, max_rows: int | None = None) -> None:
     sql = f"select count(*) from {table}"
     c = _scalar(con, sql)
     _dprint("row_count_between:", sql, "=>", c)
@@ -212,11 +207,12 @@ def row_count_between(con: Any, table: str, min_rows: int = 1, max_rows: int | N
         raise TestFailure(f"{table} has too many rows: {c} > {max_rows}")
 
 
-def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int):
+def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None:
     # Straightforward for DuckDB/PG; BQ would need a TIMESTAMPDIFF variant.
     sql = f"select date_part('epoch', now() - max({ts_col})) / 60.0 as delay_min from {table}"
     # Note: DuckDB has different date_diff signatures; for DuckDB-only you could use:
-    # sql_duckdb = f\"\"\"select date_diff('minute', max({ts_col}), now()) as delay_min from {table}\"\"\"
+    # sql_duckdb =
+    # f\"\"\"select date_diff('minute', max({ts_col}), now()) as delay_min from {table}\"\"\"
     delay = _scalar(con, sql)
     _dprint("freshness:", sql, "=>", delay)
     if delay is None or delay > max_delay_minutes:

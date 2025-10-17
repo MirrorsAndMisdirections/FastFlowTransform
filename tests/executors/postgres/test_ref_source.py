@@ -1,7 +1,6 @@
 # tests/postgres/test_ref_source_postgres.py
-from sqlalchemy import create_engine, text
-
 import pytest
+from sqlalchemy import create_engine, text
 
 from tests.common.utils import run
 

@@ -1,6 +1,8 @@
 # tests/test_config_hook.py
 from pathlib import Path
+
 from flowforge.core import REGISTRY
+
 
 def test_sql_model_config_materialized_view(tmp_path: Path):
     (tmp_path / "models").mkdir()

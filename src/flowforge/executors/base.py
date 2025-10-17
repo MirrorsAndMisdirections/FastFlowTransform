@@ -1,22 +1,26 @@
 # flowforge/executors/base.py
 from __future__ import annotations
 
-import contextvars, os, re
+import contextvars
+import logging
+import os
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any, Generic, TypeVar
+from typing import Any, TypeVar
 
-import logging
 from jinja2 import Environment
+from pandas import DataFrame as _PDDataFrame
 
 from flowforge.core import REGISTRY, Node, relation_for
+from flowforge.validation import validate_required_columns
 
 # Frame type (pandas.DataFrame, pyspark.sql.DataFrame, snowflake.snowpark.DataFrame, ...)
 TFrame = TypeVar("TFrame")
 
 
-class BaseExecutor(Generic[TFrame], ABC):
+class BaseExecutor[TFrame](ABC):
     """
     Shared workflow for SQL rendering and Python models.
     I/O is frame-agnostic; subclasses provide frame-specific hooks:
@@ -37,19 +41,28 @@ class BaseExecutor(Generic[TFrame], ABC):
         source_resolver: Callable[[str, str], str] | None = None,
     ) -> str:
         # ---- thread-/task-local config()-hook
-        _RENDER_CFG: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
-            "_RENDER_CFG", default={}
+        _RENDER_CFG: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+            "_RENDER_CFG", default=None
         )
-        def _config_hook(**kwargs) -> str:
-            d = _RENDER_CFG.get().copy()
-            d.update(kwargs)
-            _RENDER_CFG.set(d)
+
+        def get_render_cfg() -> dict[str, Any]:
+            cfg = _RENDER_CFG.get()
+            if cfg is None:
+                cfg = {}
+                _RENDER_CFG.set(cfg)
+            return cfg
+
+        def _config_hook(**kwargs: Any) -> str:
+            cfg = get_render_cfg()  # garantiert ein Dict
+            cfg.update(kwargs)  # gleiche Referenz, kein erneutes set() nötig
             return ""  # nichts in SQL emittieren
+
         if "config" not in env.globals:
             env.globals["config"] = _config_hook
 
         # ---- var() builtin: CLI overrides > project.yml vars > default
         if "var" not in env.globals:
+
             def _var(key: str, default: Any = None) -> Any:
                 cli = getattr(REGISTRY, "cli_vars", {}) or {}
                 if key in cli:
@@ -58,6 +71,7 @@ class BaseExecutor(Generic[TFrame], ABC):
                 if key in proj:
                     return proj[key]
                 return default
+
             env.globals["var"] = _var
 
         raw = Path(node.path).read_text(encoding="utf-8")
@@ -133,7 +147,7 @@ class BaseExecutor(Generic[TFrame], ABC):
         wird, geben wir den Original-String zurück.
         """
         m = re.search(r"\bselect\b", sql, flags=re.I | re.S)
-        return sql[m.start():] if m else sql
+        return sql[m.start() :] if m else sql
 
     def _strip_leading_config(self, sql: str) -> str:
         """
@@ -308,7 +322,6 @@ class BaseExecutor(Generic[TFrame], ABC):
         """
         if not requires:
             return
-        from flowforge.validation import validate_required_columns
 
         validate_required_columns(node_name, inputs, requires)
 
@@ -317,16 +330,10 @@ class BaseExecutor(Generic[TFrame], ABC):
         columns = getattr(frame, "columns", None)
         if columns is not None:
             return [str(c) for c in list(columns)]
-        raise NotImplementedError(
-            "_columns_of needs to be implemented for non-pandas frame types"
-        )
+        raise NotImplementedError("_columns_of needs to be implemented for non-pandas frame types")
 
     def _is_frame(self, obj: Any) -> bool:
         """Is 'obj' a valid frame for this executor?"""
-        try:
-            from pandas import DataFrame as _PDDataFrame  # type: ignore
-        except Exception:  # pragma: no cover - pandas optional
-            _PDDataFrame = tuple()  # type: ignore
         return isinstance(obj, _PDDataFrame)
 
     def _frame_name(self) -> str:

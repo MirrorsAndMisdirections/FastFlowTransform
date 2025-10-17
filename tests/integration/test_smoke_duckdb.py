@@ -1,36 +1,20 @@
 import os
 import shutil
 import subprocess
-from pathlib import Path
-
-import pytest
 
 import duckdb
+import pytest
 
-from tests.common.utils import run, ROOT
+from tests.common.utils import ROOT, run
 
 PROJECT = ROOT / "examples" / "simple_duckdb"
-DOCS = PROJECT / "docs"
+DOCS = PROJECT / "site" / "dag"
 PROJECT_LOCAL = PROJECT / ".local"
 DB = PROJECT_LOCAL / "demo.duckdb"
 
 ENV = os.environ.copy()
 ENV.setdefault("FF_ENGINE", "duckdb")
 ENV.setdefault("FF_DUCKDB_PATH", str(DB))  # erzwinge konsistenten DB-Ort
-
-# def run(cmd: list[str], env: dict | None = None) -> subprocess.CompletedProcess:
-#     e = os.environ.copy()
-#     if env:
-#         e.update(env)
-#     return subprocess.run(
-#         cmd,
-#         cwd=ROOT,
-#         check=True,
-#         stdout=subprocess.PIPE,
-#         stderr=subprocess.STDOUT,
-#         text=True,
-#         env=ENV,
-#     )
 
 
 def setup_module(module):
@@ -52,7 +36,7 @@ def setup_module(module):
             env=ENV,
         )
     except subprocess.CalledProcessError as e:
-        pytest.skip(f"Seed fehlgeschlagen (DuckDB CLI fehlt?) – skippe Smoke-Tests.\n{e.stdout}")
+        pytest.skip(f"Seed fehlgeschlagen (DuckDB CLI fehlt?) - skippe Smoke-Tests.\n{e.stdout}")
 
 
 @pytest.mark.duckdb
@@ -80,19 +64,10 @@ def test_html_dag_generated():
 @pytest.mark.duckdb
 @pytest.mark.cli
 @pytest.mark.slow
-def test_duckdb_end_to_end_with_multi_deps(duckdb_project, duckdb_env, duckdb_db_path):
-    # Frische DB für deterministische Läufe (optional)
-    duckdb_db_path.parent.mkdir(parents=True, exist_ok=True)
-    if duckdb_db_path.exists():
-        duckdb_db_path.unlink()
-
-    # 1) Seeds laden (aus examples/simple_duckdb/seeds/*.csv|parquet)
-    run(["flowforge", "seed", str(duckdb_project), "--env", "dev"], duckdb_env)
-
-    # 2) Pipeline ausführen
+def test_duckdb_end_to_end_with_multi_deps(
+    duckdb_seeded, duckdb_project, duckdb_env, duckdb_db_path
+):
     run(["flowforge", "run", str(duckdb_project), "--env", "dev"], duckdb_env)
-
-    # 2) prüfe Tabellen/Spalten
     con = duckdb.connect(str(DB))
     # users (seed) -> users_enriched (python, 1 dep)
     users_rows = con.execute("select count(*) from users").fetchone()

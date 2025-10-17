@@ -1,9 +1,8 @@
 import os
-from pathlib import Path
 
 import pytest
 
-from tests.common.utils import run, ROOT
+from tests.common.utils import ROOT, run
 
 
 # ---- DuckDB ----
@@ -14,7 +13,9 @@ def duckdb_project():
 
 @pytest.fixture(scope="session")
 def duckdb_db_path(duckdb_project):
-    return duckdb_project / ".local" / "demo.duckdb"
+    p = duckdb_project / ".local" / "demo.duckdb"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 @pytest.fixture(scope="session")
@@ -44,6 +45,6 @@ def pg_env():
 
 @pytest.fixture(scope="module")
 def pg_seeded(pg_project, pg_env):
-    # optional: Datenbank leeren/neu erstellen – je nach CI-Setup
+    # optional: Datenbank leeren/neu erstellen - je nach CI-Setup
     run(["flowforge", "seed", str(pg_project), "--env", "stg"], pg_env)
     yield

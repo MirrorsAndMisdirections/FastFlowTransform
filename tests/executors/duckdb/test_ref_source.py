@@ -1,9 +1,8 @@
 # tests/duckdb/test_ref_source.py
-from pathlib import Path
-
+import duckdb
 import pytest
 
-from tests.common.utils import run, ROOT
+from tests.common.utils import ROOT, run
 
 PROJ = ROOT / "examples" / "simple_duckdb"
 DB = PROJ / ".local" / "demo.duckdb"
@@ -14,9 +13,6 @@ ENV = {"FF_ENGINE": "duckdb", "FF_DUCKDB_PATH": str(DB)}
 def test_ref_and_source_duckdb(duckdb_seeded, duckdb_project, duckdb_env):
     # Seeds sind durch duckdb_seeded geladen
     run(["flowforge", "run", str(duckdb_project), "--env", "dev"], duckdb_env)
-
-    # minimale Verifikation
-    import duckdb
 
     con = duckdb.connect(duckdb_env["FF_DUCKDB_PATH"])
     orders_count = con.execute("select count(*) from orders").fetchone()

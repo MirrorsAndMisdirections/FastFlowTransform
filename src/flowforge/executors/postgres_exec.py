@@ -1,4 +1,5 @@
 # flowforge/executors/postgres_exec.py
+from collections.abc import Iterable
 from typing import Any
 
 import pandas as pd
@@ -7,9 +8,9 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from flowforge.core import Node, relation_for
-from flowforge.executors.base import BaseExecutor
-from flowforge.executors._shims import SAConnShim
 from flowforge.errors import ProfileConfigError
+from flowforge.executors._shims import SAConnShim
+from flowforge.executors.base import BaseExecutor
 
 
 class PostgresExecutor(BaseExecutor[pd.DataFrame]):
@@ -19,7 +20,9 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
         schema: default schema for reads/writes (if sources.yml does not define one)
         """
         if not dsn:
-            raise ProfileConfigError("Postgres DSN not set. Hint: profiles.yml → postgres.dsn or env FF_PG_DSN.")
+            raise ProfileConfigError(
+                "Postgres DSN not set. Hint: profiles.yml → postgres.dsn or env FF_PG_DSN."
+            )
         self.engine: Engine = create_engine(dsn, future=True)
         self.schema = schema
 
@@ -37,7 +40,7 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
             return f"{self._q_ident(sch)}.{self._q_ident(relname)}"
         return self._q_ident(relname)
 
-    def _read_relation(self, relation: str, node: Node, deps):
+    def _read_relation(self, relation: str, node: Node, deps: Iterable[str]) -> pd.DataFrame:
         qualified = self._qualified(relation)
         try:
             with self.engine.begin() as conn:

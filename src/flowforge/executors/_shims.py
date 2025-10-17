@@ -29,7 +29,7 @@ class BigQueryConnShim:
         self.project = project
         self.dataset = dataset
 
-    def execute(self, sql_or_stmts: Any):
+    def execute(self, sql_or_stmts: Any) -> Any:
         if isinstance(sql_or_stmts, str):
             return self.client.query(sql_or_stmts, location=self.location)
         if isinstance(sql_or_stmts, Sequence) and not isinstance(
@@ -55,10 +55,11 @@ class SAConnShim:
         self._engine = engine
         self._schema = schema
 
-    def _exec_one(self, conn, stmt: Any):
+    def _exec_one(self, conn: Any, stmt: Any) -> Any:
+        statement_tuple_len = 2
         if (
             isinstance(stmt, tuple)
-            and len(stmt) == 2
+            and len(stmt) == statement_tuple_len
             and isinstance(stmt[0], str)
             and isinstance(stmt[1], dict)
         ):
@@ -74,13 +75,14 @@ class SAConnShim:
             return res
         raise TypeError(f"Unsupported statement type in shim: {type(stmt)} → {stmt!r}")
 
-    def execute(self, sql: Any):
+    def execute(self, sql: Any) -> Any:
         with self._engine.begin() as conn:
+            sql_tuple_len = 2
             if self._schema:
                 conn.execute(text(f'SET LOCAL search_path = "{self._schema}"'))
             if isinstance(sql, (str, ClauseElement)) or (
                 isinstance(sql, tuple)
-                and len(sql) == 2
+                and len(sql) == sql_tuple_len
                 and isinstance(sql[0], str)
                 and isinstance(sql[1], dict)
             ):

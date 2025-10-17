@@ -1,16 +1,19 @@
 # tests/integration/test_profiles_validation.py
 from __future__ import annotations
 
-from pathlib import Path
 import textwrap
+from pathlib import Path
+
 import pytest
 
-from flowforge.settings import resolve_profile, EnvSettings
 from flowforge.errors import ProfileConfigError
+from flowforge.settings import EnvSettings, resolve_profile
 
 
 def _write_profiles(tmp_path: Path, yaml_text: str) -> None:
-    (tmp_path / "profiles.yml").write_text(textwrap.dedent(yaml_text).strip() + "\n", encoding="utf-8")
+    (tmp_path / "profiles.yml").write_text(
+        textwrap.dedent(yaml_text).strip() + "\n", encoding="utf-8"
+    )
 
 
 @pytest.mark.parametrize(
@@ -79,7 +82,8 @@ def _write_profiles(tmp_path: Path, yaml_text: str) -> None:
             """,
             {},
             True,
-            "Postgres profile has empty schema. Hint: set profiles.yml → postgres.db_schema or env FF_PG_SCHEMA.",
+            "Postgres profile has empty schema. "
+            "Hint: set profiles.yml → postgres.db_schema or env FF_PG_SCHEMA.",
         ),
         (
             "bq_missing_dataset",
@@ -91,7 +95,8 @@ def _write_profiles(tmp_path: Path, yaml_text: str) -> None:
             """,
             {},
             True,
-            "BigQuery profile missing dataset. Hint: set profiles.yml → bigquery.dataset or env FF_BQ_DATASET.",
+            "BigQuery profile missing dataset. Hint: set profiles.yml → bigquery.dataset "
+            "or env FF_BQ_DATASET.",
         ),
         (
             "sf_missing_many",
@@ -135,4 +140,10 @@ def test_profiles_validation(
     else:
         prof = resolve_profile(tmp_path, "dev", env)
         # sanity: returns the right engine type
-        assert prof.engine in {"duckdb", "postgres", "bigquery", "databricks_spark", "snowflake_snowpark"}
+        assert prof.engine in {
+            "duckdb",
+            "postgres",
+            "bigquery",
+            "databricks_spark",
+            "snowflake_snowpark",
+        }

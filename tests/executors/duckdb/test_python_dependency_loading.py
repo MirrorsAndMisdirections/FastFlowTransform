@@ -1,5 +1,4 @@
 import pandas as pd
-
 import pytest
 
 from flowforge.core import REGISTRY, Node
@@ -12,7 +11,8 @@ def test_duckdb_executor_dep_loading_unit(tmp_path):
     con = ex.con
     con.execute("create table users as select 1::int as id, 'a@example.com'::varchar as email")
     con.execute(
-        "create table orders as select 101::int as order_id, 1::int as user_id, 10.0::double as amount"
+        "create table orders as "
+        "select 101::int as order_id, 1::int as user_id, 10.0::double as amount"
     )
 
     # registriere ein Multi-Dep Python-Modell on-the-fly

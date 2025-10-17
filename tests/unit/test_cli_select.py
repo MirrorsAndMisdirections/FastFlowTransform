@@ -1,13 +1,15 @@
 # tests/unit/test_cli_select.py
 from __future__ import annotations
+
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 from jinja2 import Environment
 from typer.testing import CliRunner
-import pytest
 
-from flowforge.core import Node, REGISTRY, relation_for
-from flowforge.cli import app, _parse_select, _build_predicates, _selector
+from flowforge.cli import _build_predicates, _parse_select, _selector, app
+from flowforge.core import REGISTRY, Node
 
 
 # -------------------------------
@@ -92,10 +94,13 @@ def test_cli_run_and_dag_apply_select_filters(tmp_path: Path, monkeypatch: pytes
 
     def fake_make_executor(prof, jenv):
         ex = DummyEx()
+
         def run_sql(node):
             calls["run_sql"].append(node.name)
+
         def run_py(node):
             calls["run_py"].append(node.name)
+
         return ex, run_sql, run_py
 
     monkeypatch.setattr("flowforge.cli._make_executor", fake_make_executor)
@@ -109,13 +114,16 @@ def test_cli_run_and_dag_apply_select_filters(tmp_path: Path, monkeypatch: pytes
     runner = CliRunner()
 
     # ---- RUN: filter only views with tag:mart
-    result = runner.invoke(app, ["run", str(tmp_path), "--select", "tag:mart", "--select", "type:view"])
+    result = runner.invoke(
+        app, ["run", str(tmp_path), "--select", "tag:mart", "--select", "type:view"]
+    )
     assert result.exit_code == 0, result.output
     # Only 'users' should have been executed, and it's SQL kind in our setup
     assert calls["run_sql"] == ["users"]
     assert calls["run_py"] == []
 
-    calls["run_sql"].clear(); calls["run_py"].clear()
+    calls["run_sql"].clear()
+    calls["run_py"].clear()
 
     # ---- RUN: filter by name glob 'orders' (matches physical relation of 'orders.ff')
     result = runner.invoke(app, ["run", str(tmp_path), "--select", "orders"])
@@ -124,12 +132,14 @@ def test_cli_run_and_dag_apply_select_filters(tmp_path: Path, monkeypatch: pytes
 
     # ---- DAG: ensure filtered nodes passed into render_site
     captured = {}
+
     def fake_render_site(out_dir, nodes_dict, executor=None):
         captured["nodes"] = set(nodes_dict.keys())
 
     monkeypatch.setattr("flowforge.cli.render_site", fake_render_site)
 
-    # select kind:sql excludes none here (all sql), but test with 'ephemeral' type to keep just stg_events
+    # select kind:sql excludes none here (all sql), but test with 'ephemeral'
+    # type to keep just stg_events
     result = runner.invoke(app, ["dag", str(tmp_path), "--html", "--select", "type:ephemeral"])
     assert result.exit_code == 0, result.output
     # Only the ephemeral node should be included in docs rendering

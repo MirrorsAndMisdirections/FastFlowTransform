@@ -6,6 +6,7 @@ import pytest
 from flowforge.core import REGISTRY
 from flowforge.executors.duckdb_exec import DuckExecutor
 
+
 @pytest.mark.duckdb
 @pytest.mark.integration
 def test_var_overrides_and_this_object(tmp_path: Path):

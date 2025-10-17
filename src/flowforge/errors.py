@@ -1,4 +1,4 @@
-# errors.py
+# flowforge/errors.py
 
 from __future__ import annotations
 
@@ -80,6 +80,7 @@ class ModuleLoadError(FlowForgeError):
 
 class ProfileConfigError(FlowForgeError):
     """Profile/configuration error with a short, actionable hint."""
+
     def __init__(self, message: str):
         # keep to a single line for CLI readability
         super().__init__(message.replace("\n", " ").strip())

@@ -1,4 +1,4 @@
-# src/flowforge/docs.py
+# flowforge/docs.py
 from __future__ import annotations
 
 import re
@@ -8,8 +8,9 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
+from sqlalchemy import text
 
-from .core import Node, REGISTRY, relation_for
+from .core import REGISTRY, Node, relation_for
 from .dag import mermaid as dag_mermaid
 
 
@@ -29,7 +30,7 @@ def _safe_filename(name: str) -> str:
     return s or "_model"
 
 
-def _collect_columns(executor) -> dict[str, list[ColumnInfo]]:
+def _collect_columns(executor: Any) -> dict[str, list[ColumnInfo]]:
     if hasattr(executor, "con"):  # DuckDB
         return _columns_duckdb(executor.con)
     if hasattr(executor, "engine"):  # Postgres
@@ -37,7 +38,7 @@ def _collect_columns(executor) -> dict[str, list[ColumnInfo]]:
     return {}
 
 
-def render_site(out_dir: Path, nodes: dict[str, Node], executor: Any | None = None):
+def render_site(out_dir: Path, nodes: dict[str, Node], executor: Any | None = None) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Load templates bundled with the package
@@ -70,6 +71,26 @@ def render_site(out_dir: Path, nodes: dict[str, Node], executor: Any | None = No
         "ephemeral": {"label": "ephemeral", "class": "badge-ephemeral"},
     }
 
+    # Build macro inventory BEFORE rendering index
+    macro_list: list[dict[str, str]] = []
+    proj_dir: Path | None = None
+    if hasattr(REGISTRY, "get_project_dir"):
+        try:
+            proj_dir = REGISTRY.get_project_dir()
+        except Exception:
+            proj_dir = None
+    for name, p in getattr(REGISTRY, "macros", {}).items():
+        mp = Path(p)
+        rel = mp.name
+        kind = "python" if p.suffix.lower() == ".py" else "sql"
+        if proj_dir:
+            try:
+                rel = str(mp.relative_to(proj_dir))
+            except Exception:
+                rel = mp.name
+        macro_list.append({"name": name, "path": rel, "kind": kind})
+    macro_list.sort(key=lambda x: (x["kind"], x["name"]))
+
     # 3) Write index.html
     index_tmpl = env.get_template("index.html.j2")
     cols_by_table = _collect_columns(executor) if executor else {}
@@ -77,8 +98,8 @@ def render_site(out_dir: Path, nodes: dict[str, Node], executor: Any | None = No
         mermaid_src=Markup(mermaid_src),
         models=models,
         materialization_legend=materialization_legend,
+        macros=macro_list,  # ← HIER reinreichen
     )
-    
     (out_dir / "index.html").write_text(index_html, encoding="utf-8")
 
     rev: dict[str, list[str]] = {n: [] for n in nodes}
@@ -87,12 +108,6 @@ def render_site(out_dir: Path, nodes: dict[str, Node], executor: Any | None = No
             if d in rev:
                 rev[d].append(n.name)
 
-    # add macros inventory for index rendering
-    macro_list = sorted(
-        [{"name": n, "path": str(REGISTRY.macros[n].relative_to(REGISTRY.get_project_dir()))}
-         for n in REGISTRY.macros],
-        key=lambda x: x["name"]
-    )
     # 4) One detail page per model
     model_tmpl = env.get_template("model.html.j2")
     for m in models:
@@ -115,7 +130,7 @@ class ColumnInfo:
     nullable: bool
 
 
-def _columns_duckdb(con) -> dict[str, list[ColumnInfo]]:
+def _columns_duckdb(con: Any) -> dict[str, list[ColumnInfo]]:
     rows = con.execute("""
       select table_name, column_name, data_type, is_nullable
       from information_schema.columns
@@ -128,9 +143,7 @@ def _columns_duckdb(con) -> dict[str, list[ColumnInfo]]:
     return out
 
 
-def _columns_postgres(engine) -> dict[str, list[ColumnInfo]]:
-    from sqlalchemy import text
-
+def _columns_postgres(engine: Any) -> dict[str, list[ColumnInfo]]:
     with engine.begin() as conn:
         rows = conn.execute(
             text("""
