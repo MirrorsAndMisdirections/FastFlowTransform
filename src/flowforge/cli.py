@@ -9,6 +9,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable, Iterable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, NoReturn, cast
@@ -42,6 +43,7 @@ from .fingerprint import (
     fingerprint_sql,
     get_function_source,
 )
+from .meta import ensure_meta_table, upsert_meta
 from .run_executor import ScheduleResult, schedule
 from .seeding import seed_project
 from .settings import EngineType, EnvSettings, Profile, resolve_profile
@@ -524,6 +526,9 @@ class _RunEngine:
         if LOG.isEnabledFor(logging.INFO):
             typer.echo(f"Profile: {self.env_name} | Engine: {self.ctx.profile.engine}")
         self.shared = self.ctx.make_executor()
+        # Ensure meta table exists once (best-effort; do not fail the run)
+        with suppress(Exception):
+            ensure_meta_table(self.shared[0])
         relevant_env = [k for k in os.environ if k.startswith("FF_")]
         self.env_ctx = build_env_ctx(
             engine=self.ctx.profile.engine,
@@ -601,6 +606,9 @@ class _RunEngine:
                     self.computed_fps[name] = cand_fp
                 if LOG.isEnabledFor(logging.INFO):
                     typer.echo(f"↻ Skipped {name} (cache hit)")
+                # Best-effort: write/update meta when we know fp and relation exists
+                with suppress(Exception):
+                    upsert_meta(ex, name, relation_for(name), cand_fp, self.ctx.profile.engine)
                 return
         if LOG.isEnabledFor(logging.INFO):
             typer.echo(f"→ Running {name} ({node.kind})")
@@ -608,6 +616,9 @@ class _RunEngine:
         if cand_fp is not None:
             with self.fps_lock:
                 self.computed_fps[name] = cand_fp
+            # Best-effort: write/update meta on successful execution
+            with suppress(Exception):
+                upsert_meta(ex, name, relation_for(name), cand_fp, self.ctx.profile.engine)
 
     @staticmethod
     def before(_name: str) -> None:

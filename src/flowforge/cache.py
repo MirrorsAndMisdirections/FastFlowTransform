@@ -9,9 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import text
-
 from .core import relation_for
+from .meta import relation_exists as _relation_exists_engine
 
 
 @dataclass
@@ -93,39 +92,9 @@ class FingerprintCache:
 
 def relation_exists(executor: Any, relation: str) -> bool:
     """
-    best-effort existence check of a materialized relation on the current engine.
-    Returns True if the relation appears to exist, False if definitely missing.
-    For unknown engines, returns True (do not block execution).
+    Compatibility wrapper that delegates to the engine-aware implementation.
     """
-    try:
-        # DuckDB
-        con = getattr(executor, "con", None)
-        if con is not None and hasattr(con, "execute"):
-            rows = con.execute(
-                "select 1 from information_schema.tables "
-                "where table_schema in ('main','temp') and table_name = ?",
-                [relation],
-            ).fetchall()
-            return bool(rows)
-
-        # Postgres (via SQLAlchemy engine)
-        engine = getattr(executor, "engine", None)
-        if engine is not None and hasattr(engine, "begin"):
-            with engine.begin() as conn:
-                rows = conn.execute(
-                    text(
-                        "select 1 from information_schema.tables "
-                        "where table_schema = current_schema() and table_name = :t"
-                    ),
-                    {"t": relation},
-                ).fetchall()
-            return bool(rows)
-
-        # Other engines: assume relation is present if cache says so
-        return True
-    except Exception:
-        # Be permissive on errors: don't block execution with a false negative
-        return True
+    return _relation_exists_engine(executor, relation)
 
 
 def can_skip_node(
