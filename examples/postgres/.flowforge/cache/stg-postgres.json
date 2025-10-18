@@ -1,0 +1,12 @@
+{
+  "engine": "postgres",
+  "entries": {
+    "mart_orders_enriched": "fc41294d6967cfcf3c9b7d2c5405210d9383e5538747f7f13bc16c96cc8754c5",
+    "mart_users.ff": "6a61e68266d9151e9c473340ee93ccb70146b0079371bae889e4c8313b40a8b8",
+    "orders.ff": "b45347dd5ad3adbf1637e637fb32e27b766995549c7b1ae4d9412a8ff1b0d375",
+    "users.ff": "68dbd147dcca21a36d04f031499eb8977a6fae8659873189b2a3169e560cb81e",
+    "users_enriched": "cf5157127bd1c72c6942a54049acd61ee8817782920534c274b4261783ceda4b"
+  },
+  "profile": "stg",
+  "version": 1
+}

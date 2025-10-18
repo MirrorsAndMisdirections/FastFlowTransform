@@ -5,10 +5,11 @@ import fnmatch
 import logging
 import os
 import textwrap
+import threading
 import time
 import traceback
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, NoReturn, cast
 
@@ -28,11 +29,20 @@ from flowforge.executors import (
 from flowforge.executors.base import BaseExecutor
 
 from . import testing
+from .cache import FingerprintCache, can_skip_node
 from .core import REGISTRY, relation_for
-from .dag import mermaid, topo_sort
+from .dag import levels as dag_levels, mermaid, topo_sort
 from .docs import render_site
 from .errors import DependencyNotFoundError, ProfileConfigError
 from .executors._shims import BigQueryConnShim, SAConnShim
+from .fingerprint import (
+    EnvCtx,
+    build_env_ctx,
+    fingerprint_py,
+    fingerprint_sql,
+    get_function_source,
+)
+from .run_executor import ScheduleResult, schedule
 from .seeding import seed_project
 from .settings import EngineType, EnvSettings, Profile, resolve_profile
 from .utest import discover_unit_specs, run_unit_specs
@@ -361,13 +371,13 @@ def _execute_models(
 def _resolve_dag_out_dir(proj: Path, override: Path | None) -> Path:
     if override:
         return override.expanduser().resolve()
-    # project.yml optional lesen
+    # Optionally read project.yml
     cfg_path = proj / "project.yml"
     try:
         cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
     except Exception:
         cfg = {}
-    p = (cfg or {}).get("docs", {}).get("dag_dir")  # z. B. "site/dag" oder "./build/dag"
+    p = (cfg or {}).get("docs", {}).get("dag_dir")  # e.g. "site/dag" or "./build/dag"
     if p:
         return (proj / p).expanduser().resolve()
     # Default
@@ -415,22 +425,22 @@ VarsOpt = Annotated[
     typer.Option("--vars", help="Override template vars: key=value"),
 ]
 
-CaseOpt = Annotated[str | None, typer.Option("--case", help="Nur einen Case ausführen")]
+CaseOpt = Annotated[str | None, typer.Option("--case", help="Run only a single case")]
 
-EnvOpt = Annotated[str, typer.Option("--env", help="Profil-Umgebung")]
+EnvOpt = Annotated[str, typer.Option("--env", help="Profile environment")]
 
 EngineOpt = Annotated[
     EngineType | None,
-    typer.Option("--engine", help="duckdb|postgres|bigquery (überschreibt Profile)"),
+    typer.Option("--engine", help="duckdb|postgres|bigquery (overrides profile)"),
 ]
 
 PathOpt = Annotated[
-    str | None, typer.Option("--path", help="Eine einzelne YAML-Datei statt Discovery")
+    str | None, typer.Option("--path", help="Single YAML file instead of discovery")
 ]
 
-ProjectArg = Annotated[str, typer.Argument(help="Pfad zum Projekt (mit tests/unit/*.yml)")]
+ProjectArg = Annotated[str, typer.Argument(help="Path to the project (with tests/unit/*.yml)")]
 
-ModelOpt = Annotated[str | None, typer.Option("--model", help="Nur ein Modell testen")]
+ModelOpt = Annotated[str | None, typer.Option("--model", help="Test a single model")]
 
 SelectOpt = Annotated[
     list[str] | None,
@@ -450,9 +460,29 @@ OutOpt = Annotated[
 
 HtmlOpt = Annotated[
     bool,
-    typer.Option("--html", help="Erzeuge HTML-DAG und Mini-Dokumentation"),
+    typer.Option("--html", help="Generate HTML DAG and mini documentation"),
 ]
 
+JobsOpt = Annotated[
+    int,
+    typer.Option(
+        "--jobs",
+        help="Max parallel executions per level (≥1).",
+        min=1,
+        show_default=True,
+    ),
+]
+
+KeepOpt = Annotated[
+    bool,
+    typer.Option(
+        "--keep-going",
+        help=(
+            "On errors within a level: do not cancel tasks already running in that level; "
+            "subsequent levels still do not start."
+        ),
+    ),
+]
 
 # ──────────────────────────────────── CLI Root ───────────────────────────────────
 
@@ -463,14 +493,14 @@ def main(
         None,
         "--version",
         "-V",
-        help="Zeigt die Version und beendet.",
+        help="Show version and exit.",
         callback=_version_callback,
         is_eager=True,
     ),
     verbose: int = typer.Option(
-        0, "--verbose", "-v", count=True, help="Mehr Ausgaben (-v: INFO, -vv: DEBUG)"
+        0, "--verbose", "-v", count=True, help="Increase verbosity (-v: INFO, -vv: DEBUG)"
     ),
-    quiet: int = typer.Option(0, "--quiet", "-q", count=True, help="Weniger Ausgaben (-q: ERROR)"),
+    quiet: int = typer.Option(0, "--quiet", "-q", count=True, help="Reduce verbosity (-q: ERROR)"),
 ) -> None:
     _setup_logging(verbose, quiet)
 
@@ -478,10 +508,153 @@ def main(
 # ──────────────────────────────────── Commands ───────────────────────────────────
 
 
+@dataclass
+class _RunEngine:
+    ctx: Any
+    env_name: str
+    pred: Callable[[Any], bool]
+    shared: tuple[Any, Callable, Callable] = field(init=False)
+    tls: threading.local = field(default_factory=threading.local, init=False)
+    cache: FingerprintCache = field(init=False)
+    env_ctx: EnvCtx = field(init=False)
+    computed_fps: dict[str, str] = field(default_factory=dict, init=False)
+    fps_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+
+    def __post_init__(self) -> None:
+        if LOG.isEnabledFor(logging.INFO):
+            typer.echo(f"Profile: {self.env_name} | Engine: {self.ctx.profile.engine}")
+        self.shared = self.ctx.make_executor()
+        relevant_env = [k for k in os.environ if k.startswith("FF_")]
+        self.env_ctx = build_env_ctx(
+            engine=self.ctx.profile.engine,
+            profile_name=self.env_name,
+            relevant_env_keys=relevant_env,
+            sources=getattr(REGISTRY, "sources", {}),
+        )
+        self.cache = FingerprintCache(
+            self.ctx.project, profile=self.env_name, engine=self.ctx.profile.engine
+        )
+        self.cache.load()
+
+    def _get_runner(self) -> tuple[Any, Callable, Callable]:
+        if getattr(self.tls, "runner", None) is None:
+            ex, run_sql_shared, run_py_shared = self.shared
+            run_sql_fn, run_py_fn = run_sql_shared, run_py_shared
+            if self.ctx.profile.engine == "duckdb" and hasattr(ex, "clone"):
+                try:
+                    ex = ex.clone()
+
+                    def run_sql_fn(n):
+                        return ex.run_sql(n, self.ctx.jinja_env)
+
+                    run_py_fn = ex.run_python
+                except Exception:
+                    pass
+            self.tls.runner = (ex, run_sql_fn, run_py_fn)
+        return self.tls.runner
+
+    def _maybe_fingerprint(self, node: Any, ex: Any) -> str | None:
+        supports_sql_fp = all(
+            hasattr(ex, a) for a in ("render_sql", "_resolve_ref", "_resolve_source")
+        )
+        if not (supports_sql_fp or node.kind == "python"):
+            return None
+        with self.fps_lock:
+            dep_fps = {
+                d: self.computed_fps.get(d) or self.cache.get(d) or "" for d in (node.deps or [])
+            }
+        try:
+            if node.kind == "sql" and supports_sql_fp:
+                rendered = ex.render_sql(
+                    node,
+                    self.ctx.jinja_env,
+                    ref_resolver=lambda nm: ex._resolve_ref(nm, self.ctx.jinja_env),
+                    source_resolver=ex._resolve_source,
+                )
+                return fingerprint_sql(
+                    node=node, rendered_sql=rendered, env_ctx=self.env_ctx, dep_fps=dep_fps
+                )
+            if node.kind == "python":
+                func = REGISTRY.py_funcs[node.name]
+                src = get_function_source(func)
+                return fingerprint_py(
+                    node=node, func_src=src, env_ctx=self.env_ctx, dep_fps=dep_fps
+                )
+        except Exception:
+            return None
+        return None
+
+    def run_node(self, name: str) -> None:
+        node = REGISTRY.nodes[name]
+        ex, run_sql_fn, run_py_fn = self._get_runner()
+        cand_fp = self._maybe_fingerprint(node, ex)
+        if cand_fp is not None:
+            materialized = (getattr(node, "meta", {}) or {}).get("materialized", "table")
+            if can_skip_node(
+                node_name=name,
+                new_fp=cand_fp,
+                cache=self.cache,
+                executor=ex,
+                materialized=materialized,
+            ):
+                with self.fps_lock:
+                    self.computed_fps[name] = cand_fp
+                if LOG.isEnabledFor(logging.INFO):
+                    typer.echo(f"↻ Skipped {name} (cache hit)")
+                return
+        if LOG.isEnabledFor(logging.INFO):
+            typer.echo(f"→ Running {name} ({node.kind})")
+        (run_sql_fn if node.kind == "sql" else run_py_fn)(node)
+        if cand_fp is not None:
+            with self.fps_lock:
+                self.computed_fps[name] = cand_fp
+
+    @staticmethod
+    def before(_name: str) -> None:
+        return
+
+    @staticmethod
+    def on_error(name: str, err: BaseException) -> None:
+        _node = REGISTRY.get_node(name)
+        if isinstance(err, KeyError):
+            typer.echo(
+                _error_block(
+                    f"Model failed: {name} (KeyError)",
+                    _pretty_exc(err),
+                    "• Check column names in your upstream tables (seeds/SQL).\n"
+                    "• For >1 deps: dict keys are physical relations (relation_for), "
+                    "e.g. 'orders'.\n"
+                    "• (Optional) Log input columns in the executor before the call.",
+                )
+            )
+            raise typer.Exit(1) from err
+        body = _pretty_exc(err)
+        if os.getenv("FLOWFORGE_TRACE") == "1":
+            body += "\n\n" + "".join(traceback.format_exc())
+        typer.echo(_error_block(f"Model failed: {name}", body, "• See cause above."))
+        raise typer.Exit(1) from err
+
+    def persist_on_success(self, result: ScheduleResult) -> None:
+        if not result.failed:
+            self.cache.update_many(self.computed_fps)
+            self.cache.save()
+
+    @staticmethod
+    def print_timings(result: ScheduleResult) -> None:
+        if not result.per_node_s:
+            return
+        typer.echo("\nRuntime per model")
+        typer.echo("─────────────────")
+        for name in sorted(result.per_node_s, key=lambda k: k):
+            ms = int(result.per_node_s[name] * 1000)
+            typer.echo(f"• {name:<30} {ms:>6} ms")
+        typer.echo(f"\nTotal runtime: {result.total_s:.3f}s")
+
+
 @app.command(
     help=(
-        "Lädt das Projekt, baut den DAG und führt alle Modelle aus."
-        "\n\nBeispiel:\n  flowforge run . --env dev"
+        "Loads the project, builds the DAG, and runs every model."
+        "\n\nExample:\n  flowforge run . --env dev"
     )
 )
 def run(
@@ -490,46 +663,33 @@ def run(
     engine: EngineOpt = None,
     vars: VarsOpt = None,
     select: SelectOpt = None,
+    jobs: JobsOpt = 1,
+    keep_going: KeepOpt = False,
 ) -> None:
     ctx = _prepare_context(project, env_name, engine, vars)
     _, pred = _compile_selector(select)
-
-    if LOG.isEnabledFor(logging.INFO):
-        typer.echo(f"Profil: {env_name} | Engine: {ctx.profile.engine}")
-    _, run_sql, run_py = ctx.make_executor()
-
-    def _before(name: str, node: Any) -> None:
-        if LOG.isEnabledFor(logging.INFO):
-            typer.echo(f"→ Running {name} ({node.kind}) on {ctx.profile.engine}")
-
-    def _on_error(name: str, _node: Any, err: Exception) -> None:
-        if isinstance(err, KeyError):
-            typer.echo(
-                _error_block(
-                    f"Model failed: {name} (KeyError)",
-                    _pretty_exc(err),
-                    "• Prüfe Spaltennamen deiner Upstream-Tabellen (Seeds/SQL).\n"
-                    "• Bei >1 Deps: dict-Keys sind physische Relationen (relation_for), "
-                    "z. B. 'orders'.\n"
-                    "• (Optional) Eingabespalten im Executor vor dem Call loggen.",
-                )
-            )
-            raise typer.Exit(1) from err
-
-        body = _pretty_exc(err)
-        if os.getenv("FLOWFORGE_TRACE") == "1":
-            body += "\n\n" + "".join(traceback.format_exc())
-        typer.echo(_error_block(f"Model failed: {name}", body, "• Siehe Ursache oben."))
-        raise typer.Exit(1) from err
-
-    _run_models(pred, run_sql, run_py, before=_before, on_error=_on_error)
-
+    engine_ = _RunEngine(ctx=ctx, env_name=env_name, pred=pred)
+    lvls_all = dag_levels(REGISTRY.nodes)
+    lvls = [[n for n in lvl if pred(REGISTRY.nodes[n])] for lvl in lvls_all]
+    lvls = [lvl for lvl in lvls if lvl]
+    result: ScheduleResult = schedule(
+        lvls,
+        jobs=jobs,
+        fail_policy="keep_going" if keep_going else "fail_fast",
+        run_node=engine_.run_node,
+        before=engine_.before,
+        on_error=engine_.on_error,
+    )
+    if result.failed:
+        raise typer.Exit(1)
+    engine_.persist_on_success(result)
+    engine_.print_timings(result)
     typer.echo("✓ Done")
 
 
 @app.command(
     help=(
-        "Gibt den DAG als Mermaid oder erzeugt eine HTML-Seite.\n\nBeispiele:\n  "
+        "Outputs the DAG as Mermaid text or generates an HTML page.\n\nExamples:\n  "
         "flowforge dag .\n  flowforge dag . --env dev --html"
     )
 )
@@ -566,13 +726,13 @@ def dag(
         typer.echo(f"Mermaid DAG written to {dag_out}")
 
     if LOG.isEnabledFor(logging.INFO):
-        typer.echo(f"Profil: {env_name} | Engine: {ctx.profile.engine}")
+        typer.echo(f"Profile: {env_name} | Engine: {ctx.profile.engine}")
 
 
 @app.command(
     help=(
-        "Materialisiert Modelle und führt konfigurierte Datenqualitäts-Checks aus."
-        "\n\nBeispiel:\n  flowforge test . --env dev --select batch"
+        "Materializes models and runs configured data-quality checks."
+        "\n\nExample:\n  flowforge test . --env dev --select batch"
     )
 )
 def test(
@@ -582,30 +742,30 @@ def test(
     vars: VarsOpt = None,
     select: SelectOpt = None,
 ) -> None:
-    # 0) Setup & Normalisierung
+    # 0) Setup & normalization
     ctx = _prepare_context(project, env_name, engine, vars)
     tokens, pred = _compile_selector(select)
     execu, run_sql, run_py = ctx.make_executor()
 
-    # 1) Shim/Marker (optional)
+    # 1) Shim/marker (optional)
     con = _get_test_con(execu)
     _maybe_print_marker(con)
 
-    # 2) Modelle in Topo-Reihenfolge (mit optionalem Filter) ausführen
+    # 2) Run models in topological order (with optional filter)
     _run_models(pred, run_sql, run_py)
 
-    # 3) Tests laden & ggf. legacy Tag-Filter anwenden
+    # 3) Load tests and optionally apply the legacy tag filter
     tests = _load_tests(ctx.project)
     tests = _apply_legacy_tag_filter(tests, tokens)
     if not tests:
-        typer.secho("Keine Tests konfiguriert.", fg="bright_black")
+        typer.secho("No tests configured.", fg="bright_black")
         raise typer.Exit(code=0)
 
-    # 4) Tests ausführen & Ergebnis zusammenfassen
+    # 4) Run tests and summarize the outcome
     results = _run_dq_tests(con, tests)
     _print_summary(results)
 
-    # 5) Exit-Code
+    # 5) Exit code
     failed = sum(not r.ok for r in results)
     raise typer.Exit(code=2 if failed > 0 else 0)
 
@@ -639,8 +799,8 @@ def _load_tests(proj: Path) -> list[dict]:
 
 
 def _apply_legacy_tag_filter(tests: list[dict], tokens: list[str]) -> list[dict]:
-    # Falls genau EIN Token ohne Präfix (tag:/type:/kind:) angegeben wurde,
-    # als Legacy-DQ-Tag interpretieren.
+    # If exactly ONE token without a prefix (tag:/type:/kind:) was provided,
+    # interpret it as a legacy DQ tag.
     if len(tokens) != 1 or tokens[0].startswith(("tag:", "type:", "kind:")):
         return tests
     legacy_tag = tokens[0]
@@ -670,7 +830,7 @@ def _run_dq_tests(con: Any, tests: Iterable[dict]) -> list[DQResult]:
 
 
 def _exec_test_kind(con: Any, kind: str, t: dict, table: Any, col: Any) -> tuple[bool, str | None]:
-    # Dispatch-Mapping statt großer if/elif-Kette
+    # Dispatch mapping instead of a large if/elif chain
     try_map = {
         "not_null": lambda: testing.not_null(con, table, col),
         "unique": lambda: testing.unique(con, table, col),
@@ -716,7 +876,7 @@ def _print_summary(results: list[DQResult]) -> None:
 
 @app.command(
     help=(
-        "Seeds aus /seeds einspielen.\n\nBeispiele:\n  flowforge seed . "
+        "Load seeds from /seeds into the target database.\n\nExamples:\n  flowforge seed . "
         "--env dev\n  flowforge seed examples/postgres --env stg"
     )
 )
@@ -754,7 +914,7 @@ def utest(
 
     specs = discover_unit_specs(ctx.project, path=path, only_model=model)
     if not specs:
-        typer.echo("ℹ️  Keine Unit-Tests gefunden (tests/unit/*.yml).")  # noqa: RUF001
+        typer.echo("ℹ️  No unit tests found (tests/unit/*.yml).")  # noqa: RUF001
         raise typer.Exit(0)
 
     failures = run_unit_specs(specs, ex, ctx.jinja_env, only_case=case)

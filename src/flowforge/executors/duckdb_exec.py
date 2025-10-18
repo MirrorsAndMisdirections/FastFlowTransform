@@ -1,4 +1,6 @@
 # flowforge/executors/duckdb_exec.py
+from __future__ import annotations
+
 from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
@@ -22,7 +24,14 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
         if db_path and db_path != ":memory:" and "://" not in db_path:
             with suppress(Exception):
                 Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        self.db_path = db_path
         self.con = duckdb.connect(db_path)
+
+    def clone(self) -> DuckExecutor:
+        """
+        Generates a new Executor instance with own connection for Thread-Worker.
+        """
+        return DuckExecutor(self.db_path)
 
     # ---- Frame hooks ----
     def _read_relation(self, relation: str, node: Node, deps: Iterable[str]) -> pd.DataFrame:

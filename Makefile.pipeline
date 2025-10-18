@@ -10,7 +10,10 @@ seed:
 
 # Run/DAG/Test reuse the same duckdb path (FF_ENV can switch engine)
 run:
-	$(FLOWFORGE) run "$(FF_PROJECT)" --env "$(FF_ENV)"
+	$(FLOWFORGE) run "$(FF_PROJECT)" --env "$(FF_ENV)" --jobs=1
+
+run-parallel:
+	$(FLOWFORGE) run "$(FF_PROJECT)" --env "$(FF_ENV)" --jobs=4 --keep-going
 
 dag:
 	$(FLOWFORGE) dag "$(FF_PROJECT)" --env "$(FF_ENV)" --html
