@@ -44,6 +44,7 @@ from .fingerprint import (
     fingerprint_sql,
     get_function_source,
 )
+from .log_queue import LogQueue
 from .meta import ensure_meta_table
 from .run_executor import ScheduleResult, schedule
 from .seeding import seed_project
@@ -658,7 +659,7 @@ class _RunEngine:
                 ex.on_node_built(node, relation_for(name), cand_fp)
 
     @staticmethod
-    def before(_name: str) -> None:
+    def before(_name: str, lvl_idx: int | None = None) -> None:
         return
 
     @staticmethod
@@ -724,6 +725,19 @@ def run(
     engine_ = _RunEngine(
         ctx=ctx, env_name=env_name, pred=pred, cache_mode=cache_mode, rebuild=rebuild
     )
+    # Thread-safe log queue to avoid interleaving
+    logq = LogQueue()
+
+    def _abbr(e: str) -> str:
+        mapping = {
+            "duckdb": "DUCK",
+            "postgres": "PG",
+            "bigquery": "BQ",
+            "databricks_spark": "SPK",
+            "snowflake_snowpark": "SNOW",
+        }
+        return mapping.get(e, e.upper()[:4])
+
     lvls_all = dag_levels(REGISTRY.nodes)
     lvls = [[n for n in lvl if pred(REGISTRY.nodes[n])] for lvl in lvls_all]
     lvls = [lvl for lvl in lvls if lvl]
@@ -732,9 +746,19 @@ def run(
         jobs=jobs,
         fail_policy="keep_going" if keep_going else "fail_fast",
         run_node=engine_.run_node,
-        before=engine_.before,
-        on_error=engine_.on_error,
+        before=engine_.before,  # we keep for compatibility; not used for printing
+        on_error=None,  # printing happens after draining logs, via engine_.on_error
+        logger=logq,
+        engine_abbr=_abbr(ctx.profile.engine),
+        name_width=28,
     )
+    # Flush logs in stable order
+    for line in logq.drain():
+        typer.echo(line)
+    # Print error blocks (one per failed node) after log lines
+    if result.failed:
+        for name, err in result.failed.items():
+            engine_.on_error(name, err)
     if result.failed:
         raise typer.Exit(1)
     engine_.persist_on_success(result)

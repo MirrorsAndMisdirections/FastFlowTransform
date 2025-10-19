@@ -61,7 +61,18 @@ def _stub_schedule(monkeypatch: pytest.MonkeyPatch):
     Replace schedule() with a deterministic, synchronous runner.
     """
 
-    def schedule(levels, jobs, fail_policy, run_node, before=None, on_error=None):
+    def schedule(
+        levels,
+        jobs,
+        fail_policy,
+        run_node,
+        *,
+        before=None,
+        on_error=None,
+        logger=None,
+        engine_abbr="",
+        name_width=28,
+    ):
         start = time.perf_counter()
         per: dict[str, float] = {}
         for lvl in levels:
@@ -70,17 +81,24 @@ def _stub_schedule(monkeypatch: pytest.MonkeyPatch):
                 t0 = time.perf_counter()
                 try:
                     if before:
-                        before(name)
+                        # neue Arity (name, level_idx) supporten; fallback auf (name)
+                        try:
+                            before(name, 1)
+                        except TypeError:
+                            before(name)
                     run_node(name)
                 except BaseException as e:
                     if on_error:
                         on_error(name, e)
+                    per[name] = time.perf_counter() - t0
+                    # failed erwartet dict[str, BaseException]
                     return ScheduleResult(
                         failed={name: e},
                         per_node_s=per,
                         total_s=time.perf_counter() - start,
                     )
                 per[name] = time.perf_counter() - t0
+        # Success → empty Dict
         return ScheduleResult(
             failed={},
             per_node_s=per,
