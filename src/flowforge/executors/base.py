@@ -339,3 +339,13 @@ class BaseExecutor[TFrame](ABC):
     def _frame_name(self) -> str:
         """Only used when formatting error messages (default)."""
         return "a"
+
+    # ---------- Build meta hook ----------
+    def on_node_built(self, node: Node, relation: str, fingerprint: str) -> None:
+        """
+        Hook invoked after a node has been successfully materialized.
+        Engines should override this to write/update the meta table (e.g. _ff_meta).
+
+        Default: no-op.
+        """
+        return

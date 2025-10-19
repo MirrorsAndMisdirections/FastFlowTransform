@@ -11,6 +11,7 @@ import pandas as pd
 from duckdb import CatalogException
 
 from flowforge.core import Node, relation_for
+from flowforge.meta import ensure_meta_table, upsert_meta
 
 from .base import BaseExecutor
 
@@ -84,3 +85,15 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
 
     def _create_or_replace_table(self, target_sql: str, select_body: str, node: Node) -> None:
         self.con.execute(f"create or replace table {target_sql} as {select_body}")
+
+    # ---- Meta hook ----
+    def on_node_built(self, node: Node, relation: str, fingerprint: str) -> None:
+        """
+        After successful materialization, ensure the meta table exists and upsert the row.
+        """
+        # Best-effort: do not let meta errors break the run
+        try:
+            ensure_meta_table(self)
+            upsert_meta(self, node.name, relation, fingerprint, "duckdb")
+        except Exception:
+            pass

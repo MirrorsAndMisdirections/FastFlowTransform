@@ -11,6 +11,7 @@ from flowforge.core import Node, relation_for
 from flowforge.errors import ProfileConfigError
 from flowforge.executors._shims import SAConnShim
 from flowforge.executors.base import BaseExecutor
+from flowforge.meta import ensure_meta_table, upsert_meta
 
 
 class PostgresExecutor(BaseExecutor[pd.DataFrame]):
@@ -102,3 +103,13 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
                 conn.execute(text(f"SET LOCAL search_path = {self._q_ident(self.schema)}"))
             conn.execute(text(f"DROP TABLE IF EXISTS {target_sql} CASCADE"))
             conn.execute(text(f"CREATE TABLE {target_sql} AS {select_body}"))
+
+    def on_node_built(self, node: Node, relation: str, fingerprint: str) -> None:
+        """
+        Write/update _ff_meta in the current schema after a successful build.
+        """
+        try:
+            ensure_meta_table(self)
+            upsert_meta(self, node.name, relation, fingerprint, "postgres")
+        except Exception:
+            pass

@@ -44,7 +44,7 @@ from .fingerprint import (
     fingerprint_sql,
     get_function_source,
 )
-from .meta import ensure_meta_table, upsert_meta
+from .meta import ensure_meta_table
 from .run_executor import ScheduleResult, schedule
 from .seeding import seed_project
 from .settings import EngineType, EnvSettings, Profile, resolve_profile
@@ -646,9 +646,6 @@ class _RunEngine:
                     self.computed_fps[name] = cand_fp
                 if LOG.isEnabledFor(logging.INFO):
                     typer.echo(f"↻ Skipped {name} (cache hit)")
-                # Best-effort: write/update meta when we know fp and relation exists
-                with suppress(Exception):
-                    upsert_meta(ex, name, relation_for(name), cand_fp, self.ctx.profile.engine)
                 return
         if LOG.isEnabledFor(logging.INFO):
             typer.echo(f"→ Running {name} ({node.kind})")
@@ -656,9 +653,9 @@ class _RunEngine:
         if cand_fp is not None:
             with self.fps_lock:
                 self.computed_fps[name] = cand_fp
-            # Best-effort: write/update meta on successful execution
+            # Notify executor to upsert meta after a successful build
             with suppress(Exception):
-                upsert_meta(ex, name, relation_for(name), cand_fp, self.ctx.profile.engine)
+                ex.on_node_built(node, relation_for(name), cand_fp)
 
     @staticmethod
     def before(_name: str) -> None:

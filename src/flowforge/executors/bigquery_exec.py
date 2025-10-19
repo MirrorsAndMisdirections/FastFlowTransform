@@ -9,7 +9,9 @@ from google.api_core.exceptions import BadRequest, NotFound
 from google.cloud import bigquery
 from google.cloud.bigquery import Client, LoadJobConfig
 
-from ..core import Node, relation_for
+from flowforge.core import Node, relation_for
+from flowforge.meta import ensure_meta_table, upsert_meta
+
 from ._bigquery_mixin import BigQueryIdentifierMixin
 from ._shims import BigQueryConnShim
 from .base import BaseExecutor
@@ -135,3 +137,13 @@ class BigQueryExecutor(BigQueryIdentifierMixin, BaseExecutor[pd.DataFrame]):
             location=self.location,
         )
         job.result()
+
+    def on_node_built(self, node: Node, relation: str, fingerprint: str) -> None:
+        """
+        Write/update dataset._ff_meta after a successful build.
+        """
+        try:
+            ensure_meta_table(self)
+            upsert_meta(self, node.name, relation, fingerprint, "bigquery")
+        except Exception:
+            pass
