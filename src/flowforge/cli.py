@@ -11,6 +11,7 @@ import traceback
 from collections.abc import Callable, Iterable
 from contextlib import suppress
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, NoReturn, cast
 
@@ -486,6 +487,41 @@ KeepOpt = Annotated[
     ),
 ]
 
+
+# ---------------- Cache policy options ----------------
+class CacheMode(str, Enum):
+    RW = "rw"  # read-write: skip on hit, write on build
+    RO = "ro"  # read-only: skip on hit, build on miss (no writes)
+    WO = "wo"  # write-only: always build, write
+    OFF = "off"  # disabled: always build, no writes
+
+
+CacheOpt = Annotated[
+    CacheMode,
+    typer.Option(
+        "--cache",
+        help="Cache mode: rw (default), ro, wo, off.",
+        case_sensitive=False,
+        show_default=True,
+    ),
+]
+
+NoCacheOpt = Annotated[
+    bool,
+    typer.Option(
+        "--no-cache",
+        help="Alias for --cache=off (always build, no writes).",
+    ),
+]
+
+RebuildOpt = Annotated[
+    bool,
+    typer.Option(
+        "--rebuild",
+        help="Ignore cache for selected nodes (build them even if cache matches).",
+    ),
+]
+
 # ──────────────────────────────────── CLI Root ───────────────────────────────────
 
 
@@ -515,6 +551,8 @@ class _RunEngine:
     ctx: Any
     env_name: str
     pred: Callable[[Any], bool]
+    cache_mode: CacheMode
+    rebuild: bool
     shared: tuple[Any, Callable, Callable] = field(init=False)
     tls: threading.local = field(default_factory=threading.local, init=False)
     cache: FingerprintCache = field(init=False)
@@ -595,7 +633,9 @@ class _RunEngine:
         cand_fp = self._maybe_fingerprint(node, ex)
         if cand_fp is not None:
             materialized = (getattr(node, "meta", {}) or {}).get("materialized", "table")
-            if can_skip_node(
+            # Decide if skipping is allowed (rw/ro) and not forced rebuild
+            may_skip = self.cache_mode in (CacheMode.RW, CacheMode.RO) and not self.rebuild
+            if may_skip and can_skip_node(
                 node_name=name,
                 new_fp=cand_fp,
                 cache=self.cache,
@@ -646,7 +686,7 @@ class _RunEngine:
         raise typer.Exit(1) from err
 
     def persist_on_success(self, result: ScheduleResult) -> None:
-        if not result.failed:
+        if not result.failed and (self.cache_mode in (CacheMode.RW, CacheMode.WO)):
             self.cache.update_many(self.computed_fps)
             self.cache.save()
 
@@ -676,10 +716,17 @@ def run(
     select: SelectOpt = None,
     jobs: JobsOpt = 1,
     keep_going: KeepOpt = False,
+    cache: CacheOpt = CacheMode.RW,
+    no_cache: NoCacheOpt = False,
+    rebuild: RebuildOpt = False,
 ) -> None:
     ctx = _prepare_context(project, env_name, engine, vars)
     _, pred = _compile_selector(select)
-    engine_ = _RunEngine(ctx=ctx, env_name=env_name, pred=pred)
+    # Resolve cache mode (no-cache overrides)
+    cache_mode = CacheMode.OFF if no_cache else cache
+    engine_ = _RunEngine(
+        ctx=ctx, env_name=env_name, pred=pred, cache_mode=cache_mode, rebuild=rebuild
+    )
     lvls_all = dag_levels(REGISTRY.nodes)
     lvls = [[n for n in lvl if pred(REGISTRY.nodes[n])] for lvl in lvls_all]
     lvls = [lvl for lvl in lvls if lvl]
