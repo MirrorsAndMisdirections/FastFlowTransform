@@ -523,6 +523,31 @@ RebuildOpt = Annotated[
     ),
 ]
 
+
+# ---- UTest cache mode (only off|ro|rw) ----
+class UTestCacheMode(str, Enum):
+    OFF = "off"
+    RO = "ro"
+    RW = "rw"
+
+
+UTestCacheOpt = Annotated[
+    UTestCacheMode,
+    typer.Option(
+        "--cache",
+        help="Unit-test cache mode: off (default), ro, rw.",
+        show_default=True,
+    ),
+]
+
+ReuseMetaOpt = Annotated[
+    bool,
+    typer.Option(
+        "--reuse-meta",
+        help="Do not clean or reset meta state between unit tests (reserved; may be ignored).",
+    ),
+]
+
 # ──────────────────────────────────── CLI Root ───────────────────────────────────
 
 
@@ -986,6 +1011,8 @@ def utest(
     engine: EngineOpt = None,
     path: PathOpt = None,
     vars: VarsOpt = None,
+    cache: UTestCacheOpt = UTestCacheMode.OFF,
+    reuse_meta: ReuseMetaOpt = False,
 ) -> None:
     ctx = _prepare_context(project, env_name, engine, vars)
 
@@ -996,5 +1023,13 @@ def utest(
         typer.echo("ℹ️  No unit tests found (tests/unit/*.yml).")  # noqa: RUF001
         raise typer.Exit(0)
 
-    failures = run_unit_specs(specs, ex, ctx.jinja_env, only_case=case)
+    # Pass-through of cache controls (default OFF for deterministic runs).
+    failures = run_unit_specs(
+        specs,
+        ex,
+        ctx.jinja_env,
+        only_case=case,
+        cache_mode=getattr(cache, "value", str(cache)),  # "off" | "ro" | "rw"
+        reuse_meta=bool(reuse_meta),
+    )
     raise typer.Exit(code=2 if failures > 0 else 0)

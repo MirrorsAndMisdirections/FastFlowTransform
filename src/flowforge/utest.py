@@ -2,14 +2,29 @@
 from __future__ import annotations
 
 import difflib
-from collections.abc import Iterable
-from dataclasses import dataclass
+import hashlib
+import json
+import os
+import uuid
+from collections.abc import Iterable, Mapping
+from contextlib import suppress
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 import yaml
 from sqlalchemy import text
+
+from flowforge.cache import FingerprintCache, can_skip_node
+from flowforge.fingerprint import (
+    EnvCtx,
+    build_env_ctx,
+    fingerprint_py,
+    fingerprint_sql,
+    get_function_source,
+)
+from flowforge.meta import delete_meta_for_node
 
 from .core import REGISTRY, Node, relation_for
 
@@ -91,12 +106,17 @@ def discover_unit_specs(
 def _load_relation_from_rows(executor: Any, rel: str, rows: list[dict]) -> None:
     df = pd.DataFrame(rows)
     if hasattr(executor, "con"):  # DuckDB
-        executor.con.register("_ff_unit_tmp", df)
-        executor.con.execute(f'create or replace table "{rel}" as select * from _ff_unit_tmp')
+        # unique temp name per call to avoid clashes under parallel runs
+        tmp_name = f"_ff_unit_tmp_{uuid.uuid4().hex[:12]}"
+        executor.con.register(tmp_name, df)
         try:
-            executor.con.unregister("_ff_unit_tmp")  # duckdb >= 0.8
-        except Exception:
-            executor.con.execute("drop view if exists _ff_unit_tmp")
+            executor.con.execute(f'create or replace table "{rel}" as select * from {tmp_name}')
+        finally:
+            # DuckDB >= 0.8: unregister exists; otherwise drop the view fallback
+            try:
+                executor.con.unregister(tmp_name)
+            except Exception:
+                executor.con.execute(f"drop view if exists {tmp_name}")
         return
     if hasattr(executor, "engine"):  # Postgres
         schema = getattr(executor, "schema", None)
@@ -136,112 +156,159 @@ def _project_root_for_spec(spec: UnitSpec) -> Path:
     return spec.path.parent  # letzter Fallback
 
 
+# ---------- Cache and Fingerprint Helpers ----------
+
+
+def _normalize_for_hash(obj: Any) -> Any:
+    """Deterministic, JSON-serializable shape: dicts sorted, tuples/sets normalized."""
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, Path):
+        return obj.as_posix()
+    if isinstance(obj, (list, tuple, set)):
+        # Preserve list order; sort sets/tuples into a list for determinism
+        if isinstance(obj, list):
+            return [_normalize_for_hash(x) for x in obj]
+        return sorted(
+            [_normalize_for_hash(x) for x in obj], key=lambda x: json.dumps(x, sort_keys=True)
+        )
+    if isinstance(obj, dict):
+        return {k: _normalize_for_hash(obj[k]) for k in sorted(obj.keys())}
+    # Fallback to string representation (stable enough for primitives we don't expect here)
+    return str(obj)
+
+
+def _sha256_hex(data: bytes) -> str:
+    h = hashlib.sha256()
+    h.update(data)
+    return h.hexdigest()
+
+
+def _digest_file(path: Path) -> str | None:
+    """Return SHA-256 hex of file contents if readable; else None."""
+    try:
+        data = path.read_bytes()
+    except Exception:
+        return None
+    return _sha256_hex(data)
+
+
+def _resolve_csv_path(spec: Any, csv_val: str) -> Path:
+    """Resolve CSV paths for utests:
+    1) absolute path → return as-is
+    2) relative to spec.path's parent (preferred, YAML-local)
+    3) fallback to spec.project_dir or project root
+    4) fallback to CWD
+    """
+    p = Path(csv_val)
+    if p.is_absolute():
+        return p
+
+    base: Path | None = None
+
+    # Prefer the YAML file's directory (most intuitive for tests)
+    sp = getattr(spec, "path", None)
+    if sp:
+        try:
+            base = Path(sp).parent
+        except Exception:
+            base = None
+
+    # Then the explicit project_dir or derived project root
+    if base is None:
+        proj_dir = getattr(spec, "project_dir", None)
+        if proj_dir:
+            base = Path(proj_dir)
+        else:
+            try:
+                base = Path(_project_root_for_spec(spec))
+            except Exception:
+                base = None
+
+    # Last resort: current working directory
+    if base is None:
+        base = Path.cwd()
+
+    return (base / p).resolve()
+
+
+def _extract_defaults_inputs(spec: Any) -> dict[str, Any]:
+    """Return defaults.inputs as dict or {}. Works for dict, namespace/dataclass, mapping-like."""
+    defaults = getattr(spec, "defaults", None)
+
+    # Case 1: dict / Mapping
+    if isinstance(defaults, Mapping):
+        val = cast(Mapping[str, Any], defaults).get("inputs", {})
+        return val if isinstance(val, dict) else {}
+
+    if defaults is None:
+        return {}
+
+    # Case 2: object with attribute 'inputs' (e.g. SimpleNamespace / dataclass)
+    val = getattr(defaults, "inputs", None)
+    if isinstance(val, dict):
+        return val
+
+    # Case 3: mapping-like object with get()
+    get = getattr(defaults, "get", None)
+    if callable(get):
+        try:
+            val = get("inputs")
+            return val if isinstance(val, dict) else {}
+        except Exception:
+            return {}
+
+    return {}
+
+
+def _fingerprint_case_inputs(spec: Any, case: Any) -> str:
+    """
+    Compute a deterministic fingerprint of the EFFECTIVE inputs for a case.
+    Merges spec.defaults.inputs and case.inputs (case overrides), then:
+      - For rows: include normalized rows.
+      - For csv: include the resolved path AND its file content digest if available.
+    """
+    # Gather defaults.inputs robustly
+    defaults_inputs = _extract_defaults_inputs(spec)
+
+    case_inputs = getattr(case, "inputs", None) or {}
+
+    effective_inputs = _deep_merge(defaults_inputs, case_inputs)
+
+    norm: dict[str, Any] = {}
+    for rel, cfg in (effective_inputs or {}).items():
+        item = {}
+        if isinstance(cfg, dict):
+            # rows
+            if "rows" in cfg:
+                item["rows"] = _normalize_for_hash(cfg["rows"])
+            # csv
+            if "csv" in cfg and isinstance(cfg["csv"], str):
+                csv_path = _resolve_csv_path(spec, cfg["csv"])
+                item["csv_path"] = csv_path.as_posix()
+                file_hash = _digest_file(csv_path)
+                if file_hash:
+                    item["csv_sha256"] = file_hash
+                else:
+                    # Fallback: include path string only if unreadable
+                    item.setdefault("csv_unreadable", True)
+        else:
+            # Unknown shape: include normalized raw value
+            item["value"] = _normalize_for_hash(cfg)
+        norm[rel] = item
+
+    payload = {"inputs": _normalize_for_hash(norm)}
+    data = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+        "utf-8"
+    )
+    return _sha256_hex(data)
+
+
 # ---------- Assertions ----------
 
 
 class UnitAssertionFailure(Exception):
     pass
-
-
-# def assert_rows_equal(
-#     actual_df: pd.DataFrame,
-#     expect_rows: list[dict],
-#     *,
-#     order_by: list[str] | None = None,
-#     any_order: bool = False,
-#     approx: dict[str, float] | None = None,
-#     ignore_columns: list[str] | None = None,
-#     subset: bool = False,
-# ):
-#     exp = pd.DataFrame(expect_rows)
-
-#     # Drop ignored columns (if present)
-#     if ignore_columns:
-#         actual_df = actual_df.drop(
-#             columns=[c for c in ignore_columns if c in actual_df.columns], errors="ignore"
-#         )
-#         exp = exp.drop(columns=[c for c in ignore_columns if c in exp.columns], errors="ignore")
-
-#     # Missing columns?
-#     missing = set(exp.columns) - set(actual_df.columns)
-#     if missing and not subset:
-#         raise UnitAssertionFailure(f"Missing columns in actual: {sorted(missing)}")
-
-#     # Ordering
-#     if order_by:
-#         actual_df = actual_df.sort_values(order_by).reset_index(drop=True)
-#         exp = exp.sort_values(order_by).reset_index(drop=True)
-#     elif any_order:
-#         common = sorted(set(exp.columns) & set(actual_df.columns))
-#         if common:
-#             actual_df = actual_df.sort_values(common).reset_index(drop=True)
-#             exp = exp.sort_values(common).reset_index(drop=True)
-
-#     # Numeric tolerances
-#     approx = approx or {}
-#     approx_checked_cols: list[str] = []
-#     for col, tol in approx.items():
-#         if col in exp.columns and col in actual_df.columns:
-#             try:
-#                 tol_f = float(tol)
-#             except Exception as err:
-#                 raise UnitAssertionFailure(
-#                     f"Invalid approx tolerance for column '{col}': {tol!r} (must be a number)"
-#                 ) from err
-
-#             # Cast to numeric; non-numeric values become NaN and are treated as zero diff
-#             a_num = pd.to_numeric(actual_df[col], errors="coerce")
-#             e_num = pd.to_numeric(exp[col], errors="coerce")
-
-#             diff = (a_num - e_num).abs().fillna(0)
-#             bad = diff > tol_f
-#             if bad.any():
-#                 raise UnitAssertionFailure(
-#                     f"Approx mismatch in '{col}' (tol={tol_f}). "
-#                     f"expected={e_num[bad].tolist()} vs actual={a_num[bad].tolist()}"
-#                 )
-#             # Align values so the exact equality check below does not fail
-#             actual_df[col] = exp[col]
-#             approx_checked_cols.append(col)
-
-#     # Subset assertion?
-#     if subset:
-#         # Check that every expected row occurs in the actual result.
-#         # Full multiset checks are expensive; use tuple comparison instead.
-#         if exp.empty:
-#             return
-#         key_cols = list(exp.columns)
-
-#         # Represent rows as tuples for stable comparison
-#         def _rows_as_tuples(df: pd.DataFrame) -> list[tuple]:
-#             return [
-#                 tuple(df[c].iloc[i] if c in df.columns else None for c in key_cols)
-#                 for i in range(len(df))
-#             ]
-
-#         exp_rows = _rows_as_tuples(exp)
-#         act_rows = _rows_as_tuples(actual_df)
-#         for r in exp_rows:
-#             if r not in act_rows:
-#                 raise UnitAssertionFailure(f"Expected row {r} not found in actual")
-#         return
-
-#     # Exact comparison for the remaining data (treat NaN == NaN)
-#     A = actual_df[exp.columns].fillna("__NA__")
-#     E = exp.fillna("__NA__")
-#     if not A.equals(E):
-#         a_csv = A.to_csv(index=False)
-#         e_csv = E.to_csv(index=False)
-#         diff = "\n".join(
-#             difflib.unified_diff(
-#                 e_csv.splitlines(),
-#                 a_csv.splitlines(),
-#                 fromfile="expected",
-#                 tofile="actual",
-#                 lineterm="",
-#             )
-#         )
-#         raise UnitAssertionFailure(f"Rows differ:\n{diff}")
 
 
 def assert_rows_equal(
@@ -260,6 +327,9 @@ def assert_rows_equal(
     _assert_columns_present(actual_df, exp, subset)
 
     actual_df, exp = _apply_ordering(actual_df, exp, order_by, any_order)
+    # Apply numeric approximations (align actual to expected within tolerances)
+    if approx:
+        _apply_approx_equalization(actual_df, exp, approx)
 
     if subset:
         _assert_subset_present(actual_df, exp)
@@ -322,8 +392,7 @@ def _apply_approx_equalization(
     exp: pd.DataFrame,
     approx: dict[str, float],
 ) -> list[str]:
-    """Vergleicht numerische Spalten mit Toleranz. Bei Erfolg wird actual auf exp ausgerichtet,
-    damit die spätere Exaktprüfung nicht fehlschlägt."""
+    """Compares numeric columns with tolerance."""
     checked: list[str] = []
     for col, tol in approx.items():
         if col not in exp.columns or col not in actual_df.columns:
@@ -404,9 +473,62 @@ def validate_inputs_cover_deps(node: Node, inputs: dict[str, dict]) -> tuple[lis
 
 
 # def run_unit_specs(
-#     specs: list[UnitSpec], executor: Any, jenv: Any, only_case: str | None = None
-# ) -> int:
+#     specs,
+#     executor,
+#     jenv,
+#     only_case=None,
+#     *,
+#     cache_mode: str = "off",
+#     reuse_meta: bool = False,
+# ):
+#     """
+#     Execute discovered unit-test specs. Returns the number of failed cases.
+
+#     Args:
+#         cache_mode: 'off' | 'ro' | 'rw'. Default 'off' for deterministic runs.
+#                     (Reserved for future accelerations; currently no-op.)
+#         reuse_meta: If True, avoid meta cleanup between cases (reserved; currently no-op).
+#     """
+#     # Normalize cache_mode: accept Enum or str; store as lower-case str
+#     if not isinstance(cache_mode, str):
+#         cache_mode = getattr(cache_mode, "value", str(cache_mode))
+#     cache_mode = cache_mode.lower()
+
+#     if cache_mode not in {"off", "ro", "rw"}:
+#         raise ValueError(f"unknown cache_mode: {cache_mode}")
+
 #     failures = 0
+
+#     # ---- Build a cache context for utests (profile name 'utest') ----
+#     try:
+#         project_dir = REGISTRY.get_project_dir()
+#     except Exception:
+#         project_dir = None
+
+#     # Best-effort engine detection for env_ctx/cache keying
+#     if hasattr(executor, "con"):  # duckdb
+#         engine_name = "duckdb"
+#     elif hasattr(executor, "engine"):  # postgres
+#         engine_name = "postgres"
+#     elif hasattr(executor, "client"):  # bigquery
+#         engine_name = "bigquery"
+#     else:
+#         engine_name = "unknown"
+
+#     env_ctx: EnvCtx = build_env_ctx(
+#         engine=engine_name,
+#         profile_name="utest",
+#         relevant_env_keys=[k for k in os.environ if k.startswith("FF_")],
+#         sources=getattr(REGISTRY, "sources", {}),
+#     )
+
+#     cache = None
+#     if project_dir is not None:
+#         cache = FingerprintCache(project_dir, profile="utest", engine=engine_name)
+#         cache.load()
+
+#     computed_fps: dict[str, str] = {}
+
 #     for spec in specs:
 #         node = REGISTRY.nodes.get(spec.model)
 #         if not node:
@@ -419,83 +541,258 @@ def validate_inputs_cover_deps(node: Node, inputs: dict[str, dict]) -> tuple[lis
 #                 continue
 #             print(f"→ {spec.model} :: {case.name}")
 
-#             # 1) Load inputs
-#             expected_deps, missing = validate_inputs_cover_deps(node, case.inputs)
-#             if missing:
-#                 print(
-#                     f"   ⚠️ inputs do not cover all deps: missing {missing}"
-#                     + f"(expected {expected_deps})"
-#                 )
+#             # Optional meta hygiene per case
+#             if not reuse_meta:
+#                 with suppress(Exception):
+#                     delete_meta_for_node(executor, node.name)
 
-#             for rel, cfg in case.inputs.items():
-#                 if "rows" in cfg:
-#                     _load_relation_from_rows(executor, rel, cfg["rows"])
-#                 elif "csv" in cfg:
-#                     csv_val = cfg["csv"]
-#                     csv_path = Path(csv_val)
-#                     if not csv_path.is_absolute():
-#                         base = (
-#                             spec.project_dir if spec.project_dir else _project_root_for_spec(spec)
-#                         )
-#                         csv_path = (
-#                             (base / csv_val).resolve()
-#                             if not Path(csv_val).is_absolute()
-#                             else Path(csv_val)
-#                         )
-#                     _load_relation_from_csv(executor, rel, csv_path)
-#                 else:
-#                     print(f"   ❌ invalid input for relation '{rel}'")
-#                     failures += 1
-#                     continue
+#             # ----- Fingerprint for THIS CASE -----
+#             # 1) case id → keeps cases distinct
+#             dep_fps: dict[str, str] = {
+#                 "__case__": f"{getattr(spec, 'path', 'spec')}::{getattr(case, 'name', 'case')}"
+#             }
+#             # 2) inputs → invalidates cache when unit-test inputs change
+#             dep_fps["__inputs__"] = _fingerprint_case_inputs(spec, case)
 
-#             # 2) Execute only the target model
+#             cand_fp: str | None = None
 #             try:
 #                 if node.kind == "sql":
-#                     executor.run_sql(node, jenv)
+#                     # Render the SQL exactly like the executor would
+#                     sql = executor.render_sql(
+#                         node,
+#                         jenv,
+#                         ref_resolver=lambda nm: executor._resolve_ref(nm, jenv),
+#                         source_resolver=executor._resolve_source,
+#                     )
+#                     cand_fp = fingerprint_sql(
+#                         node=node, rendered_sql=sql, env_ctx=env_ctx, dep_fps=dep_fps
+#                     )
 #                 else:
-#                     executor.run_python(node)
-#             except Exception as e:
-#                 print(f"   ❌ execution failed: {type(e).__name__}: {e}")
-#                 failures += 1
-#                 continue
+#                     func = REGISTRY.py_funcs[node.name]
+#                     src = get_function_source(func)
+#                     cand_fp = fingerprint_py(
+#                         node=node, func_src=src, env_ctx=env_ctx, dep_fps=dep_fps
+#                     )
+#             except Exception:
+#                 # Fingerprint is best-effort in utests; if it fails, behave as cache miss.
+#                 cand_fp = None
 
-#             # 3) Read result & compare
-#             target_rel = case.expect.get("relation") or relation_for(spec.model)
-#             try:
-#                 df = _read_result(executor, target_rel)
-#             except Exception as e:
-#                 print(f"   ❌ cannot read result '{target_rel}': {e}")
-#                 failures += 1
-#                 continue
+#             # 1) Inputs laden/prüfen (inkrementiert failures bei ungültigen Inputs)
+#             failures += _load_inputs_for_case(executor, spec, case, node)
 
-#             try:
-#                 assert_rows_equal(
-#                     df,
-#                     case.expect.get("rows", []),
-#                     order_by=case.expect.get("order_by"),
-#                     any_order=case.expect.get("any_order", False),
-#                     approx=case.expect.get("approx"),
-#                     ignore_columns=case.expect.get("ignore_columns"),
-#                     subset=case.expect.get("subset", False),
+#             # 2) Optional: skip execution on cache hit
+#             materialized = (getattr(node, "meta", {}) or {}).get("materialized", "table")
+#             skip = False
+#             if (
+#                 cand_fp
+#                 and cache is not None
+#                 and cache_mode in {"ro", "rw"}
+#                 and can_skip_node(
+#                     node_name=node.name,
+#                     new_fp=cand_fp,
+#                     cache=cache,
+#                     executor=executor,
+#                     materialized=materialized,
 #                 )
-#                 print("   ✅ ok")
-#             except UnitAssertionFailure as e:
-#                 print(f"   ❌ {e}")
+#             ):
+#                 # Only skip if both fingerprint AND relation existence agree (via helper)
+#                 print("   ↻ skipped (utest cache hit)")
+#                 skip = True
+
+#             if not skip:
+#                 ok, err = _execute_node(executor, node, jenv)
+#                 if not ok:
+#                     print(f"   ❌ execution failed: {err}")
+#                     failures += 1
+#                     continue
+#                 # Update cache map if we are in a writing mode
+#                 if cand_fp and cache is not None and cache_mode == "rw":
+#                     computed_fps[node.name] = cand_fp
+
+#             # 3) Ergebnis lesen
+#             ok, df_or_exc, target_rel = _read_target_df(executor, spec, case)
+#             if not ok:
+#                 print(f"   ❌ cannot read result '{target_rel}': {df_or_exc}")
 #                 failures += 1
+#                 continue
+#             df = df_or_exc
+
+#             # 4) Erwartungen prüfen
+#             ok, msg = _assert_expected_rows(df, case)
+#             if ok:
+#                 print("   ✅ ok")
+#             else:
+#                 print(f"   ❌ {msg}")
+#                 failures += 1
+
+#     # Persist cache once at the end (only for rw)
+#     if cache is not None and computed_fps and cache_mode == "rw":
+#         cache.update_many(computed_fps)
+#         cache.save()
 
 #     return failures
 
 
+@dataclass
+class UtestCtx:
+    executor: Any
+    jenv: Any
+    engine_name: str
+    env_ctx: EnvCtx
+    cache: FingerprintCache | None
+    cache_mode: str
+    computed_fps: dict[str, str] = field(default_factory=dict)
+    failures: int = 0
+
+
+def _normalize_cache_mode(cache_mode: str | Any) -> str:
+    if not isinstance(cache_mode, str):
+        cache_mode = getattr(cache_mode, "value", str(cache_mode))
+    v = cache_mode.lower()
+    if v not in {"off", "ro", "rw"}:
+        raise ValueError(f"unknown cache_mode: {cache_mode}")
+    return v
+
+
+def _detect_engine_name(executor: Any) -> str:
+    if hasattr(executor, "con"):
+        return "duckdb"
+    if hasattr(executor, "engine"):
+        return "postgres"
+    if hasattr(executor, "client"):
+        return "bigquery"
+    return "unknown"
+
+
+def _make_env_ctx(engine_name: str) -> EnvCtx:
+    return build_env_ctx(
+        engine=engine_name,
+        profile_name="utest",
+        relevant_env_keys=[k for k in os.environ if k.startswith("FF_")],
+        sources=getattr(REGISTRY, "sources", {}),
+    )
+
+
+def _make_cache(project_dir: Path | None, engine_name: str) -> FingerprintCache | None:
+    if project_dir is None:
+        return None
+    cache = FingerprintCache(project_dir, profile="utest", engine=engine_name)
+    cache.load()
+    return cache
+
+
+def _get_project_dir_safe() -> Path | None:
+    try:
+        return REGISTRY.get_project_dir()
+    except Exception:
+        return None
+
+
+def _fingerprint_case(node: Any, spec: Any, case: Any, ctx: UtestCtx) -> str | None:
+    # 1) casespezifische Dep-FPs
+    dep_fps = {
+        "__case__": f"{getattr(spec, 'path', 'spec')}::{getattr(case, 'name', 'case')}",
+        "__inputs__": _fingerprint_case_inputs(spec, case),
+    }
+    try:
+        if node.kind == "sql":
+            sql = ctx.executor.render_sql(
+                node,
+                ctx.jenv,
+                ref_resolver=lambda nm: ctx.executor._resolve_ref(nm, ctx.jenv),
+                source_resolver=ctx.executor._resolve_source,
+            )
+            return fingerprint_sql(
+                node=node, rendered_sql=sql, env_ctx=ctx.env_ctx, dep_fps=dep_fps
+            )
+        # python
+        func = REGISTRY.py_funcs[node.name]
+        src = get_function_source(func)
+        return fingerprint_py(node=node, func_src=src, env_ctx=ctx.env_ctx, dep_fps=dep_fps)
+    except Exception:
+        return None  # Fingerprint optional
+
+
+def _maybe_skip_by_cache(node: Any, cand_fp: str | None, ctx: UtestCtx) -> bool:
+    if not (cand_fp and ctx.cache and ctx.cache_mode in {"ro", "rw"}):
+        return False
+    materialized = (getattr(node, "meta", {}) or {}).get("materialized", "table")
+    if can_skip_node(
+        node_name=node.name,
+        new_fp=cand_fp,
+        cache=ctx.cache,
+        executor=ctx.executor,
+        materialized=materialized,
+    ):
+        print("   ↻ skipped (utest cache hit)")
+        if ctx.cache_mode == "rw":  # optional: beim Skip nicht nötig, aber harmless
+            ctx.computed_fps.setdefault(node.name, cand_fp)
+        return True
+    return False
+
+
+def _execute_and_update_cache(node: Any, cand_fp: str | None, ctx: UtestCtx) -> bool:
+    ok, err = _execute_node(ctx.executor, node, ctx.jenv)
+    if not ok:
+        print(f"   ❌ execution failed: {err}")
+        ctx.failures += 1
+        return False
+    if cand_fp and ctx.cache and ctx.cache_mode == "rw":
+        ctx.computed_fps[node.name] = cand_fp
+    return True
+
+
+def _read_and_assert(spec: Any, case: Any, ctx: UtestCtx) -> None:
+    ok, df_or_exc, target_rel = _read_target_df(ctx.executor, spec, case)
+    if not ok:
+        print(f"   ❌ cannot read result '{target_rel}': {df_or_exc}")
+        ctx.failures += 1
+        return
+    ok2, msg = _assert_expected_rows(df_or_exc, case)
+    if ok2:
+        print("   ✅ ok")
+    else:
+        print(f"   ❌ {msg}")
+        ctx.failures += 1
+
+
 def run_unit_specs(
-    specs: list[UnitSpec], executor: Any, jenv: Any, only_case: str | None = None
+    specs: list[UnitSpec],
+    executor: Any,
+    jenv: Any,
+    only_case: str | None = None,
+    *,
+    cache_mode: str = "off",
+    reuse_meta: bool = False,
 ) -> int:
-    failures = 0
+    """
+    Execute discovered unit-test specs. Returns the number of failed cases.
+
+    Args:
+        cache_mode: 'off' | 'ro' | 'rw'. Default 'off' for deterministic runs.
+        reuse_meta: reserved (no-op).
+    """
+    cache_mode = _normalize_cache_mode(cache_mode)
+
+    project_dir = _get_project_dir_safe()
+    engine_name = _detect_engine_name(executor)
+    env_ctx = _make_env_ctx(engine_name)
+    cache = _make_cache(project_dir, engine_name)
+
+    ctx = UtestCtx(
+        executor=executor,
+        jenv=jenv,
+        engine_name=engine_name,
+        env_ctx=env_ctx,
+        cache=cache,
+        cache_mode=cache_mode,
+    )
 
     for spec in specs:
         node = REGISTRY.nodes.get(spec.model)
         if not node:
             print(f"⚠️  Model '{spec.model}' not found (in {spec.path})")
-            failures += 1
+            ctx.failures += 1
             continue
 
         for case in spec.cases:
@@ -503,33 +800,33 @@ def run_unit_specs(
                 continue
             print(f"→ {spec.model} :: {case.name}")
 
-            # 1) Inputs laden/prüfen (inkrementiert failures bei ungültigen Inputs)
-            failures += _load_inputs_for_case(executor, spec, case, node)
+            if not reuse_meta:
+                with suppress(Exception):
+                    delete_meta_for_node(executor, node.name)
 
-            # 2) Nur Target-Model ausführen
-            ok, err = _execute_node(executor, node, jenv)
-            if not ok:
-                print(f"   ❌ execution failed: {err}")
-                failures += 1
+            cand_fp = _fingerprint_case(node, spec, case, ctx)
+
+            # Inputs laden/prüfen (zählt failures selbst)
+            ctx.failures += _load_inputs_for_case(executor, spec, case, node)
+
+            # ggf. Skip
+            if _maybe_skip_by_cache(node, cand_fp, ctx):
+                _read_and_assert(spec, case, ctx)
                 continue
 
-            # 3) Ergebnis lesen
-            ok, df_or_exc, target_rel = _read_target_df(executor, spec, case)
-            if not ok:
-                print(f"   ❌ cannot read result '{target_rel}': {df_or_exc}")
-                failures += 1
+            # ausführen + ggf. Cache aktualisieren
+            if not _execute_and_update_cache(node, cand_fp, ctx):
                 continue
-            df = df_or_exc
 
-            # 4) Erwartungen prüfen
-            ok, msg = _assert_expected_rows(df, case)
-            if ok:
-                print("   ✅ ok")
-            else:
-                print(f"   ❌ {msg}")
-                failures += 1
+            # Ergebnis prüfen
+            _read_and_assert(spec, case, ctx)
 
-    return failures
+    # Cache persistieren (nur rw)
+    if ctx.cache and ctx.computed_fps and ctx.cache_mode == "rw":
+        ctx.cache.update_many(ctx.computed_fps)
+        ctx.cache.save()
+
+    return ctx.failures
 
 
 # ----------------- Helper -----------------
@@ -537,8 +834,8 @@ def run_unit_specs(
 
 def _load_inputs_for_case(executor: Any, spec: Any, case: Any, node: Any) -> int:
     """
-    Lädt alle in 'case.inputs' deklarierten Relationen.
-    Gibt die Anzahl der Fehlkonfigurationen zurück (wird zum failures-Zähler addiert).
+    Loads all declared relations in 'case.inputs'.
+    Returns the count of failed inputs.
     """
     failures = 0
 
@@ -563,14 +860,6 @@ def _load_inputs_for_case(executor: Any, spec: Any, case: Any, node: Any) -> int
             failures += 1
 
     return failures
-
-
-def _resolve_csv_path(spec: Any, csv_val: str) -> Path:
-    csv_path = Path(csv_val)
-    if csv_path.is_absolute():
-        return csv_path
-    base = spec.project_dir if getattr(spec, "project_dir", None) else _project_root_for_spec(spec)
-    return (Path(base) / csv_val).resolve()
 
 
 def _execute_node(executor: Any, node: Any, jenv: Any) -> tuple[bool, str | None]:

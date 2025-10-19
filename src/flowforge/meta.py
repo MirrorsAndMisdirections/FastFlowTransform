@@ -23,6 +23,7 @@ Supported engines:
 
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import Any
 
 from sqlalchemy import text
@@ -270,3 +271,40 @@ def relation_exists(executor: Any, relation: str) -> bool:
             return True
 
     return True
+
+
+def delete_meta_for_node(executor: Any, node_name: str) -> None:
+    """Remove meta row(s) for a given logical node. Best-effort, silent on absence."""
+    try:
+        ensure_meta_table(executor)
+    except Exception:
+        return
+
+    # DuckDB
+    if hasattr(executor, "con"):
+        with suppress(Exception):
+            executor.con.execute("delete from _ff_meta where node_name = ?", [node_name])
+        return
+
+    # Postgres
+    if hasattr(executor, "engine"):
+        schema = getattr(executor, "schema", None)
+        tbl = f'"{schema}"._ff_meta' if schema else "_ff_meta"
+        try:
+            with executor.engine.begin() as conn:
+                conn.execute(
+                    text(f"delete from {tbl} where node_name = :node"), {"node": node_name}
+                )
+        except Exception:
+            pass
+        return
+
+    # BigQuery (simple fallback; works for Fake in tests)
+    if hasattr(executor, "client") and hasattr(executor, "dataset"):
+        dataset = executor.dataset
+        with suppress(Exception):
+            # Best-effort string literal delete (tests use simple node names)
+            executor.client.query(
+                f'DELETE FROM `{dataset}._ff_meta` WHERE node_name = "{node_name}"'
+            )
+        return
