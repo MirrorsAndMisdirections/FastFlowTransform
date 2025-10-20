@@ -1,6 +1,10 @@
 import os
+from contextlib import suppress
+from pathlib import Path
 
+import psycopg
 import pytest
+from psycopg import sql
 
 from tests.common.utils import ROOT, run
 
@@ -25,6 +29,13 @@ def duckdb_env(duckdb_db_path):
 
 @pytest.fixture(scope="module")
 def duckdb_seeded(duckdb_project, duckdb_env):
+    db_path = duckdb_env.get("FF_DUCKDB_PATH")
+    if db_path:
+        db_file = Path(db_path)
+        if db_file.exists():
+            db_file.unlink()
+            # ensure parent dir exists for fresh DB creation
+            db_file.parent.mkdir(parents=True, exist_ok=True)
     run(["flowforge", "seed", str(duckdb_project), "--env", "dev"], duckdb_env)
     yield
 
@@ -46,5 +57,12 @@ def pg_env():
 @pytest.fixture(scope="module")
 def pg_seeded(pg_project, pg_env):
     # optional: Datenbank leeren/neu erstellen - je nach CI-Setup
+    dsn = pg_env.get("FF_PG_DSN")
+    schema = pg_env.get("FF_PG_SCHEMA") or "public"
+    if dsn and schema and ("psycopg://" in dsn or "+psycopg" in dsn):
+        with suppress(Exception), psycopg.connect(dsn) as conn:
+            conn.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
+            conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+            conn.commit()
     run(["flowforge", "seed", str(pg_project), "--env", "stg"], pg_env)
     yield
