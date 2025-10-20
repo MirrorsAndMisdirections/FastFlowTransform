@@ -80,8 +80,14 @@ def _load_tests(proj: Path) -> list[dict]:
     return cfg.get("tests") or []
 
 
-def _apply_legacy_tag_filter(tests: list[dict], tokens: list[str]) -> list[dict]:
-    if len(tokens) != 1 or tokens[0].startswith(("tag:", "type:", "kind:")):
+def _is_legacy_test_token(tokens: list[str]) -> bool:
+    return len(tokens) == 1 and not tokens[0].startswith(("tag:", "type:", "kind:"))
+
+
+def _apply_legacy_tag_filter(
+    tests: list[dict], tokens: list[str], *, legacy_token: bool
+) -> list[dict]:
+    if not legacy_token:
         return tests
     legacy_tag = tokens[0]
 
@@ -203,15 +209,18 @@ def test(
 ) -> None:
     ctx = _prepare_context(project, env_name, engine, vars)
     tokens, pred = _compile_selector(select)
+    has_model_matches = any(pred(node) for node in REGISTRY.nodes.values())
+    legacy_tag_only = _is_legacy_test_token(tokens) and not has_model_matches
     execu, run_sql, run_py = ctx.make_executor()
 
     con = _get_test_con(execu)
     _maybe_print_marker(con)
 
-    _run_models(pred, run_sql, run_py)
+    model_pred = (lambda _n: True) if legacy_tag_only else pred
+    _run_models(model_pred, run_sql, run_py)
 
     tests = _load_tests(ctx.project)
-    tests = _apply_legacy_tag_filter(tests, tokens)
+    tests = _apply_legacy_tag_filter(tests, tokens, legacy_token=legacy_tag_only)
     if not tests:
         typer.secho("No tests configured.", fg="bright_black")
         raise typer.Exit(code=0)
