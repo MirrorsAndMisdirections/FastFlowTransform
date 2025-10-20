@@ -55,3 +55,17 @@ tests:
     column: session_end
     max_delay_minutes: 15
     tags: [streaming]
+
+  # ── Cross-table reconciliations (FF-310) ─────────────────────────────────
+  - type: reconcile_equal
+    name: orders_count_equals_mart
+    tags: [reconcile]
+    left:  { table: orders,               expr: "count(*)" }
+    right: { table: mart_orders_enriched, expr: "count(*)" }
+    # exact equality on counts (no tolerance)
+
+  - type: reconcile_coverage
+    name: orders_fully_covered_in_mart
+    tags: [reconcile]
+    source: { table: orders,               key: "order_id" }
+    target: { table: mart_orders_enriched, key: "order_id" }

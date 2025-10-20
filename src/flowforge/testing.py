@@ -219,3 +219,104 @@ def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None
         raise TestFailure(
             f"freshness of {table}.{ts_col} too old: {delay} min > {max_delay_minutes} min"
         )
+
+
+# ===== Cross-table reconciliations (FF-310) ======================================
+
+
+def _scalar_where(con: Any, table: str, expr: str, where: str | None = None) -> Any:
+    """Return the first scalar from `SELECT {expr} FROM {table} [WHERE ...]`."""
+    sql = f"select {expr} from {table}" + (f" where {where}" if where else "")
+    _dprint("reconcile:", sql)
+    return _scalar(con, sql)
+
+
+def reconcile_equal(
+    con: Any,
+    left: dict,
+    right: dict,
+    abs_tolerance: float | None = None,
+    rel_tolerance_pct: float | None = None,
+) -> None:
+    """Assert left == right within absolute and/or relative tolerances.
+
+    Both sides are dictionaries: {"table": str, "expr": str, "where": Optional[str]}.
+    If both tolerances are omitted, exact equality is enforced.
+    """
+    L = _scalar_where(con, left["table"], left["expr"], left.get("where"))
+    R = _scalar_where(con, right["table"], right["expr"], right.get("where"))
+    if L is None or R is None:
+        raise TestFailure(f"One side is NULL (left={L}, right={R})")
+    diff = abs(float(L) - float(R))
+
+    # Absolute tolerance check
+    if abs_tolerance is not None and diff <= float(abs_tolerance):
+        return
+
+    # Relative tolerance check (percentage)
+    if rel_tolerance_pct is not None:
+        denom = max(abs(float(R)), 1e-12)
+        rel = diff / denom
+        if (rel * 100.0) <= float(rel_tolerance_pct):
+            return
+
+    # If neither tolerance was provided, enforce strict equality via diff==0.
+    if abs_tolerance is None and rel_tolerance_pct is None and diff == 0.0:
+        return
+    raise TestFailure(
+        f"Reconcile equal failed: left={L}, right={R}, diff={diff}, "
+        f"rel%={(diff / max(abs(float(R)), 1e-12)) * 100:.6f}"
+    )
+
+
+def reconcile_ratio_within(
+    con: Any, left: dict, right: dict, min_ratio: float, max_ratio: float
+) -> None:
+    """Assert min_ratio <= (left/right) <= max_ratio."""
+    L = _scalar_where(con, left["table"], left["expr"], left.get("where"))
+    R = _scalar_where(con, right["table"], right["expr"], right.get("where"))
+    if L is None or R is None:
+        raise TestFailure(f"One side is NULL (left={L}, right={R})")
+    eps = 1e-12
+    denom = float(R) if abs(float(R)) > eps else eps
+    ratio = float(L) / denom
+    if not (float(min_ratio) <= ratio <= float(max_ratio)):
+        raise TestFailure(
+            f"Ratio {ratio:.6f} out of bounds [{min_ratio}, {max_ratio}] (L={L}, R={R})"
+        )
+
+
+def reconcile_diff_within(con: Any, left: dict, right: dict, max_abs_diff: float) -> None:
+    """Assert |left - right| <= max_abs_diff."""
+    L = _scalar_where(con, left["table"], left["expr"], left.get("where"))
+    R = _scalar_where(con, right["table"], right["expr"], right.get("where"))
+    if L is None or R is None:
+        raise TestFailure(f"One side is NULL (left={L}, right={R})")
+    diff = abs(float(L) - float(R))
+    if diff > float(max_abs_diff):
+        raise TestFailure(f"Abs diff {diff} > max_abs_diff {max_abs_diff} (L={L}, R={R})")
+
+
+def reconcile_coverage(
+    con: Any,
+    source: dict,
+    target: dict,
+    source_where: str | None = None,
+    target_where: str | None = None,
+) -> None:
+    """Assert that every key from `source` exists in `target` (anti-join count == 0)."""
+    s_tbl, s_key = source["table"], source["key"]
+    t_tbl, t_key = target["table"], target["key"]
+    s_w = f" where {source_where}" if source_where else ""
+    t_w = f" where {target_where}" if target_where else ""
+    sql = f"""
+      with src as (select {s_key} as k from {s_tbl}{s_w}),
+           tgt as (select {t_key} as k from {t_tbl}{t_w})
+      select count(*) from src s
+      left join tgt t on s.k = t.k
+      where t.k is null
+    """
+    missing = _scalar(con, sql)
+    _dprint("reconcile_coverage:", sql, "=>", missing)
+    if missing and missing != 0:
+        raise TestFailure(f"Coverage failed: {missing} source keys missing in target")

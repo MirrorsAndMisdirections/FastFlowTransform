@@ -1074,10 +1074,26 @@ def _run_dq_tests(con: Any, tests: Iterable[dict]) -> list[DQResult]:
     results: list[DQResult] = []
     for t in tests:
         kind = t["type"]
-        table = t.get("table")
-        if not isinstance(table, str) or not table:
-            raise typer.BadParameter("Missing or invalid 'table' in test config")
-        col = t.get("column")
+        # Derive scope/table/column for display:
+        table: str | None = None
+        col: str | None = None
+        if kind.startswith("reconcile_"):
+            # Prefer a compact scope for summary lines
+            if "left" in t and "right" in t:
+                lt = (t.get("left") or {}).get("table")
+                rt = (t.get("right") or {}).get("table")
+                table = f"{lt} ⇔ {rt}"
+            elif "source" in t and "target" in t:
+                st = (t.get("source") or {}).get("table")
+                tt = (t.get("target") or {}).get("table")
+                table = f"{st} ⇒ {tt}"
+            else:
+                table = "<reconcile>"
+        else:
+            table = t.get("table")
+            if not isinstance(table, str) or not table:
+                raise typer.BadParameter("Missing or invalid 'table' in test config")
+            col = t.get("column")
 
         t0 = time.perf_counter()
         ok, msg = _exec_test_kind(con, kind, t, table, col)
@@ -1098,6 +1114,33 @@ def _exec_test_kind(con: Any, kind: str, t: dict, table: Any, col: Any) -> tuple
             con, table, t.get("min", 1), t.get("max")
         ),
         "freshness": lambda: testing.freshness(con, table, col, t["max_delay_minutes"]),
+        "reconcile_equal": lambda: testing.reconcile_equal(
+            con,
+            t["left"],
+            t["right"],
+            abs_tolerance=t.get("abs_tolerance"),
+            rel_tolerance_pct=t.get("rel_tolerance_pct"),
+        ),
+        "reconcile_ratio_within": lambda: testing.reconcile_ratio_within(
+            con,
+            t["left"],
+            t["right"],
+            min_ratio=t["min_ratio"],
+            max_ratio=t["max_ratio"],
+        ),
+        "reconcile_diff_within": lambda: testing.reconcile_diff_within(
+            con,
+            t["left"],
+            t["right"],
+            max_abs_diff=t["max_abs_diff"],
+        ),
+        "reconcile_coverage": lambda: testing.reconcile_coverage(
+            con,
+            t["source"],
+            t["target"],
+            source_where=t.get("source_where"),
+            target_where=t.get("target_where"),
+        ),
     }
 
     fn = try_map.get(kind)

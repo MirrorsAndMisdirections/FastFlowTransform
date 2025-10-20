@@ -155,6 +155,34 @@ FF_DEMO_TOGGLE=1 flowforge run . --env dev --cache=rw
 
 ---
 
+## Selective runs
+
+Use patterns to run only a subgraph.
+
+- `--select <pattern>`: builds only targets that match **and their dependencies**.
+- `--exclude <pattern>`: excludes matching targets from the build (deps remain if still required).
+
+Examples:
+  flowforge run . --select marts_daily.ff
+  flowforge run . --exclude 'mart_*'
+
+---
+
+## Rebuild controls
+
+- `--rebuild`              → rebuild **all selected** nodes (ignore cache).
+- `--rebuild-only NAME …`  → rebuild only the specified nodes (ignore cache).
+
+These flags compose with `--select/--exclude`.
+
+Examples:
+  # Rebuild everything that matches --select
+  flowforge run . --select marts_daily.ff --rebuild
+
+  # Rebuild only a specific node
+  flowforge run . --rebuild-only marts_daily.ff
+
+---
 
 ## Documentation
 

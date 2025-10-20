@@ -36,6 +36,7 @@
   - [Meta Table Schema (v0.3)](#meta-table-schema-v03)
   - [Jinja DSL Quick Reference](#jinja-dsl-quick-reference)
   - [Roadmap Snapshot](#roadmap-snapshot)
+  - [Cross-Table Reconciliations](#cross-table-reconciliations)
 - [Part II – Architecture & Internals](#part-ii--architecture--internals)
   - [Architecture Overview](#architecture-overview)
   - [Core Modules](#core-modules)
@@ -210,6 +211,12 @@ flowforge run . -v     # verbose progress (model names, executor info)
 flowforge run . -vv    # full debug + SQL channel
 ```
 
+#### Parallel logging UX
+
+- Per node: start/end lines with duration, truncated name, and engine abbrev (DUCK/PG/BQ/…).
+- Output is line-stable via a thread-safe log queue; per-level summaries at the end.
+- On errors, the familiar “error block” is shown per node.
+
 **Notes**
 
 - SQL debug output routes through the `flowforge.sql` logger; use `-vv` or the env var to see it.
@@ -218,6 +225,19 @@ flowforge run . -vv    # full debug + SQL channel
 ### Model Unit Tests (`flowforge utest`)
 
 `flowforge utest` executes a single model in isolation, loading only the inputs you provide and comparing the result to an expected dataset. It works for SQL and Python models and runs against DuckDB or Postgres by default.
+
+#### Unit tests & cache
+
+`flowforge utest --cache {off|ro|rw}` (default: `off`)
+
+- `off`: deterministic, never skips.
+- `ro`: skip on cache hit; on miss, build but **do not write** cache.
+- `rw`: skip on hit; on miss, build **and write** fingerprint.
+
+Notes:
+- UTests key the cache with `profile="utest"`.
+- Fingerprints include case inputs (CSV content hash / inline rows), so changing inputs invalidates the cache.
+
 
 #### Why?
 
@@ -448,6 +468,9 @@ FlowForge executes the DAG in **levels**. Each level contains nodes without mutu
 ```bash
 flowforge run . --env dev --jobs 4            # parallel (level-wise)
 flowforge run . --env dev --jobs 4 --keep-going
+
+flowforge run . --select model_b --jobs 4     # Run only model_b and whatever it depends on
+flowforge run . --rebuild-only model_b        # Rebuild only model_b, even if cache hits
 ```
 
 **Internals**
@@ -517,6 +540,16 @@ _ff_meta (
 **Notes**
 - Meta is currently used for auditing and tooling; skip logic relies on fingerprint cache + relation existence checks.
 
+#### Executor meta hook
+
+After a successful materialization the executor calls:
+  on_node_built(node, relation, fingerprint)
+
+This performs an upsert into `_ff_meta` with `(node_name, relation, fingerprint, built_at, engine)`.
+
+Skipped nodes do **not** touch the meta table.
+
+
 ### Jinja DSL Quick Reference
 
 `ref()`, `source()`, `var()`, `config()`, `this` – see details in the [Modeling Reference](./Config_and_Macros.md).
@@ -534,6 +567,85 @@ _ff_meta (
 > See also: feature pyramid & roadmap phases (OSS/SaaS) in the separate document.
 
 ---
+
+### Cross-Table Reconciliations
+
+FlowForge can compare aggregates and key coverage **across two tables** and surface drift with clear, numeric messages. These checks run via the standard `flowforge test` entrypoint and integrate into the DQ summary output.
+
+**CLI**
+```bash
+# only run reconciliation checks
+flowforge test . --env dev --select reconcile
+```
+
+**YAML DSL**
+
+All checks live under `project.yml → tests:` and should carry the tag `reconcile` for easy selection.
+
+1) **Equality / Approx Equality**
+```yaml
+- type: reconcile_equal
+  name: orders_total_equals_mart
+  tags: [reconcile]
+  left:  { table: orders,               expr: "sum(amount)" }
+  right: { table: mart_orders_enriched, expr: "sum(amount)", where: "valid_amt" }
+  # optional tolerances:
+  abs_tolerance: 0.01          # |L - R| <= 0.01
+  rel_tolerance_pct: 0.1       # |L - R| / max(|R|, eps) <= 0.1% (0.1)
+```
+
+2) **Ratio within bounds**
+```yaml
+- type: reconcile_ratio_within
+  name: orders_vs_mart_ratio
+  tags: [reconcile]
+  left:  { table: orders,               expr: "sum(amount)" }
+  right: { table: mart_orders_enriched, expr: "sum(amount)" }
+  min_ratio: 0.999
+  max_ratio: 1.001
+```
+
+3) **Absolute difference within limit**
+```yaml
+- type: reconcile_diff_within
+  name: count_stability
+  tags: [reconcile]
+  left:  { table: events_raw, expr: "count(*)", where: "event_type='purchase'" }
+  right: { table: fct_sales,  expr: "sum(txn_count)" }
+  max_abs_diff: 10
+```
+
+4) **Coverage (anti-join = 0)**
+```yaml
+- type: reconcile_coverage
+  name: all_orders_covered
+  tags: [reconcile]
+  source: { table: orders,               key: "order_id" }
+  target: { table: mart_orders_enriched, key: "order_id" }
+  # optional filters
+  source_where: "order_date >= current_date - interval '7 days'"
+  target_where: "valid_amt"
+```
+
+**Parameter semantics**
+- `expr`: SQL snippet placed into `SELECT {expr} FROM {table}` (keep it engine-neutral: `sum(...)`, `count(*)`, simple filters).
+- `where`: optional SQL appended as `WHERE {where}`.
+- `abs_tolerance`: absolute tolerance on the difference.
+- `rel_tolerance_pct`: relative tolerance in **percent**; denominator is `max(|right|, 1e-12)`.
+- `min_ratio` / `max_ratio`: inclusive bounds for `left/right`.
+- Coverage uses an anti-join (`source` minus `target` on the given key). The check passes if missing = 0.
+
+**Summary output**
+Each reconciliation contributes a line in the summary with a compact scope, e.g.:
+```
+✅ reconcile_equal       orders ⇔ mart_orders_enriched        (4ms)
+✅ reconcile_coverage    orders ⇒ mart_orders_enriched        (3ms)
+```
+
+**Engine notes**
+- DuckDB and Postgres are supported out-of-the-box. BigQuery works with simple aggregates/filters (expressions should avoid dialect-specific functions).
+- For relative tolerances, the implementation guards against zero denominators with a small epsilon (`1e-12`).
+
 
 ## Part II – Architecture & Internals
 
