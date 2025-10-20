@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from types import SimpleNamespace
 
 from jinja2 import Environment
@@ -8,6 +9,9 @@ from typer.testing import CliRunner
 from flowforge.cli import app
 from flowforge.core import REGISTRY, Node
 from flowforge.run_executor import schedule as real_schedule
+
+cli_bootstrap = importlib.import_module("flowforge.cli.bootstrap")
+cli_run = importlib.import_module("flowforge.cli.run")
 
 
 def test_error_block_prints_after_logs_without_interleaving(monkeypatch):
@@ -20,10 +24,10 @@ def test_error_block_prints_after_logs_without_interleaving(monkeypatch):
         kw = {**kw, "run_node": run_node}
         return real_schedule(levels, **kw)
 
-    monkeypatch.setattr("flowforge.cli.schedule", fake_schedule)
+    monkeypatch.setattr(cli_run, "schedule", fake_schedule)
 
     # Stub DAG + registry: just one node name in one level
-    monkeypatch.setattr("flowforge.cli.dag_levels", lambda _nodes: [["failing"]])
+    monkeypatch.setattr(cli_run, "dag_levels", lambda _nodes: [["failing"]])
 
     # Stub project/profile/executor to avoid I/O
     def fake_load_project_and_env(project_arg: str):
@@ -43,9 +47,9 @@ def test_error_block_prints_after_logs_without_interleaving(monkeypatch):
 
         return E(), lambda n: (_ for _ in ()).throw(KeyError("boom")), lambda n: None
 
-    monkeypatch.setattr("flowforge.cli._load_project_and_env", fake_load_project_and_env)
-    monkeypatch.setattr("flowforge.cli._resolve_profile", fake_resolve_profile)
-    monkeypatch.setattr("flowforge.cli._make_executor", fake_make_executor)
+    monkeypatch.setattr(cli_bootstrap, "_load_project_and_env", fake_load_project_and_env)
+    monkeypatch.setattr(cli_bootstrap, "_resolve_profile", fake_resolve_profile)
+    monkeypatch.setattr(cli_bootstrap, "_make_executor", fake_make_executor)
 
     runner = CliRunner()
     res = runner.invoke(app, ["run", ".", "--cache", "off"])

@@ -1,24 +1,33 @@
 # tests/unit/test_logging_flags.py
+import importlib
+
 from typer.testing import CliRunner
 
 from flowforge.cli import app
+
+cli_bootstrap = importlib.import_module("flowforge.cli.bootstrap")
+cli_run = importlib.import_module("flowforge.cli.run")
 
 
 def test_verbose_flags_wiring(monkeypatch):
     # stub the heavy bits so the command exits early after logging lines
     monkeypatch.setattr(
-        "flowforge.cli._load_project_and_env", lambda proj: (__import__("pathlib").Path("."), None)
+        cli_bootstrap,
+        "_load_project_and_env",
+        lambda proj: (__import__("pathlib").Path("."), None),
     )
     monkeypatch.setattr(
-        "flowforge.cli._resolve_profile",
+        cli_bootstrap,
+        "_resolve_profile",
         lambda *a, **k: (
             None,
             type("P", (), {"engine": "duckdb", "duckdb": type("D", (), {"path": ":memory:"})()})(),
         ),
     )
-    monkeypatch.setattr("flowforge.cli.topo_sort", lambda nodes: [])
     monkeypatch.setattr(
-        "flowforge.cli.REGISTRY", type("R", (), {"nodes": {}, "set_cli_vars": lambda *_: None})()
+        cli_run,
+        "REGISTRY",
+        type("R", (), {"nodes": {}, "set_cli_vars": lambda *_: None})(),
     )
 
     runner = CliRunner()

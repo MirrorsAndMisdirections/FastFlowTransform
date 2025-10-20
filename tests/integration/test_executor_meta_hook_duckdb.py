@@ -56,8 +56,8 @@ def test_executor_meta_hook_duckdb_build_then_skip(tmp_path: Path, monkeypatch: 
 
     # Stub project loading and profile resolution to use our file-based DB
     fake_lpae, fake_resolve, db_path = _profile_stub(tmp_path)
-    monkeypatch.setattr("flowforge.cli._load_project_and_env", fake_lpae)
-    monkeypatch.setattr("flowforge.cli._resolve_profile", fake_resolve)
+    monkeypatch.setattr("flowforge.cli.bootstrap._load_project_and_env", fake_lpae)
+    monkeypatch.setattr("flowforge.cli.bootstrap._resolve_profile", fake_resolve)
 
     # First run: build (cache default rw), should create meta row
     runner = CliRunner()

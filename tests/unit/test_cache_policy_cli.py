@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,9 @@ from typer.testing import CliRunner
 from flowforge.cli import app
 from flowforge.core import REGISTRY, Node
 from flowforge.run_executor import ScheduleResult
+
+cli_bootstrap = importlib.import_module("flowforge.cli.bootstrap")
+cli_run = importlib.import_module("flowforge.cli.run")
 
 # ----------------------------- Helpers -----------------------------
 
@@ -105,7 +109,7 @@ def _stub_schedule(monkeypatch: pytest.MonkeyPatch):
             total_s=time.perf_counter() - start,
         )
 
-    monkeypatch.setattr("flowforge.cli.schedule", schedule)
+    monkeypatch.setattr(cli_run, "schedule", schedule)
 
 
 def _stub_project_and_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
@@ -123,8 +127,8 @@ def _stub_project_and_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         prof = SimpleNamespace(engine="duckdb", duckdb=SimpleNamespace(path=":memory:"))
         return env, prof
 
-    monkeypatch.setattr("flowforge.cli._load_project_and_env", fake_load_project_and_env)
-    monkeypatch.setattr("flowforge.cli._resolve_profile", fake_resolve_profile)
+    monkeypatch.setattr(cli_bootstrap, "_load_project_and_env", fake_load_project_and_env)
+    monkeypatch.setattr(cli_bootstrap, "_resolve_profile", fake_resolve_profile)
 
 
 def _stub_executor(monkeypatch: pytest.MonkeyPatch, calls: dict[str, list]):
@@ -146,14 +150,14 @@ def _stub_executor(monkeypatch: pytest.MonkeyPatch, calls: dict[str, list]):
 
         return ex, run_sql, run_py
 
-    monkeypatch.setattr("flowforge.cli._make_executor", fake_make_executor)
+    monkeypatch.setattr(cli_bootstrap, "_make_executor", fake_make_executor)
 
 
 def _stub_levels(monkeypatch: pytest.MonkeyPatch, levels):
     """
     Force deterministic levels for the run.
     """
-    monkeypatch.setattr("flowforge.cli.dag_levels", lambda _nodes: levels)
+    monkeypatch.setattr(cli_run, "dag_levels", lambda _nodes: levels)
 
 
 def _stub_fingerprints(monkeypatch: pytest.MonkeyPatch):
@@ -161,9 +165,7 @@ def _stub_fingerprints(monkeypatch: pytest.MonkeyPatch):
     Force deterministic per-node fingerprints independent of executor internals.
     """
     monkeypatch.setattr(
-        "flowforge.cli._RunEngine._maybe_fingerprint",
-        lambda self, node, ex: f"fp::{node.name}",
-        raising=True,
+        cli_run._RunEngine, "_maybe_fingerprint", lambda self, node, ex: f"fp::{node.name}"
     )
 
 
@@ -178,7 +180,7 @@ def _stub_cache_class(monkeypatch: pytest.MonkeyPatch, cache_obj: _FakeCache):
         cache_obj.engine = engine
         return cache_obj
 
-    monkeypatch.setattr("flowforge.cli.FingerprintCache", ctor)
+    monkeypatch.setattr(cli_run, "FingerprintCache", ctor)
 
 
 # ------------------------------ Tests -------------------------------
