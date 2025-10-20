@@ -1,0 +1,6 @@
+{
+  "engine": "duckdb",
+  "entries": {},
+  "profile": "dev",
+  "version": 1
+}

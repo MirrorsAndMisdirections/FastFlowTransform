@@ -240,6 +240,19 @@ Notes:
 - Fingerprints include case inputs (CSV content hash / inline rows), so changing inputs invalidates the cache.
 
 
+#### Unit tests & cache
+
+`flowforge utest --cache {off|ro|rw}` (default: `off`)
+
+- `off`: deterministic, never skips.
+- `ro`: skip on cache hit; on miss, build but **do not write** cache.
+- `rw`: skip on hit; on miss, build **and write** fingerprint.
+
+Notes:
+- UTests key the cache with `profile="utest"`.
+- Fingerprints include case inputs (CSV content hash / inline rows), so changing inputs invalidates the cache.
+
+
 #### Why?
 
 - Fast feedback on transformation logic without full DAG runs
