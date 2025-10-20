@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import logging
 import os
+import re
 import textwrap
 import threading
 import time
 import traceback
+import webbrowser
 from collections.abc import Callable, Iterable
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, NoReturn, cast
@@ -18,6 +22,7 @@ from typing import Annotated, Any, NoReturn, cast
 import typer
 import yaml
 from jinja2 import Environment
+from sqlalchemy import text as sa_text
 
 from flowforge import __version__
 from flowforge.executors import (
@@ -30,11 +35,11 @@ from flowforge.executors import (
 )
 from flowforge.executors.base import BaseExecutor
 
-from . import testing
+from . import lineage as lineage_mod, testing
 from .cache import FingerprintCache, can_skip_node
 from .core import REGISTRY, relation_for
 from .dag import levels as dag_levels, mermaid, topo_sort
-from .docs import render_site
+from .docs import _collect_columns, read_docs_metadata, render_site
 from .errors import DependencyNotFoundError, ProfileConfigError
 from .executors._shims import BigQueryConnShim, SAConnShim
 from .fingerprint import (
@@ -165,6 +170,13 @@ def _resolve_profile(
         # pretty single-line message; exit code 1 at call site
         typer.echo(f"❌ {e}")
         raise typer.Exit(1) from e
+
+
+def _strip_html_for_comment(s: str | None) -> str:
+    """Very small HTML stripper for DB comments (keep it in CLI to avoid extra deps)."""
+    if not s:
+        return ""
+    return " ".join(__import__("re").sub(r"<[^>]+>", "", s).split())
 
 
 def _pretty_exc(e: BaseException) -> str:
@@ -569,6 +581,15 @@ ExcludeOpt = Annotated[
     ),
 ]
 
+WithSchemaOpt = Annotated[
+    bool,
+    typer.Option(
+        "--with-schema/--no-schema",
+        help="Include column schema (types/nullability) in docs if supported by engine.",
+        show_default=True,
+    ),
+]
+
 
 # ---------------- Cache policy options ----------------
 class CacheMode(str, Enum):
@@ -959,6 +980,7 @@ def dag(
     out: OutOpt = None,
     vars: VarsOpt = None,
     select: SelectOpt = None,
+    with_schema: WithSchemaOpt = True,
 ) -> None:
     if out is not None:
         out = out.resolve()
@@ -975,7 +997,13 @@ def dag(
 
     if html:
         ex, *_ = ctx.make_executor()
-        render_site(dag_out, filtered_nodes, executor=ex)
+        # Best-effort schema collection (docs.render_site may be monkeypatched in tests
+        # with an older signature → fall back without keyword).
+        try:
+            render_site(dag_out, filtered_nodes, executor=ex, with_schema=with_schema)
+        except TypeError:
+            # Backward compatible call for mocks/fakes that don't accept the kwarg
+            render_site(dag_out, filtered_nodes, executor=ex)
         typer.echo(f"HTML-DAG written to {dag_out / 'index.html'}")
     else:
         mm = mermaid(filtered_nodes)
@@ -1241,3 +1269,405 @@ def utest(
         reuse_meta=bool(reuse_meta),
     )
     raise typer.Exit(code=2 if failures > 0 else 0)
+
+
+def _strip_html(s: str | None) -> str | None:
+    """Very small HTML stripper for manifest (keeps plain text)."""
+    if not s:
+        return None
+    # remove tags
+    txt = re.sub(r"<[^>]+>", "", s)
+    # collapse whitespace
+    txt = re.sub(r"\s+", " ", txt).strip()
+    return txt or None
+
+
+def _infer_sql_ref_aliases(rendered_sql: str) -> dict[str, str]:
+    """
+    Heuristic: map SQL aliases to base relations from FROM/JOIN clauses in the rendered SQL.
+    Example: 'FROM users u' -> {'u': 'users'}
+    """
+    alias_map: dict[str, str] = {}
+    # Handle FROM ... [AS] alias  and JOIN ... [AS] alias
+    pattern = re.compile(
+        r"\b(from|join)\s+([A-Za-z0-9_.\"`]+)\s+(?:as\s+)?([A-Za-z_][A-Za-z0-9_]*)",
+        flags=re.IGNORECASE,
+    )
+    for _, rel, alias in pattern.findall(rendered_sql):
+        # strip quoting
+        rel_clean = rel.strip('"`')
+        alias_map[alias] = rel_clean
+    return alias_map
+
+
+def _build_docs_manifest(
+    project_dir: Path,
+    nodes: dict[str, Any],
+    executor: Any,
+    env_name: str,
+) -> dict[str, Any]:
+    """
+    Build a JSON-serializable manifest of models, enriched with descriptions, schema and lineage.
+    """
+    # Project name (best-effort) from project.yml
+    proj_yaml = project_dir / "project.yml"
+    project_name = str(project_dir.name)
+    try:
+        cfg = yaml.safe_load(proj_yaml.read_text(encoding="utf-8")) if proj_yaml.exists() else {}
+        if isinstance(cfg, dict) and cfg.get("name"):
+            project_name = str(cfg["name"])
+    except Exception:
+        pass
+
+    # Reverse deps ("used_by")
+    rev: dict[str, list[str]] = {k: [] for k in nodes}
+    for n in nodes.values():
+        for d in n.deps or []:
+            if d in rev:
+                rev[d].append(n.name)
+
+    # Schema introspection
+    cols_by_table = _collect_columns(executor) if executor else {}
+
+    # Descriptions (YAML + Markdown, merged)
+    docs_meta = read_docs_metadata(project_dir)  # returns merged model/column descriptions (+html)
+
+    models_out: list[dict[str, Any]] = []
+    for n in sorted(nodes.values(), key=lambda x: x.name):
+        relation = relation_for(n.name)
+        mat = (getattr(n, "meta", {}) or {}).get("materialized", "table")
+
+        # Model description (plain text for JSON)
+        model_doc = (
+            (docs_meta.get("models", {}) or {}).get(n.name, {})
+            if isinstance(docs_meta, dict)
+            else {}
+        )
+        model_desc_html = model_doc.get("description_html")
+        model_desc_txt = _strip_html(model_desc_html)
+
+        # Columns (dtype/nullable via schema; descriptions via docs_meta)
+        cols = []
+        col_desc_map = model_doc.get("columns", {}) or {}
+        # Lineage: try best-effort inference (SQL or Python)
+        lineage_map: dict[str, list[dict[str, Any]]] = {}
+        try:
+            if n.kind == "sql" and hasattr(executor, "render_sql"):
+                rendered = executor.render_sql(
+                    n,
+                    REGISTRY.env,
+                    ref_resolver=lambda nm: executor._resolve_ref(nm, REGISTRY.env),
+                    source_resolver=executor._resolve_source,
+                )
+                alias_map = _infer_sql_ref_aliases(rendered)
+                lineage_map = lineage_mod.infer_sql_lineage(rendered, alias_map)
+            elif n.kind == "python":
+                func = REGISTRY.py_funcs[n.name]
+                lineage_map = lineage_mod.infer_py_lineage(func, getattr(n, "requires", None), None)
+        except Exception:
+            # lineage is optional; ignore failures
+            lineage_map = {}
+
+        for c in cols_by_table.get(relation, []):
+            col_desc_html = None
+            # try per-column description overrides by relation column if present in docs
+            rel_map = (docs_meta.get("columns", {}) or {}).get(relation, {})
+            if isinstance(rel_map, dict):
+                col_desc_html = rel_map.get(c.name) or col_desc_map.get(c.name)
+            else:
+                col_desc_html = col_desc_map.get(c.name)
+            col_desc_txt = _strip_html(col_desc_html)
+
+            cols.append(
+                {
+                    "name": c.name,
+                    "dtype": c.dtype,
+                    "nullable": bool(c.nullable),
+                    "description": col_desc_txt,
+                    "lineage": lineage_map.get(c.name, []),
+                }
+            )
+
+        models_out.append(
+            {
+                "name": n.name,
+                "relation": relation,
+                "materialized": mat,
+                "description": model_desc_txt,
+                "columns": cols,
+                "depends_on": list(n.deps or []),
+                "used_by": sorted(rev.get(n.name, [])),
+            }
+        )
+
+    return {
+        "project": project_name,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "models": models_out,
+    }
+
+
+@app.command(
+    help=(
+        "Generate documentation site (like 'dag --html') and optionally emit a JSON manifest.\n\n"
+        "Examples:\n"
+        "  flowforge docgen . --env dev --out site/docs\n"
+        "  flowforge docgen . --env dev --out site/docs --emit-json docs_manifest.json "
+        "  --open-source\n"
+    )
+)
+def docgen(
+    project: ProjectArg = ".",
+    env_name: EnvOpt = "dev",
+    engine: EngineOpt = None,
+    vars: VarsOpt = None,
+    out: OutOpt = None,
+    emit_json: Annotated[
+        Path | None, typer.Option("--emit-json", help="Write docs manifest JSON to this file")
+    ] = None,
+    open_source: Annotated[
+        bool, typer.Option("--open-source", help="Open generated index.html in the default browser")
+    ] = False,
+) -> None:
+    """
+    Convenience wrapper around DAG HTML generation that always loads schema,
+    descriptions, and lineage, and can also emit a JSON manifest of the documentation.
+    """
+    # 1) Prepare context and output dir
+    if out is not None:
+        out = out.resolve()
+        out.mkdir(parents=True, exist_ok=True)
+
+    ctx = _prepare_context(project, env_name, engine, vars)
+
+    # 2) Always render full site with executor to enable schema/lineage/desc enrichment
+    ex, *_ = ctx.make_executor()
+    dag_out = _resolve_dag_out_dir(ctx.project, out)
+    dag_out.mkdir(parents=True, exist_ok=True)
+    # render HTML docs (render_site already reads schema,
+    # descriptions and tries lineage when executor is provided)
+    render_site(dag_out, REGISTRY.nodes, executor=ex)
+    typer.echo(f"HTML docs written to {dag_out / 'index.html'}")
+
+    # 3) Optional JSON manifest
+    if emit_json is not None:
+        manifest = _build_docs_manifest(
+            project_dir=ctx.project,
+            nodes=REGISTRY.nodes,
+            executor=ex,
+            env_name=env_name,
+        )
+        emit_json = emit_json.resolve()
+        emit_json.parent.mkdir(parents=True, exist_ok=True)
+        emit_json.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        typer.echo(f"Docs manifest JSON written to {emit_json}")
+
+    # 4) Optional: open the generated index.html
+    if open_source:
+        index_path = (dag_out / "index.html").as_uri()
+        with suppress(Exception):
+            webbrowser.open(index_path, new=2)
+
+    if LOG.isEnabledFor(logging.INFO):
+        typer.echo(f"Profile: {env_name} | Engine: {ctx.profile.engine}")
+
+
+@app.command(
+    help=(
+        "Sync model and column descriptions to database comments (PG & Snowflake).\n\n"
+        "Examples:\n  flowforge sync-db-comments . --env dev --dry-run\n"
+        "          flowforge sync-db-comments . --env stg"
+    )
+)
+def sync_db_comments(
+    project: ProjectArg = ".",
+    env_name: EnvOpt = "dev",
+    engine: EngineOpt = None,
+    vars: VarsOpt = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Print statements only.")] = False,
+) -> None:
+    """
+    Read merged docs metadata (Markdown > YAML) and push it to DB comments.
+    Supports Postgres fully; Snowflake best-effort if a SQL execution path is exposed.
+    Safe no-op for unsupported engines.
+    """
+    ctx = _prepare_context(project, env_name, engine, vars)
+    execu, _, _ = ctx.make_executor()
+
+    # Load merged docs (Model + Column descriptions as HTML), and current schema (to limit work)
+    docs_meta = read_docs_metadata(ctx.project)  # {"models": {...}, "columns": {...}}
+    cols_by_table = _collect_columns(execu)  # existing columns only (PG/Duck best-effort)
+
+    # Build comment intents: a list of dicts with kind, relation, column?, text
+    intents: list[dict[str, str]] = []
+    for node in REGISTRY.nodes.values():
+        model_name = node.name
+        relation = relation_for(model_name)
+
+        # Model description
+        model_meta = (
+            (docs_meta.get("models", {}) or {}).get(model_name, {})
+            if isinstance(docs_meta, dict)
+            else {}
+        )
+        mdesc_html = model_meta.get("description_html")
+        mdesc = _strip_html_for_comment(mdesc_html)
+        if mdesc:
+            intents.append({"kind": "table", "relation": relation, "text": mdesc})
+
+        # Column descriptions:
+        # priority markdown docs/columns/<relation>/<col>.md > YAML docs.models[model].columns
+        rel_desc_map = (docs_meta.get("columns", {}) or {}).get(relation, {})
+        mdl_desc_map = model_meta.get("columns") or {}
+        if relation in cols_by_table:
+            for ci in cols_by_table[relation]:
+                text = rel_desc_map.get(ci.name) or mdl_desc_map.get(ci.name)
+                text = _strip_html_for_comment(text) if text else ""
+                if text:
+                    intents.append(
+                        {"kind": "column", "relation": relation, "column": ci.name, "text": text}
+                    )
+
+    if not intents:
+        typer.secho("Nothing to sync (no descriptions found).", fg="yellow")
+        raise typer.Exit(0)
+
+    # Per-engine execution
+    eng = ctx.profile.engine
+    if eng == "postgres":
+        pg_cfg = getattr(ctx.profile, "postgres", None)
+        pg_schema = getattr(pg_cfg, "db_schema", None)
+        _sync_comments_postgres(execu, intents, pg_schema, dry_run=dry_run)
+        raise typer.Exit(0)
+    elif eng == "snowflake_snowpark":
+        sf_cfg = getattr(ctx.profile, "snowflake_snowpark", None)
+        sf_schema = getattr(sf_cfg, "db_schema", None)
+        _sync_comments_snowflake(execu, intents, sf_schema, dry_run=dry_run)
+        raise typer.Exit(0)
+    else:
+        typer.secho(f"Engine '{eng}' not supported for comment sync (skipping).", fg="yellow")
+        raise typer.Exit(0)
+
+
+def _pg_quote_ident(ident: str) -> str:
+    """Double-quote an identifier and escape embedded quotes."""
+    return '"' + ident.replace('"', '""') + '"'
+
+
+def _pg_fq_table(schema: str | None, relation: str) -> str:
+    """
+    Build fully-qualified table identifier for PG: "schema"."table".
+    relation may already be schema-qualified; prefer explicit schema if given.
+    """
+    if schema:
+        return f"{_pg_quote_ident(schema)}.{_pg_quote_ident(relation)}"
+    # Try relation split fallback
+    if "." in relation:
+        s, t = relation.split(".", 1)
+        return f"{_pg_quote_ident(s)}.{_pg_quote_ident(t)}"
+    return _pg_quote_ident(relation)
+
+
+def _sql_literal(s: str) -> str:
+    """Escape SQL string literal."""
+    return "'" + s.replace("'", "''") + "'"
+
+
+def _sync_comments_postgres(
+    execu: Any, intents: list[dict[str, str]], schema: str | None, *, dry_run: bool
+) -> None:
+    """
+    Apply COMMENT ON TABLE/COLUMN for Postgres using SQLAlchemy engine on the executor.
+    """
+    statements: list[str] = []
+    for it in intents:
+        kind = it["kind"]
+        rel = it["relation"]
+        txt = it["text"]
+        fqtn = _pg_fq_table(schema, rel)
+        if kind == "table":
+            statements.append(f"COMMENT ON TABLE {fqtn} IS {_sql_literal(txt)};")
+        elif kind == "column":
+            col = _pg_quote_ident(it["column"])
+            statements.append(f"COMMENT ON COLUMN {fqtn}.{col} IS {_sql_literal(txt)};")
+
+    if dry_run:
+        typer.echo("\n-- DRY RUN: Planned Postgres COMMENT statements --")
+        for s in statements:
+            typer.echo(s)
+        return
+
+    if not hasattr(execu, "engine"):
+        typer.secho("Postgres executor has no .engine; cannot apply comments.", fg="red")
+        raise typer.Exit(1)
+
+    applied, failed = 0, 0
+    with execu.engine.begin() as conn:
+        for s in statements:
+            try:
+                conn.execute(sa_text(s))
+                applied += 1
+            except Exception as e:
+                failed += 1
+                LOG.error("Failed to apply comment: %s  (%s: %s)", s, type(e).__name__, e)
+
+    typer.echo(f"✓ Postgres comments applied: {applied} (failed: {failed})")
+
+
+def _sf_fq_table(schema: str | None, relation: str) -> str:
+    """
+    Build fully-qualified identifier for Snowflake (case-insensitive, preserve tokens).
+    We generate SCHEMA.TABLE without quoting to keep defaults; adjust if needed.
+    """
+    if schema:
+        return f"{schema}.{relation}"
+    return relation
+
+
+def _sync_comments_snowflake(
+    execu: Any, intents: list[dict[str, str]], schema: str | None, *, dry_run: bool
+) -> None:
+    """
+    Best-effort Snowflake COMMENT statements.
+    We try execu.session.sql(...) if available, else execu.execute/sql(...) if exposed.
+    """
+    statements: list[str] = []
+    for it in intents:
+        kind = it["kind"]
+        rel = it["relation"]
+        txt = it["text"]
+        fqtn = _sf_fq_table(schema, rel)
+        lit = _sql_literal(txt)
+        if kind == "table":
+            statements.append(f"COMMENT ON TABLE {fqtn} IS {lit}")
+        elif kind == "column":
+            col = it["column"]
+            statements.append(f"COMMENT ON COLUMN {fqtn}.{col} IS {lit}")
+
+    if dry_run:
+        typer.echo("\n-- DRY RUN: Planned Snowflake COMMENT statements --")
+        for s in statements:
+            typer.echo(s + ";")
+        return
+
+    # Try Snowpark session first
+    applied, failed = 0, 0
+
+    def _run_sql(stmt: str) -> None:
+        nonlocal applied, failed
+        try:
+            if hasattr(execu, "session"):
+                execu.session.sql(stmt).collect()
+            elif hasattr(execu, "execute"):
+                execu.execute(stmt)  # best-effort generic hook
+            else:
+                raise RuntimeError("No execution method available on Snowflake executor.")
+            applied += 1
+        except Exception as e:
+            failed += 1
+            LOG.error("Failed to apply comment: %s  (%s: %s)", stmt, type(e).__name__, e)
+
+    for s in statements:
+        _run_sql(s)
+
+    typer.echo(f"✓ Snowflake comments applied: {applied} (failed: {failed})")

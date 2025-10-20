@@ -10,7 +10,8 @@ Welcome! This page is your starting point for FlowForge docs. Pick the track tha
 3. [Modeling Reference](./Config_and_Macros.md)
 4. [Parallelism & Cache](./Cache_and_Parallelism.md)
 5. [Cross-Table Reconciliations](./Technical_Overview.md#cross-table-reconciliations)
-6. [Developer Guide](./Technical_Overview.md#part-ii--architecture--internals)
+6. [Auto-Docs & Lineage](./Technical_Overview.md#auto-docs--lineage)
+7. [Developer Guide](./Technical_Overview.md#part-ii--architecture--internals)
 
 ## Table of Contents
 

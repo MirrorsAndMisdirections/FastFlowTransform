@@ -4,6 +4,16 @@ models_dir: models
 
 docs:
   dag_dir: site/dag
+  models:
+    users.ff:
+      description: "Raw users table imported from CRM."
+      columns:
+        id: "Primary key."
+        email: "User email address."
+    users_enriched:
+      description: "Adds gmail flag."
+      columns:
+        is_gmail: "True if email ends with @gmail.com"
 
 # variables exposed to var('key')
 vars:

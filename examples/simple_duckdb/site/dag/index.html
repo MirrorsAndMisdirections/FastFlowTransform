@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>FlowForge – DAG & Mini Docs</title>
+  <title>FlowForge - DAG & Mini Docs</title>
 
   <script type="module">
     import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
@@ -75,6 +75,7 @@
     .badge-ephemeral { background:#fff7e8; color:#7a4a00; border-color:#f6db9b; }
     .badge-sql { background: var(--chip-sql-bg); color: var(--chip-sql-fg); }
     .badge-py  { background: var(--chip-py-bg);  color: var(--chip-py-fg);  }
+    .subline { display:block; margin-top:2px; font-size:12px; color: var(--muted); line-height:1.35; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
 
     table { width:100%; border-collapse: collapse; }
@@ -90,8 +91,8 @@
 
   <header>
     <div>
-      <h1>FlowForge – DAG & Mini Docs</h1>
-      <div class="muted">v0.1 • Mermaid renders automatically (light/dark)</div>
+      <h1>FlowForge - DAG & Mini Docs</h1>
+      <div class="muted">Mermaid renders automatically (light/dark)</div>
     </div>
     <div class="toolbar">
       <label class="input">
@@ -163,7 +164,14 @@
         <tbody>
         
           <tr>
-            <td class="nowrap"><a href="ephemeral_ids.ff.html">ephemeral_ids.ff</a></td>
+            <td class="nowrap">
+              
+              <a href="ephemeral_ids.ff.html"
+                 title="ephemeral_ids.ff">
+                ephemeral_ids.ff
+              </a>
+              
+            </td>
             <td><span class="chip sql">sql</span></td>
             <td><code>ephemeral_ids</code></td>
             <td class="muted">users.ff</td>
@@ -175,7 +183,14 @@
           </tr>
         
           <tr>
-            <td class="nowrap"><a href="mart_orders_enriched.html">mart_orders_enriched</a></td>
+            <td class="nowrap">
+              
+              <a href="mart_orders_enriched.html"
+                 title="mart_orders_enriched">
+                mart_orders_enriched
+              </a>
+              
+            </td>
             <td><span class="chip py">python</span></td>
             <td><code>mart_orders_enriched</code></td>
             <td class="muted">orders.ff, users_enriched</td>
@@ -187,7 +202,14 @@
           </tr>
         
           <tr>
-            <td class="nowrap"><a href="mart_users.ff.html">mart_users.ff</a></td>
+            <td class="nowrap">
+              
+              <a href="mart_users.ff.html"
+                 title="mart_users.ff">
+                mart_users.ff
+              </a>
+              
+            </td>
             <td><span class="chip sql">sql</span></td>
             <td><code>mart_users</code></td>
             <td class="muted">users_enriched</td>
@@ -199,7 +221,14 @@
           </tr>
         
           <tr>
-            <td class="nowrap"><a href="orders.ff.html">orders.ff</a></td>
+            <td class="nowrap">
+              
+              <a href="orders.ff.html"
+                 title="orders.ff">
+                orders.ff
+              </a>
+              
+            </td>
             <td><span class="chip sql">sql</span></td>
             <td><code>orders</code></td>
             <td class="muted">–</td>
@@ -211,7 +240,18 @@
           </tr>
         
           <tr>
-            <td class="nowrap"><a href="users.ff.html">users.ff</a></td>
+            <td class="nowrap">
+              
+              <a href="users.ff.html"
+                 title="Raw users table imported from CRM.">
+                users.ff
+              </a>
+              
+                <span class="subline">
+                  Raw users table imported from CRM.
+                </span>
+              
+            </td>
             <td><span class="chip sql">sql</span></td>
             <td><code>users</code></td>
             <td class="muted">–</td>
@@ -223,7 +263,18 @@
           </tr>
         
           <tr>
-            <td class="nowrap"><a href="users_enriched.html">users_enriched</a></td>
+            <td class="nowrap">
+              
+              <a href="users_enriched.html"
+                 title="Adds gmail flag.">
+                users_enriched
+              </a>
+              
+                <span class="subline">
+                  Adds gmail flag.
+                </span>
+              
+            </td>
             <td><span class="chip py">python</span></td>
             <td><code>users_enriched</code></td>
             <td class="muted">users.ff</td>
@@ -235,7 +286,14 @@
           </tr>
         
           <tr>
-            <td class="nowrap"><a href="v_users.ff.html">v_users.ff</a></td>
+            <td class="nowrap">
+              
+              <a href="v_users.ff.html"
+                 title="v_users.ff">
+                v_users.ff
+              </a>
+              
+            </td>
             <td><span class="chip sql">sql</span></td>
             <td><code>v_users</code></td>
             <td class="muted">users.ff, ephemeral_ids.ff</td>
@@ -247,7 +305,14 @@
           </tr>
         
           <tr>
-            <td class="nowrap"><a href="v_users_enriched.ff.html">v_users_enriched.ff</a></td>
+            <td class="nowrap">
+              
+              <a href="v_users_enriched.ff.html"
+                 title="v_users_enriched.ff">
+                v_users_enriched.ff
+              </a>
+              
+            </td>
             <td><span class="chip sql">sql</span></td>
             <td><code>v_users_enriched</code></td>
             <td class="muted">users_enriched</td>

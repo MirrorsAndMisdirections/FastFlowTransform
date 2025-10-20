@@ -38,4 +38,4 @@ dist/
 
 # Docs Output
 examples/**/docs/
-FlowForge.md
+tickets/**

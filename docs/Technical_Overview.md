@@ -37,6 +37,7 @@
   - [Jinja DSL Quick Reference](#jinja-dsl-quick-reference)
   - [Roadmap Snapshot](#roadmap-snapshot)
   - [Cross-Table Reconciliations](#cross-table-reconciliations)
+  - [Auto-Docs & Lineage](#auto-docs--lineage)
 - [Part II – Architecture & Internals](#part-ii--architecture--internals)
   - [Architecture Overview](#architecture-overview)
   - [Core Modules](#core-modules)
@@ -645,6 +646,71 @@ Each reconciliation contributes a line in the summary with a compact scope, e.g.
 **Engine notes**
 - DuckDB and Postgres are supported out-of-the-box. BigQuery works with simple aggregates/filters (expressions should avoid dialect-specific functions).
 - For relative tolerances, the implementation guards against zero denominators with a small epsilon (`1e-12`).
+
+
+### Auto-Docs & Lineage
+
+FlowForge can generate a lightweight documentation site (DAG + model detail pages) from your project:
+
+```bash
+# Classic
+flowforge dag . --env dev --html
+
+# Convenience wrapper (loads schema + descriptions + lineage, can emit JSON)
+flowforge docgen . --env dev --out site/docs --emit-json site/docs/docs_manifest.json
+```
+
+**Descriptions** can be provided in YAML (project.yml) and/or Markdown files. Markdown has higher priority.
+
+YAML in `project.yml`:
+
+```yaml
+docs:
+  models:
+    users.ff:
+      description: "Raw users table imported from CRM."
+      columns:
+        id: "Primary key."
+        email: "User email address."
+    users_enriched:
+      description: "Adds gmail flag."
+      columns:
+        is_gmail: "True if email ends with @gmail.com"
+```
+
+Markdown (overrides YAML if present):
+
+```
+<project>/docs/models/<model>.md
+<project>/docs/columns/<relation>/<column>.md
+```
+
+Optional front matter is ignored for now (title/tags may be used later).
+
+**Column lineage (heuristic, best effort).**
+
+- SQL models: expressions like `col` / `alias AS out` / `upper(u.email) AS email_upper)` are parsed;
+  `u` must come from a `FROM ... AS u` that resolves to a relation. Functions mark lineage as *transformed*.
+- Python (pandas) models: simple patterns like `rename`, `out["x"] = df["y"]`, `assign(x=...)` are recognized.
+- You can override hints in YAML:
+
+```yaml
+docs:
+  models:
+    mart_orders_enriched:
+      lineage:
+        email_upper:
+          from: [{ table: users, column: email }]
+          transformed: true
+```
+
+**JSON manifest** (optional via `--emit-json`) includes models, relations, descriptions, columns (with nullable/dtype),
+and lineage per column. This is useful for custom doc portals or CI checks.
+
+Notes:
+- Schema introspection currently supports DuckDB and Postgres. For other engines, the Columns card may be empty.
+- Lineage is optional; when uncertain, entries fall back to “unknown” and never fail doc generation.
+
 
 
 ## Part II – Architecture & Internals
