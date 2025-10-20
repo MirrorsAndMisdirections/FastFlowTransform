@@ -43,6 +43,24 @@
     .badge-table { background:#eef7ff; color:#0a3a77; border-color:#bcd8fb; }
     .badge-view { background:#eefcf4; color:#0b5d2a; border-color:#bdebcf; }
     .badge-ephemeral { background:#fff7e8; color:#7a4a00; border-color:#f6db9b; }
+    /* Columns table layout */
+    table.cols { width:100%; border-collapse: collapse; table-layout: fixed; }
+    table.cols th, table.cols td { vertical-align: top; }
+    table.cols .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    table.cols .pill { display:inline-block; padding:1px 8px; border-radius:999px; border:1px solid var(--border); font-size:12px; }
+    table.cols .pill.yes { background:#eefcf4; color:#0b5d2a; border-color:#bdebcf; }
+    table.cols .pill.no  { background:#fff7e8; color:#7a4a00; border-color:#f6db9b; }
+    table.cols col.col-name { width: 22%; }
+    table.cols col.col-type { width: 18%; }
+    table.cols col.col-null { width: 12%; }
+    table.cols col.col-desc { width: 28%; }
+    table.cols col.col-lineage { width: 20%; }
+    .desc { overflow-wrap:anywhere; white-space: normal; }
+    /* Lineage chips */
+    .lin-wrap { display:flex; flex-wrap:wrap; gap:6px 10px; }
+    .lineage-item { display:inline-flex; gap:6px; align-items:center; background: rgba(127,127,127,.06); padding:2px 8px; border-radius:10px; margin-bottom:4px; }
+    .badge-direct { background:#eef7ff; color:#0a3a77; border:1px solid #bcd8fb; border-radius:999px; padding:1px 8px; font-size:12px; }
+    .badge-transformed { background:#fff7e8; color:#7a4a00; border:1px solid #f6db9b; border-radius:999px; padding:1px 8px; font-size:12px; }
   </style>
 </head>
 <body>
@@ -60,6 +78,7 @@
   </header>
 
   <div class="row">
+    
     <section class="card">
       <h2 style="margin:0 0 10px 0; font-size:1rem;">Metadata</h2>
       <div class="kv">
@@ -93,31 +112,7 @@
     </section>
 
     
-    <section class="card">
-      <h2>Columns</h2>
-      <table>
-        <thead><tr><th>Name</th><th>Type</th><th>Nullable</th></tr></thead>
-        <tbody>
-          
-          <tr><td><code>order_id</code></td><td>BIGINT</td><td>yes</td></tr>
-          
-          <tr><td><code>user_id</code></td><td>BIGINT</td><td>yes</td></tr>
-          
-          <tr><td><code>amount</code></td><td>DOUBLE</td><td>yes</td></tr>
-          
-          <tr><td><code>id</code></td><td>BIGINT</td><td>yes</td></tr>
-          
-          <tr><td><code>email</code></td><td>VARCHAR</td><td>yes</td></tr>
-          
-          <tr><td><code>signup_ts</code></td><td>TIMESTAMP</td><td>yes</td></tr>
-          
-          <tr><td><code>is_gmail</code></td><td>BOOLEAN</td><td>yes</td></tr>
-          
-          <tr><td><code>valid_amt</code></td><td>BOOLEAN</td><td>yes</td></tr>
-          
-        </tbody>
-      </table>
-    </section>
+
     
 
     <aside class="card">

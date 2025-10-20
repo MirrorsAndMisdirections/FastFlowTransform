@@ -10,7 +10,14 @@ seed:
 
 # Run/DAG/Test reuse the same duckdb path (FF_ENV can switch engine)
 run:
-	$(FLOWFORGE) run "$(FF_PROJECT)" --env "$(FF_ENV)"
+	$(FLOWFORGE) run "$(FF_PROJECT)" --env "$(FF_ENV)" --jobs=1
+
+run_parallel:
+	# Two independent staging nodes ("users", "orders") run in parallel
+	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" flowforge run "$(PROJECT)" --env dev --jobs 4
+
+run-parallel:
+	$(FLOWFORGE) run "$(FF_PROJECT)" --env "$(FF_ENV)" --jobs=4 --keep-going
 
 dag:
 	$(FLOWFORGE) dag "$(FF_PROJECT)" --env "$(FF_ENV)" --html
@@ -32,3 +39,22 @@ demo: seed run dag demo-open test
 
 clean:
 	rm -rf .local "$(FF_PROJECT)/docs" dist build *.egg-info
+
+# --- Cache demos (v0.3) ---
+
+cache_rw_first:
+	# first run writes cache and meta
+	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" flowforge run "$(PROJECT)" --env dev --cache=rw
+
+cache_rw_second:
+	# second run: should be a no-op (skips) if nothing changed
+	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" flowforge run "$(PROJECT)" --env dev --cache=rw
+
+cache_invalidate_env:
+	# changing an FF_* env var invalidates fingerprints
+	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" FF_DEMO_TOGGLE=1 flowforge run "$(PROJECT)" --env dev --cache=rw
+
+rebuild_users:
+	# force rebuild of a single model regardless of cache
+	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" flowforge run "$(PROJECT)" --env dev --cache=rw --rebuild users.ff
+	

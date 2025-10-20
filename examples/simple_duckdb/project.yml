@@ -4,6 +4,16 @@ models_dir: models
 
 docs:
   dag_dir: site/dag
+  models:
+    users.ff:
+      description: "Raw users table imported from CRM."
+      columns:
+        id: "Primary key."
+        email: "User email address."
+    users_enriched:
+      description: "Adds gmail flag."
+      columns:
+        is_gmail: "True if email ends with @gmail.com"
 
 # variables exposed to var('key')
 vars:
@@ -55,3 +65,17 @@ tests:
     column: session_end
     max_delay_minutes: 15
     tags: [streaming]
+
+  # ── Cross-table reconciliations (FF-310) ─────────────────────────────────
+  - type: reconcile_equal
+    name: orders_count_equals_mart
+    tags: [reconcile]
+    left:  { table: orders,               expr: "count(*)" }
+    right: { table: mart_orders_enriched, expr: "count(*)" }
+    # exact equality on counts (no tolerance)
+
+  - type: reconcile_coverage
+    name: orders_fully_covered_in_mart
+    tags: [reconcile]
+    source: { table: orders,               key: "order_id" }
+    target: { table: mart_orders_enriched, key: "order_id" }

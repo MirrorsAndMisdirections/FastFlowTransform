@@ -1,5 +1,8 @@
 name: CI
 
+env:
+  ACT: ""
+  
 on:
   push:
     branches: [ main ]
@@ -63,7 +66,7 @@ jobs:
       - name: Unit tests (fast)
         env:
           PYTHONWARNINGS: default
-        run: uv run pytest -q -m "not slow and not postgres" --maxfail=1
+        run: uv run pytest -q tests -m "not slow and not postgres" --maxfail=1
 
   # ---------- smoke: examples/simple_duckdb with view + ephemeral ----------
   smoke-duckdb:

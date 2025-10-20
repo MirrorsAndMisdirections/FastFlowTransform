@@ -30,8 +30,14 @@
   - [Troubleshooting](#troubleshooting)
   - [Error Codes](#error-codes)
   - [Profiles & Environment Overrides](#profiles--environment-overrides)
+  - [Parallel Scheduler (v0.3)](#parallel-scheduler-v03)
+  - [Cache Policy (v0.3)](#cache-policy-v03)
+  - [Fingerprint Formula (v0.3)](#fingerprint-formula-v03)
+  - [Meta Table Schema (v0.3)](#meta-table-schema-v03)
   - [Jinja DSL Quick Reference](#jinja-dsl-quick-reference)
   - [Roadmap Snapshot](#roadmap-snapshot)
+  - [Cross-Table Reconciliations](#cross-table-reconciliations)
+  - [Auto-Docs & Lineage](#auto-docs--lineage)
 - [Part II – Architecture & Internals](#part-ii--architecture--internals)
   - [Architecture Overview](#architecture-overview)
   - [Core Modules](#core-modules)
@@ -206,6 +212,12 @@ flowforge run . -v     # verbose progress (model names, executor info)
 flowforge run . -vv    # full debug + SQL channel
 ```
 
+#### Parallel logging UX
+
+- Per node: start/end lines with duration, truncated name, and engine abbrev (DUCK/PG/BQ/…).
+- Output is line-stable via a thread-safe log queue; per-level summaries at the end.
+- On errors, the familiar “error block” is shown per node.
+
 **Notes**
 
 - SQL debug output routes through the `flowforge.sql` logger; use `-vv` or the env var to see it.
@@ -214,6 +226,19 @@ flowforge run . -vv    # full debug + SQL channel
 ### Model Unit Tests (`flowforge utest`)
 
 `flowforge utest` executes a single model in isolation, loading only the inputs you provide and comparing the result to an expected dataset. It works for SQL and Python models and runs against DuckDB or Postgres by default.
+
+#### Unit tests & cache
+
+`flowforge utest --cache {off|ro|rw}` (default: `off`)
+
+- `off`: deterministic, never skips.
+- `ro`: skip on cache hit; on miss, build but **do not write** cache.
+- `rw`: skip on hit; on miss, build **and write** fingerprint.
+
+Notes:
+- UTests key the cache with `profile="utest"`.
+- Fingerprints include case inputs (CSV content hash / inline rows), so changing inputs invalidates the cache.
+
 
 #### Why?
 
@@ -433,6 +458,99 @@ bq:
 
 For the Pydantic models and resolution flow, see [Settings Infrastructure](#settings-infrastructure).
 
+### Parallel Scheduler (v0.3)
+
+FlowForge executes the DAG in **levels**. Each level contains nodes without mutual dependencies.
+
+- `--jobs N` limits the **maximum concurrency per level**.
+- `--keep-going` keeps tasks within the current level running even if one fails; subsequent levels are not started.
+
+**CLI**
+```bash
+flowforge run . --env dev --jobs 4            # parallel (level-wise)
+flowforge run . --env dev --jobs 4 --keep-going
+
+flowforge run . --select model_b --jobs 4     # Run only model_b and whatever it depends on
+flowforge run . --rebuild-only model_b        # Rebuild only model_b, even if cache hits
+```
+
+**Internals**
+- `dag.levels(nodes)` builds level lists using indegrees.
+- `run_executor.schedule(levels, jobs, fail_policy)` spawns a thread pool per level and aggregates timings.
+
+### Cache Policy (v0.3)
+
+**Modes**
+```
+off  – always build
+rw   – default; skip if fingerprint matches and relation exists; write cache after build
+ro   – skip on match; on miss build but do not write cache
+wo   – always build and write cache
+```
+`--rebuild <glob>` ignores cache for matching nodes.
+
+**Skip condition**
+1) Fingerprint matches the stored value (file-backed cache)  
+2) Physical relation exists on the target engine
+
+**Examples**
+```bash
+flowforge run . --env dev --cache=rw
+flowforge run . --env dev --cache=ro
+flowforge run . --env dev --cache=rw --rebuild marts_daily.ff
+```
+
+### Fingerprint Formula (v0.3)
+
+**SQL nodes**:  
+`fingerprint_sql(node, rendered_sql, env_ctx, dep_fps)`
+
+**Python nodes**:  
+`fingerprint_py(node, func_src, env_ctx, dep_fps)`
+
+**`env_ctx` content**
+- `engine` (e.g. duckdb, postgres, bigquery)
+- `profile_name` (CLI `--env`)
+- selected environment keys/values: all `FF_*`
+- normalized excerpt of `sources.yml` (sorted dump)
+
+**Properties**
+- Same inputs ⇒ same hash.
+- Minimal change in SQL/function ⇒ different hash.
+- Any dependency fingerprint change bubbles downstream via `dep_fps`.
+
+### Meta Table Schema (v0.3)
+
+FlowForge writes a per-node audit row after successful builds:
+
+```
+_ff_meta (
+  node_name   TEXT / STRING      -- logical name, e.g. "users.ff"
+  relation    TEXT / STRING      -- physical name, e.g. "users"
+  fingerprint TEXT / STRING
+  engine      TEXT / STRING
+  built_at    TIMESTAMP
+)
+```
+
+**Backends**
+- DuckDB: table `_ff_meta` in `main`.
+- Postgres: table `_ff_meta` in the active schema.
+- BigQuery: table `<dataset>._ff_meta`.
+
+**Notes**
+- Meta is currently used for auditing and tooling; skip logic relies on fingerprint cache + relation existence checks.
+
+#### Executor meta hook
+
+After a successful materialization the executor calls:
+  on_node_built(node, relation, fingerprint)
+
+This performs an upsert into `_ff_meta` with `(node_name, relation, fingerprint, built_at, engine)`.
+
+Skipped nodes do **not** touch the meta table.
+
+
 ### Jinja DSL Quick Reference
 
 `ref()`, `source()`, `var()`, `config()`, `this` – see details in the [Modeling Reference](./Config_and_Macros.md).
@@ -450,6 +568,150 @@ For the Pydantic models and resolution flow, see [Settings Infrastructure](#sett
 > See also: feature pyramid & roadmap phases (OSS/SaaS) in the separate document.
 
 ---
+
+### Cross-Table Reconciliations
+
+FlowForge can compare aggregates and key coverage **across two tables** and surface drift with clear, numeric messages. These checks run via the standard `flowforge test` entrypoint and integrate into the DQ summary output.
+
+**CLI**
+```bash
+# only run reconciliation checks
+flowforge test . --env dev --select reconcile
+```
+
+**YAML DSL**
+
+All checks live under `project.yml → tests:` and should carry the tag `reconcile` for easy selection.
+
+1) **Equality / Approx Equality**
+```yaml
+- type: reconcile_equal
+  name: orders_total_equals_mart
+  tags: [reconcile]
+  left:  { table: orders,               expr: "sum(amount)" }
+  right: { table: mart_orders_enriched, expr: "sum(amount)", where: "valid_amt" }
+  # optional tolerances:
+  abs_tolerance: 0.01          # |L - R| <= 0.01
+  rel_tolerance_pct: 0.1       # |L - R| / max(|R|, eps) <= 0.1% (0.1)
+```
+
+2) **Ratio within bounds**
+```yaml
+- type: reconcile_ratio_within
+  name: orders_vs_mart_ratio
+  tags: [reconcile]
+  left:  { table: orders,               expr: "sum(amount)" }
+  right: { table: mart_orders_enriched, expr: "sum(amount)" }
+  min_ratio: 0.999
+  max_ratio: 1.001
+```
+
+3) **Absolute difference within limit**
+```yaml
+- type: reconcile_diff_within
+  name: count_stability
+  tags: [reconcile]
+  left:  { table: events_raw, expr: "count(*)", where: "event_type='purchase'" }
+  right: { table: fct_sales,  expr: "sum(txn_count)" }
+  max_abs_diff: 10
+```
+
+4) **Coverage (anti-join = 0)**
+```yaml
+- type: reconcile_coverage
+  name: all_orders_covered
+  tags: [reconcile]
+  source: { table: orders,               key: "order_id" }
+  target: { table: mart_orders_enriched, key: "order_id" }
+  # optional filters
+  source_where: "order_date >= current_date - interval '7 days'"
+  target_where: "valid_amt"
+```
+
+**Parameter semantics**
+- `expr`: SQL snippet placed into `SELECT {expr} FROM {table}` (keep it engine-neutral: `sum(...)`, `count(*)`, simple filters).
+- `where`: optional SQL appended as `WHERE {where}`.
+- `abs_tolerance`: absolute tolerance on the difference.
+- `rel_tolerance_pct`: relative tolerance in **percent**; denominator is `max(|right|, 1e-12)`.
+- `min_ratio` / `max_ratio`: inclusive bounds for `left/right`.
+- Coverage uses an anti-join (`source` minus `target` on the given key). The check passes if missing = 0.
+
+**Summary output**
+Each reconciliation contributes a line in the summary with a compact scope, e.g.:
+```
+✅ reconcile_equal       orders ⇔ mart_orders_enriched        (4ms)
+✅ reconcile_coverage    orders ⇒ mart_orders_enriched        (3ms)
+```
+
+**Engine notes**
+- DuckDB and Postgres are supported out-of-the-box. BigQuery works with simple aggregates/filters (expressions should avoid dialect-specific functions).
+- For relative tolerances, the implementation guards against zero denominators with a small epsilon (`1e-12`).
+
+
+### Auto-Docs & Lineage
+
+FlowForge can generate a lightweight documentation site (DAG + model detail pages) from your project:
+
+```bash
+# Classic
+flowforge dag . --env dev --html
+
+# Convenience wrapper (loads schema + descriptions + lineage, can emit JSON)
+flowforge docgen . --env dev --out site/docs --emit-json site/docs/docs_manifest.json
+```
+
+**Descriptions** can be provided in YAML (project.yml) and/or Markdown files. Markdown has higher priority.
+
+YAML in `project.yml`:
+
+```yaml
+docs:
+  models:
+    users.ff:
+      description: "Raw users table imported from CRM."
+      columns:
+        id: "Primary key."
+        email: "User email address."
+    users_enriched:
+      description: "Adds gmail flag."
+      columns:
+        is_gmail: "True if email ends with @gmail.com"
+```
+
+Markdown (overrides YAML if present):
+
+```
+<project>/docs/models/<model>.md
+<project>/docs/columns/<relation>/<column>.md
+```
+
+Optional front matter is ignored for now (title/tags may be used later).
+
+**Column lineage (heuristic, best effort).**
+
+- SQL models: expressions like `col` / `alias AS out` / `upper(u.email) AS email_upper)` are parsed;
+  `u` must come from a `FROM ... AS u` that resolves to a relation. Functions mark lineage as *transformed*.
+- Python (pandas) models: simple patterns like `rename`, `out["x"] = df["y"]`, `assign(x=...)` are recognized.
+- You can override hints in YAML:
+
+```yaml
+docs:
+  models:
+    mart_orders_enriched:
+      lineage:
+        email_upper:
+          from: [{ table: users, column: email }]
+          transformed: true
+```
+
+**JSON manifest** (optional via `--emit-json`) includes models, relations, descriptions, columns (with nullable/dtype),
+and lineage per column. This is useful for custom doc portals or CI checks.
+
+Notes:
+- Schema introspection currently supports DuckDB and Postgres. For other engines, the Columns card may be empty.
+- Lineage is optional; when uncertain, entries fall back to “unknown” and never fail doc generation.
+
+
 
 ## Part II – Architecture & Internals
 

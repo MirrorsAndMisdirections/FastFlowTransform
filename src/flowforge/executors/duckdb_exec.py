@@ -1,4 +1,6 @@
 # flowforge/executors/duckdb_exec.py
+from __future__ import annotations
+
 from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
@@ -9,6 +11,7 @@ import pandas as pd
 from duckdb import CatalogException
 
 from flowforge.core import Node, relation_for
+from flowforge.meta import ensure_meta_table, upsert_meta
 
 from .base import BaseExecutor
 
@@ -22,7 +25,14 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
         if db_path and db_path != ":memory:" and "://" not in db_path:
             with suppress(Exception):
                 Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        self.db_path = db_path
         self.con = duckdb.connect(db_path)
+
+    def clone(self) -> DuckExecutor:
+        """
+        Generates a new Executor instance with own connection for Thread-Worker.
+        """
+        return DuckExecutor(self.db_path)
 
     # ---- Frame hooks ----
     def _read_relation(self, relation: str, node: Node, deps: Iterable[str]) -> pd.DataFrame:
@@ -75,3 +85,15 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
 
     def _create_or_replace_table(self, target_sql: str, select_body: str, node: Node) -> None:
         self.con.execute(f"create or replace table {target_sql} as {select_body}")
+
+    # ---- Meta hook ----
+    def on_node_built(self, node: Node, relation: str, fingerprint: str) -> None:
+        """
+        After successful materialization, ensure the meta table exists and upsert the row.
+        """
+        # Best-effort: do not let meta errors break the run
+        try:
+            ensure_meta_table(self)
+            upsert_meta(self, node.name, relation, fingerprint, "duckdb")
+        except Exception:
+            pass

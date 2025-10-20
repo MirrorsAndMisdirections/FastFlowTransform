@@ -1,0 +1,15 @@
+{
+  "engine": "duckdb",
+  "entries": {
+    "ephemeral_ids.ff": "f242c8772ca8ade5de5775807dbf932c5ecd85230b4e93926d8b707ff90255b1",
+    "mart_orders_enriched": "5f1fd90ae02f1c155029efa6be5a3ab2f3fca0a00dd2e957f030f55adf074c68",
+    "mart_users.ff": "e42423a2e23c86e3ce6019abbce2cc668ff31aac6fda8134abe7952e0ba2b7a6",
+    "orders.ff": "6b355503747f5950cad8bb3245f728536f28b0df44c9c6401ec11471f7ddc094",
+    "users.ff": "eebc206630549fe02f4b78c9b660994044ee3ae33b8cd66411bf97d9b508c025",
+    "users_enriched": "66d21358ea4c4e7993f23d17efc04aae296a2a2a82f853cae449bea4abeb42be",
+    "v_users.ff": "b3d8c6f4ec2b96a3f89417a50230d6628ac927c4a5f4e4268558daac0e004d90",
+    "v_users_enriched.ff": "2a1ae8bcfef25d6a4d076d545748bf1d2af821a95ddbbb3d1eb3e24c6a887873"
+  },
+  "profile": "dev",
+  "version": 1
+}

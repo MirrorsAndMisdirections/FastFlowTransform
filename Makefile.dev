@@ -24,6 +24,9 @@ test-pg-batch:
 unittest:
 	FLOWFORGE_SQL_DEBUG=1 $(UV) run pytest -q tests
 
+cover:
+	uv run pytest --cov=src/flowforge --cov-report=term-missing --cov-report=xml --cov-report=html
+
 utest:
 	flowforge utest "$(FF_PROJECT)" --env "$(FF_ENV)"
 
