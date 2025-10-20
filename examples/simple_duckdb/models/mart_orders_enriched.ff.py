@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from flowforge import model
+from fastflowtransform import model
 
 
 @model(

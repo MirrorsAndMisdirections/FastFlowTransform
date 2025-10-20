@@ -35,14 +35,14 @@ def test_docgen_generates_descriptions_and_lineage(tmp_path):
 
     # Run build first so schema introspection sees physical tables
     env = {"FF_ENGINE": "duckdb", "FF_DUCKDB_PATH": str(proj / ".local" / "demo.duckdb")}
-    run(["flowforge", "seed", str(proj), "--env", "dev"], env)
-    run(["flowforge", "run", str(proj), "--env", "dev"], env)
+    run(["fft", "seed", str(proj), "--env", "dev"], env)
+    run(["fft", "run", str(proj), "--env", "dev"], env)
 
     out_dir = proj / "site" / "docs"
     manifest_path = out_dir / "docs_manifest.json"
     res = run(
         [
-            "flowforge",
+            "fft",
             "docgen",
             str(proj),
             "--env",
@@ -58,7 +58,7 @@ def test_docgen_generates_descriptions_and_lineage(tmp_path):
 
     # HTML page exists and includes description + columns + lineage heading
     index_html = (out_dir / "index.html").read_text(encoding="utf-8")
-    assert "FlowForge - DAG & Mini Docs" in index_html
+    assert "FastFlowTransform - DAG & Mini Docs" in index_html
     model_html = (out_dir / "users_enriched.html").read_text(encoding="utf-8")
     assert "Description" in model_html
     assert "Columns" in model_html

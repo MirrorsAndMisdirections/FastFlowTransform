@@ -1,10 +1,10 @@
-# 🧭 FlowForge – Technical Developer Documentation (v0.1)
+# 🧭 FastFlowTransform – Technical Developer Documentation (v0.1)
 
 > Status: latest updates from your context dump. This document consolidates project structure, architecture, core APIs, error handling, CLI, examples, and roadmap into a print/git-friendly Markdown.
 >
 > Looking for an overview? Start at the [`docs/index.md`](./index.md) hub, then dive back here when you need details.
 >
-> Project: **FlowForge** — SQL & Python Data Modeling (Batch + Streaming), DAG, CLI, Auto-Docs, DQ Tests.
+> Project: **FastFlowTransform** — SQL & Python Data Modeling (Batch + Streaming), DAG, CLI, Auto-Docs, DQ Tests.
 
 ---
 
@@ -26,7 +26,7 @@
   - [Makefile Targets](#makefile-targets)
   - [CLI Flows](#cli-flows)
   - [Logging & Verbosity](#logging--verbosity)
-  - [Model Unit Tests (`flowforge utest`)](#model-unit-tests-flowforge-utest)
+  - [Model Unit Tests (`fft utest`)](#model-unit-tests-fastflowtransform-utest)
   - [Troubleshooting](#troubleshooting)
   - [Error Codes](#error-codes)
   - [Profiles & Environment Overrides](#profiles--environment-overrides)
@@ -61,10 +61,10 @@
 ### Project Layout
 
 ```text
-flowforge/
+fastflowtransform/
 ├── pyproject.toml
 ├── src/
-│   └── flowforge/
+│   └── fastflowtransform/
 │       ├── __init__.py
 │       ├── cli.py
 │       ├── core.py
@@ -156,16 +156,16 @@ DB ?= .local/demo.duckdb
 PROJECT ?= examples/simple_duckdb
 
 seed:
-	flowforge seed $(PROJECT) --env dev
+	fft seed $(PROJECT) --env dev
 
 run:
-	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" flowforge run "$(PROJECT)" --env dev
+	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" fft run "$(PROJECT)" --env dev
 
 dag:
-	flowforge dag "$(PROJECT)" --env dev --html
+	fft dag "$(PROJECT)" --env dev --html
 
 test:
-	flowforge test "$(PROJECT)" --env dev --select batch
+	fft test "$(PROJECT)" --env dev --select batch
 ```
 
 Targets wrap the CLI commands showcased below. Feel free to copy the pattern into your own projects.
@@ -180,7 +180,7 @@ Targets wrap the CLI commands showcased below. Feel free to copy the pattern int
 
 ### Logging & Verbosity
 
-FlowForge exposes uniform logging controls across all CLI commands plus a dedicated SQL debug channel.
+FastFlowTransform exposes uniform logging controls across all CLI commands plus a dedicated SQL debug channel.
 
 #### Flags
 
@@ -189,7 +189,7 @@ FlowForge exposes uniform logging controls across all CLI commands plus a dedica
 - `-v` / `--verbose` → progress/info (`INFO`)
 - `-vv` → full debug (`DEBUG`), including SQL debug output
 
-`-vv` flips on the SQL debug channel automatically (same as setting `FLOWFORGE_SQL_DEBUG=1`).
+`-vv` flips on the SQL debug channel automatically (same as setting `FFT_SQL_DEBUG=1`
 
 #### SQL debug channel
 
@@ -197,19 +197,19 @@ Enable it to inspect Python-model inputs, dependency columns, and helper SQL emi
 
 ```bash
 # full debug (recommended)
-flowforge run . -vv
+fft run . -vv
 
 # equivalent using the env var (legacy behaviour retained)
-FLOWFORGE_SQL_DEBUG=1 flowforge run .
+FFT_SQL_DEBUG=1 fft run .
 ```
 
 #### Usage patterns
 
 ```bash
-flowforge run . -q     # quiet (errors only)
-flowforge run .        # default (concise)
-flowforge run . -v     # verbose progress (model names, executor info)
-flowforge run . -vv    # full debug + SQL channel
+fft run . -q     # quiet (errors only)
+fft run .        # default (concise)
+fft run . -v     # verbose progress (model names, executor info)
+fft run . -vv    # full debug + SQL channel
 ```
 
 #### Parallel logging UX
@@ -220,16 +220,16 @@ flowforge run . -vv    # full debug + SQL channel
 
 **Notes**
 
-- SQL debug output routes through the `flowforge.sql` logger; use `-vv` or the env var to see it.
+- SQL debug output routes through the `fastflowtransform.sql` logger; use `-vv` or the env var to see it.
 - Existing projects do not need changes: the env var continues to work even without `-vv`.
 
-### Model Unit Tests (`flowforge utest`)
+### Model Unit Tests (`fft utest`)
 
-`flowforge utest` executes a single model in isolation, loading only the inputs you provide and comparing the result to an expected dataset. It works for SQL and Python models and runs against DuckDB or Postgres by default.
+`fft utest` executes a single model in isolation, loading only the inputs you provide and comparing the result to an expected dataset. It works for SQL and Python models and runs against DuckDB or Postgres by default.
 
 #### Unit tests & cache
 
-`flowforge utest --cache {off|ro|rw}` (default: `off`)
+`fft utest --cache {off|ro|rw}` (default: `off`)
 
 - `off`: deterministic, never skips.
 - `ro`: skip on cache hit; on miss, build but **do not write** cache.
@@ -363,11 +363,11 @@ Keys under `inputs` are physical relations; use `relation_for('users.ff')` if un
 #### Running utests
 
 ```bash
-flowforge utest .                      # discover all specs
-flowforge utest . --env dev            # use a specific profile
-flowforge utest . --model users_enriched
-flowforge utest . --model mart_orders_enriched --case join_and_flag
-flowforge utest . --path tests/unit/users_enriched.yml
+fft utest .                      # discover all specs
+fft utest . --env dev            # use a specific profile
+fft utest . --model users_enriched
+fft utest . --model mart_orders_enriched --case join_and_flag
+fft utest . --path tests/unit/users_enriched.yml
 ```
 
 Override the executor for all specs (ensure credentials/DSNs are set):
@@ -375,7 +375,7 @@ Override the executor for all specs (ensure credentials/DSNs are set):
 ```bash
 export FF_PG_DSN="postgresql+psycopg://postgres:postgres@localhost:5432/ffdb"
 export FF_PG_SCHEMA="public"
-flowforge utest . --engine postgres
+fft utest . --engine postgres
 ```
 
 Executor precedence (highest → lowest): CLI `--engine`, YAML `engine:` (optional), `profiles.yml`, environment overrides.
@@ -400,17 +400,17 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
       - run: pip install -e .
-      - run: flowforge utest . --env dev
+      - run: fft utest . --env dev
 ```
 
-(For Postgres, add a service container and run `flowforge utest . --engine postgres` with `FF_PG_DSN` / `FF_PG_SCHEMA`.)
+(For Postgres, add a service container and run `fft utest . --engine postgres` with `FF_PG_DSN` / `FF_PG_SCHEMA`.)
 
 ### Troubleshooting
 
 - **DuckDB seeds not visible** → ensure `FF_DUCKDB_PATH` (or profile path) is identical for `seed`, `run`, `dag`, and `test`.
 - **Postgres connection refused** → confirm `FF_PG_DSN`, container status (`docker ps`), and that port `5432` is open.
 - **BigQuery permissions** → set `GOOGLE_APPLICATION_CREDENTIALS` and match dataset/location to your profile.
-- **HTML docs missing** → run `flowforge dag <project> --html` and open `<project>/docs/index.html`.
+- **HTML docs missing** → run `fft dag <project> --html` and open `<project>/docs/index.html`.
 - **Unexpected test failures** → inspect rendered SQL in CLI output, refine selection via `--select`, refresh seeds if needed.
 - **Dependency table not found** in utests → provide all physical upstream relations in the YAML spec.
 
@@ -422,7 +422,7 @@ jobs:
 | Cycle in DAG              | `ModelCycleError`         | 1    | "Cycle detected among nodes: ..."                      |
 | Model execution (KeyError)| `cli.py` → formatted block| 1    | Inspect columns, use `relation_for(dep)` as keys       |
 | Data quality failures     | `cli test` → summary      | 2    | "Totals ... passed/failed"; each failure on its own line |
-| Unknown/unexpected        | generic                   | 99   | Optional trace via `FLOWFORGE_TRACE=1`                 |
+| Unknown/unexpected        | generic                   | 99   | Optional trace via `FFT_TRACE=1` |
 
 Error types map to the classes documented in [Core Modules](#core-modules) and [CLI Implementation](#cli-implementation).
 
@@ -460,18 +460,18 @@ For the Pydantic models and resolution flow, see [Settings Infrastructure](#sett
 
 ### Parallel Scheduler (v0.3)
 
-FlowForge executes the DAG in **levels**. Each level contains nodes without mutual dependencies.
+FastFlowTransform executes the DAG in **levels**. Each level contains nodes without mutual dependencies.
 
 - `--jobs N` limits the **maximum concurrency per level**.
 - `--keep-going` keeps tasks within the current level running even if one fails; subsequent levels are not started.
 
 **CLI**
 ```bash
-flowforge run . --env dev --jobs 4            # parallel (level-wise)
-flowforge run . --env dev --jobs 4 --keep-going
+fft run . --env dev --jobs 4            # parallel (level-wise)
+fft run . --env dev --jobs 4 --keep-going
 
-flowforge run . --select model_b --jobs 4     # Run only model_b and whatever it depends on
-flowforge run . --rebuild-only model_b        # Rebuild only model_b, even if cache hits
+fft run . --select model_b --jobs 4     # Run only model_b and whatever it depends on
+fft run . --rebuild-only model_b        # Rebuild only model_b, even if cache hits
 ```
 
 **Internals**
@@ -495,9 +495,9 @@ wo   – always build and write cache
 
 **Examples**
 ```bash
-flowforge run . --env dev --cache=rw
-flowforge run . --env dev --cache=ro
-flowforge run . --env dev --cache=rw --rebuild marts_daily.ff
+fft run . --env dev --cache=rw
+fft run . --env dev --cache=ro
+fft run . --env dev --cache=rw --rebuild marts_daily.ff
 ```
 
 ### Fingerprint Formula (v0.3)
@@ -521,7 +521,7 @@ flowforge run . --env dev --cache=rw --rebuild marts_daily.ff
 
 ### Meta Table Schema (v0.3)
 
-FlowForge writes a per-node audit row after successful builds:
+FastFlowTransform writes a per-node audit row after successful builds:
 
 ```
 _ff_meta (
@@ -571,12 +571,12 @@ Skipped nodes do **not** touch the meta table.
 
 ### Cross-Table Reconciliations
 
-FlowForge can compare aggregates and key coverage **across two tables** and surface drift with clear, numeric messages. These checks run via the standard `flowforge test` entrypoint and integrate into the DQ summary output.
+FastFlowTransform can compare aggregates and key coverage **across two tables** and surface drift with clear, numeric messages. These checks run via the standard `fft test` entrypoint and integrate into the DQ summary output.
 
 **CLI**
 ```bash
 # only run reconciliation checks
-flowforge test . --env dev --select reconcile
+fft test . --env dev --select reconcile
 ```
 
 **YAML DSL**
@@ -650,14 +650,14 @@ Each reconciliation contributes a line in the summary with a compact scope, e.g.
 
 ### Auto-Docs & Lineage
 
-FlowForge can generate a lightweight documentation site (DAG + model detail pages) from your project:
+FastFlowTransform can generate a lightweight documentation site (DAG + model detail pages) from your project:
 
 ```bash
 # Classic
-flowforge dag . --env dev --html
+fft dag . --env dev --html
 
 # Convenience wrapper (loads schema + descriptions + lineage, can emit JSON)
-flowforge docgen . --env dev --out site/docs --emit-json site/docs/docs_manifest.json
+fft docgen . --env dev --out site/docs --emit-json site/docs/docs_manifest.json
 ```
 
 **Descriptions** can be provided in YAML (project.yml) and/or Markdown files. Markdown has higher priority.
@@ -816,11 +816,11 @@ def mermaid(nodes: Dict[str, Node]) -> str: ...
 Primary error types with helpful messages.
 
 ```python
-class FlowForgeError(Exception): ...
-class ModuleLoadError(FlowForgeError): ...
-class DependencyNotFoundError(FlowForgeError): ...
-class ModelCycleError(FlowForgeError): ...
-class TestFailureError(FlowForgeError): ...
+class FastFlowTransformError(Exception): ...
+class ModuleLoadError(FastFlowTransformError): ...
+class DependencyNotFoundError(FastFlowTransformError): ...
+class ModelCycleError(FastFlowTransformError): ...
+class TestFailureError(FastFlowTransformError): ...
 ```
 
 ---
@@ -907,11 +907,11 @@ Operational usage lives in [CLI Flows](#cli-flows). This section drills into the
 
 **Commands:**
 
-- `flowforge run <project> [--env dev] [--engine ...]`
-- `flowforge dag <project> [--env dev] [--html]`
-- `flowforge test <project> [--env dev] [--select batch|streaming]`
-- `flowforge seed <project> [--env dev]`
-- `flowforge --version`
+- `fft run <project> [--env dev] [--engine ...]`
+- `fft dag <project> [--env dev] [--html]`
+- `fft test <project> [--env dev] [--select batch|streaming]`
+- `fft seed <project> [--env dev]`
+- `fft --version`
 
 **Key components:**
 
@@ -977,9 +977,9 @@ def test_stream_sessionizer_produces_sessions(): ...
 ```python
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
-from flowforge.core import REGISTRY
-from flowforge.dag import topo_sort
-from flowforge.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.core import REGISTRY
+from fastflowtransform.dag import topo_sort
+from fastflowtransform.executors.duckdb_exec import DuckExecutor
 
 proj = Path("examples/simple_duckdb").resolve()
 REGISTRY.load_project(proj)

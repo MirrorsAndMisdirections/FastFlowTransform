@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from flowforge.cache import FingerprintCache
+from fastflowtransform.cache import FingerprintCache
 
 
 def test_cache_persist_roundtrip(tmp_path: Path):

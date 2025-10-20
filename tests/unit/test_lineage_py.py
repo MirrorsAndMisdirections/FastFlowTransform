@@ -1,6 +1,6 @@
 import pandas as pd
 
-from flowforge.lineage import infer_py_lineage
+from fastflowtransform.lineage import infer_py_lineage
 
 
 def _dummy():

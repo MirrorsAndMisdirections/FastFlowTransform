@@ -1,8 +1,8 @@
 import pandas as pd
 import pytest
 
-from flowforge.core import REGISTRY, Node
-from flowforge.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.core import REGISTRY, Node
+from fastflowtransform.executors.duckdb_exec import DuckExecutor
 
 
 @pytest.mark.duckdb

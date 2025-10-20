@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>mart_users.ff – FlowForge</title>
+  <title>mart_users.ff – FastFlowTransform</title>
   <style>
     :root {
       --bg:#ffffff; --fg:#0f172a; --muted:#6b7280; --card:#ffffff; --border:#e5e7eb;
@@ -72,7 +72,7 @@
         mart_users.ff
         <span class="badge badge-table">table</span>
       </h1>
-      <div class="muted">Model Detail • FlowForge</div>
+      <div class="muted">Model Detail • FastFlowTransform</div>
     </div>
     <span class="chip sql">sql</span>
   </header>
@@ -90,7 +90,7 @@
 
         <div class="muted">Path</div>
         <div>
-          <code id="path">/Users/markolekic/Dev/FlowForge/flowforge/examples/simple_duckdb/models/mart_users.ff.sql</code>
+          <code id="path">/Users/markolekic/Dev/FlowForge/fastflowtransform/examples/simple_duckdb/models/mart_users.ff.sql</code>
           <button class="btn" id="copyPath" style="margin-left:8px;">Copy</button>
         </div>
 
@@ -111,6 +111,135 @@
 
     
 
+    
+    <section class="card">
+      <h2>Columns</h2>
+      <table class="cols">
+        <colgroup>
+          <col class="col-name" />
+          <col class="col-type" />
+          <col class="col-null" />
+          <col class="col-desc" />
+          <col class="col-lineage" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Nullable</th>
+            <th>Description</th>
+            <th>Lineage</th>
+          </tr>
+        </thead>
+        <tbody>
+          
+          <tr>
+            <td class="mono"><code>id</code></td>
+            <td class="mono"><code>BIGINT</code></td>
+            <td>
+              
+                <span class="pill yes">yes</span>
+              
+            </td>
+            <td class="desc">
+              
+                —
+              
+            </td>
+            <td class="desc">
+              
+                
+                  <span class="mono"><code>?.id</code></span>
+                  
+                    <span class="badge-direct">direct</span>
+                  
+                  
+                
+              
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><code>email</code></td>
+            <td class="mono"><code>VARCHAR</code></td>
+            <td>
+              
+                <span class="pill yes">yes</span>
+              
+            </td>
+            <td class="desc">
+              
+                —
+              
+            </td>
+            <td class="desc">
+              
+                
+                  <span class="mono"><code>?.email</code></span>
+                  
+                    <span class="badge-direct">direct</span>
+                  
+                  
+                
+              
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><code>is_gmail</code></td>
+            <td class="mono"><code>BOOLEAN</code></td>
+            <td>
+              
+                <span class="pill yes">yes</span>
+              
+            </td>
+            <td class="desc">
+              
+                —
+              
+            </td>
+            <td class="desc">
+              
+                
+                  <span class="mono"><code>?.is_gmail</code></span>
+                  
+                    <span class="badge-direct">direct</span>
+                  
+                  
+                
+              
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><code>email_domain</code></td>
+            <td class="mono"><code>VARCHAR</code></td>
+            <td>
+              
+                <span class="pill yes">yes</span>
+              
+            </td>
+            <td class="desc">
+              
+                —
+              
+            </td>
+            <td class="desc">
+              
+                
+                  <span class="mono"><code>?.?</code></span>
+                  
+                    <span class="badge-transformed">transformed</span>
+                  
+                  
+                
+              
+            </td>
+          </tr>
+          
+        </tbody>
+      </table>
+    </section>
     
 
     <aside class="card">

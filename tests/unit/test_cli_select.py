@@ -8,8 +8,8 @@ import pytest
 from jinja2 import Environment
 from typer.testing import CliRunner
 
-from flowforge.cli import _build_predicates, _parse_select, _selector, app
-from flowforge.core import REGISTRY, Node
+from fastflowtransform.cli import _build_predicates, _parse_select, _selector, app
+from fastflowtransform.core import REGISTRY, Node
 
 
 # -------------------------------
@@ -75,7 +75,9 @@ def test_cli_run_and_dag_apply_select_filters(tmp_path: Path, monkeypatch: pytes
         REGISTRY.env = env
         return tmp_path, env
 
-    monkeypatch.setattr("flowforge.cli.bootstrap._load_project_and_env", fake_load_project_and_env)
+    monkeypatch.setattr(
+        "fastflowtransform.cli.bootstrap._load_project_and_env", fake_load_project_and_env
+    )
 
     # Patch profile resolution to avoid reading profiles.yml / env
     def fake_resolve_profile(env_name, engine, proj):
@@ -84,7 +86,7 @@ def test_cli_run_and_dag_apply_select_filters(tmp_path: Path, monkeypatch: pytes
         prof = SimpleNamespace(engine="duckdb", duckdb=SimpleNamespace(path=":memory:"))
         return env, prof
 
-    monkeypatch.setattr("flowforge.cli.bootstrap._resolve_profile", fake_resolve_profile)
+    monkeypatch.setattr("fastflowtransform.cli.bootstrap._resolve_profile", fake_resolve_profile)
 
     # Patch executor factory to avoid any real DB work
     calls = {"run_sql": [], "run_py": []}
@@ -103,13 +105,13 @@ def test_cli_run_and_dag_apply_select_filters(tmp_path: Path, monkeypatch: pytes
 
         return ex, run_sql, run_py
 
-    monkeypatch.setattr("flowforge.cli.bootstrap._make_executor", fake_make_executor)
+    monkeypatch.setattr("fastflowtransform.cli.bootstrap._make_executor", fake_make_executor)
 
     # Patch topo_sort to preserve deterministic order users -> orders.ff -> stg_events
     def fake_topo(nodes):
         return ["users", "orders.ff", "stg_events"]
 
-    monkeypatch.setattr("flowforge.cli.test_cmd.topo_sort", fake_topo, raising=False)
+    monkeypatch.setattr("fastflowtransform.cli.test_cmd.topo_sort", fake_topo, raising=False)
 
     runner = CliRunner()
 
@@ -136,7 +138,7 @@ def test_cli_run_and_dag_apply_select_filters(tmp_path: Path, monkeypatch: pytes
     def fake_render_site(out_dir, nodes_dict, executor=None):
         captured["nodes"] = set(nodes_dict.keys())
 
-    monkeypatch.setattr("flowforge.cli.dag_cmd.render_site", fake_render_site)
+    monkeypatch.setattr("fastflowtransform.cli.dag_cmd.render_site", fake_render_site)
 
     # select kind:sql excludes none here (all sql), but test with 'ephemeral'
     # type to keep just stg_events

@@ -1,6 +1,6 @@
 import pandas as pd
 
-from flowforge import model
+from fastflowtransform import model
 
 
 @model(name="users_enriched", deps=["users.ff"], require={"users.ff": ["id", "email"]})

@@ -1,7 +1,7 @@
-# FlowForge (PoC 0.3)
+# FastFlowTransform (PoC 0.3)
 
 [![CI](https://github.com/<org>/<repo>/actions/workflows/ci.yml/badge.svg)](https://github.com/<org>/<repo>/actions/workflows/ci.yml)
-[![PyPI version](https://img.shields.io/pypi/v/flowforge.svg)](https://pypi.org/project/flowforge/)
+[![PyPI version](https://img.shields.io/pypi/v/fastflowtransform.svg)](https://pypi.org/project/fastflowtransform/)
 
 > ⚠️ **Project status:** early proof-of-concept. Stable enough for demos and smaller workflows. Public APIs may still change.
 
@@ -22,7 +22,7 @@
 
 ## Overview
 
-FlowForge combines SQL and Python models in a lightweight DAG engine. A project is simply a directory with models, optional seeds, and configuration. The CLI renders SQL, runs Python models, materialises results, generates HTML documentation, and executes data-quality checks against multiple execution backends.
+FastFlowTransform combines SQL and Python models in a lightweight DAG engine. A project is simply a directory with models, optional seeds, and configuration. The CLI renders SQL, runs Python models, materialises results, generates HTML documentation, and executes data-quality checks against multiple execution backends.
 
 > ℹ️ **Project layout & CLI overview**
 > Curious about the full folder structure, Makefile targets, or example models? See the *Project Layout* and related sections in the [User Guide](docs/Technical_Overview.md#project-layout).
@@ -33,10 +33,10 @@ FlowForge combines SQL and Python models in a lightweight DAG engine. A project 
 
 - **Polyglot modelling:** build transformation nodes in SQL (`*.ff.sql`) or Python (`*.ff.py`) and wire them together with `ref()`/`source()` and `deps=[...]`.
 - **Multiple executors:** DuckDB (local default), Postgres, BigQuery (classic + BigFrames), Databricks Spark, and Snowflake Snowpark are supported via pluggable executors.
-- **Deterministic DAG:** dependencies are resolved statically; `flowforge dag` renders either Mermaid source or a ready-to-view HTML mini site.
+- **Deterministic DAG:** dependencies are resolved statically; `fft dag` renders either Mermaid source or a ready-to-view HTML mini site.
 - **Data quality built in:** configure checks such as `not_null`, `unique`, `row_count_between`, `greater_equal`, `non_negative_sum`, and `freshness` in `project.yml`.
 - **Environment-aware configuration:** `profiles.yml` plus environment variables (`FF_*`) drive executor settings; CLI flags can override at runtime.
-- **Seeds & docs:** `flowforge seed` loads CSV/Parquet seeds, and `flowforge dag --html` produces browsable documentation for every model.
+- **Seeds & docs:** `fft seed` loads CSV/Parquet seeds, and `fft dag --html` produces browsable documentation for every model.
 
 ---
 
@@ -60,7 +60,7 @@ pre-commit install
 You can also bootstrap everything with the provided Makefile:
 
 ```bash
-make install      # upgrades pip + installs FlowForge in editable mode
+make install      # upgrades pip + installs FastFlowTransform in editable mode
 ```
 
 ---
@@ -86,10 +86,10 @@ xdg-open examples/simple_duckdb/site/dag/index.html  # Linux
 If you prefer manual control:
 
 ```bash
-flowforge seed examples/simple_duckdb --env dev
-flowforge run  examples/simple_duckdb --env dev
-flowforge dag  examples/simple_duckdb --env dev --html
-flowforge test examples/simple_duckdb --env dev --select batch
+fft seed examples/simple_duckdb --env dev
+fft run  examples/simple_duckdb --env dev
+fft dag  examples/simple_duckdb --env dev --html
+fft test examples/simple_duckdb --env dev --select batch
 ```
 
 ---
@@ -98,7 +98,7 @@ flowforge test examples/simple_duckdb --env dev --select batch
 
 ## Parallelism & Cache (v0.3)
 
-FlowForge 0.3 adds a level-wise parallel scheduler and an opt-in build cache.
+FastFlowTransform 0.3 adds a level-wise parallel scheduler and an opt-in build cache.
 
 ### Parallel execution
 - DAG is split into **levels** (all nodes with the same maximum distance from sources).
@@ -108,10 +108,10 @@ FlowForge 0.3 adds a level-wise parallel scheduler and an opt-in build cache.
 **Examples**
 ```bash
 # run with 4 workers per level
-flowforge run examples/simple_duckdb --env dev --jobs 4
+fft run examples/simple_duckdb --env dev --jobs 4
 
 # keep tasks in the current level running even if one fails
-flowforge run examples/simple_duckdb --env dev --jobs 4 --keep-going
+fft run examples/simple_duckdb --env dev --jobs 4 --keep-going
 ```
 
 ### Cache modes
@@ -127,7 +127,7 @@ The cache decides whether a node can be **skipped** when nothing relevant change
 ```
 
 **When is a node skipped?**
-FlowForge computes a **fingerprint** from:
+FastFlowTransform computes a **fingerprint** from:
 - SQL/Python source (rendered SQL or function source)
 - environment context (engine, profile name, selected `FF_*` env vars, normalized `sources.yml`)
 - **dependency fingerprints** (change upstream ⇒ downstream fingerprint changes)
@@ -136,21 +136,21 @@ The node is skipped if the fingerprint matches the on-disk cache **and** the phy
 **Examples**
 ```bash
 # first run (build + cache write)
-flowforge run . --env dev --cache=rw
+fft run . --env dev --cache=rw
 
 # second run (no-op if nothing changed)
-flowforge run . --env dev --cache=rw
+fft run . --env dev --cache=rw
 
 # force rebuild of a specific model
-flowforge run . --env dev --cache=rw --rebuild marts_daily.ff
+fft run . --env dev --cache=rw --rebuild marts_daily.ff
 
 # diagnose a surprising skip: change an FF_* env var to invalidate fingerprints
-FF_DEMO_TOGGLE=1 flowforge run . --env dev --cache=rw
+FF_DEMO_TOGGLE=1 fft run . --env dev --cache=rw
 ```
 
 **Troubleshooting**
 - *“Why did it skip?”* → Compare your last changes: SQL/Python code, `sources.yml`, `FF_*` env vars, profile/engine. Any change alters the fingerprint.
-- *“Relation missing but cache says skip”* → FlowForge also checks relation existence; if it was dropped externally, it will **rebuild**.
+- *“Relation missing but cache says skip”* → FastFlowTransform also checks relation existence; if it was dropped externally, it will **rebuild**.
 - *“Parallel tasks interleave logs”* → Logs are serialized via an internal queue to keep lines readable; use `-v`/`-vv` for more detail.
 
 ---
@@ -163,8 +163,8 @@ Use patterns to run only a subgraph.
 - `--exclude <pattern>`: excludes matching targets from the build (deps remain if still required).
 
 Examples:
-  flowforge run . --select marts_daily.ff
-  flowforge run . --exclude 'mart_*'
+  fft run . --select marts_daily.ff
+  fft run . --exclude 'mart_*'
 
 ---
 
@@ -177,10 +177,10 @@ These flags compose with `--select/--exclude`.
 
 Examples:
   # Rebuild everything that matches --select
-  flowforge run . --select marts_daily.ff --rebuild
+  fft run . --select marts_daily.ff --rebuild
 
   # Rebuild only a specific node
-  flowforge run . --rebuild-only marts_daily.ff
+  fft run . --rebuild-only marts_daily.ff
 
 ---
 
@@ -195,10 +195,10 @@ Examples:
 
 ## Contributing
 
-Issues and pull requests are welcome! Please read [`Contributing.md`](./Contributing.md) for guidelines, development setup, and testing instructions. Sharing minimal reproduction steps plus `flowforge --version` output greatly speeds up reviews.
+Issues and pull requests are welcome! Please read [`Contributing.md`](./Contributing.md) for guidelines, development setup, and testing instructions. Sharing minimal reproduction steps plus `fft --version` output greatly speeds up reviews.
 
 ---
 
 ## License
 
-FlowForge is licensed under the [Apache License 2.0](./License).
+FastFlowTransform is licensed under the [Apache License 2.0](./License).

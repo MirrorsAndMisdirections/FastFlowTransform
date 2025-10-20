@@ -9,12 +9,12 @@ import pytest
 from jinja2 import Environment
 from typer.testing import CliRunner
 
-from flowforge.cli import app
-from flowforge.core import REGISTRY, Node
-from flowforge.run_executor import ScheduleResult
+from fastflowtransform.cli import app
+from fastflowtransform.core import REGISTRY, Node
+from fastflowtransform.run_executor import ScheduleResult
 
-cli_bootstrap = importlib.import_module("flowforge.cli.bootstrap")
-cli_run = importlib.import_module("flowforge.cli.run")
+cli_bootstrap = importlib.import_module("fastflowtransform.cli.bootstrap")
+cli_run = importlib.import_module("fastflowtransform.cli.run")
 
 # ----------------------------- Helpers -----------------------------
 
@@ -210,7 +210,7 @@ def test_cache_rw_noop_skips_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     _stub_cache_class(monkeypatch, fake_cache)
 
     # Avoid relation existence checks interfering
-    monkeypatch.setattr("flowforge.cache.relation_exists", lambda _ex, _rel: True)
+    monkeypatch.setattr("fastflowtransform.cache.relation_exists", lambda _ex, _rel: True)
 
     runner = CliRunner()
     res = runner.invoke(app, ["run", str(tmp_path), "--cache", "rw"])
@@ -240,7 +240,7 @@ def test_cache_ro_build_no_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     # empty cache -> misses
     _stub_cache_class(monkeypatch, fake_cache)
 
-    monkeypatch.setattr("flowforge.cache.relation_exists", lambda _ex, _rel: True)
+    monkeypatch.setattr("fastflowtransform.cache.relation_exists", lambda _ex, _rel: True)
 
     runner = CliRunner()
     res = runner.invoke(app, ["run", str(tmp_path), "--cache", "ro"])
@@ -273,7 +273,7 @@ def test_rebuild_selected_builds_even_on_hit(tmp_path: Path, monkeypatch: pytest
     fake_cache._data = {"raw_sales": "fp::raw_sales", "marts_daily.ff": "fp::marts_daily.ff"}
     _stub_cache_class(monkeypatch, fake_cache)
 
-    monkeypatch.setattr("flowforge.cache.relation_exists", lambda _ex, _rel: True)
+    monkeypatch.setattr("fastflowtransform.cache.relation_exists", lambda _ex, _rel: True)
 
     runner = CliRunner()
     # Select only marts_daily.ff and force rebuild

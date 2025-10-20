@@ -1,6 +1,6 @@
-# FlowForge Documentation Hub
+# FastFlowTransform Documentation Hub
 
-Welcome! This page is your starting point for FlowForge docs. Pick the track that matches what you want to do and follow the links to the detailed guides.
+Welcome! This page is your starting point for FastFlowTransform docs. Pick the track that matches what you want to do and follow the links to the detailed guides.
 
 ---
 
@@ -29,13 +29,13 @@ Welcome! This page is your starting point for FlowForge docs. Pick the track tha
 - **Get set up quickly:** run the DuckDB demo or install locally via the [Quickstart](../README.md#quickstart).
 - **Understand the project layout & CLI workflow:** see *Project Layout*, *Makefile Targets*, and *CLI Flows* in the [Technical Overview](Technical_Overview.md#project-layout).
 - **Configure runtimes & profiles:** review executor profiles, environment overrides, and logging options in the [Technical Overview](Technical_Overview.md#profiles--environment-overrides).
-- **Model data quality & troubleshoot runs:** the [Technical Overview](Technical_Overview.md#model-unit-tests-flowforge-utest) covers unit tests, troubleshooting tips, and exit codes.
+- **Model data quality & troubleshoot runs:** the [Technical Overview](Technical_Overview.md#model-unit-tests-fastflowtransform-utest) covers unit tests, troubleshooting tips, and exit codes.
 - **Explore runnable demos:** browse the `examples/` directory in the repo; each subproject comes with its own README.
 
-### 2. Extend FlowForge (Developers & Contributors)
+### 2. Extend FastFlowTransform (Developers & Contributors)
 
 - **Dive into architecture & core modules:** start with [Architecture Overview](Technical_Overview.md#architecture-overview) and [Core Modules](Technical_Overview.md#core-modules) for registry, DAG, executors, validation, and more.
-- **Add tests & seeds:** see [Sample Models](Technical_Overview.md#sample-models), [Seeds & Example Data](Technical_Overview.md#seeds--example-data), and the unit test guide in [Model Unit Tests](Technical_Overview.md#model-unit-tests-flowforge-utest).
+- **Add tests & seeds:** see [Sample Models](Technical_Overview.md#sample-models), [Seeds & Example Data](Technical_Overview.md#seeds--example-data), and the unit test guide in [Model Unit Tests](Technical_Overview.md#model-unit-tests-fastflowtransform-utest).
 - **Contribute code:** follow the workflow described in [`../Contributing.md`](../Contributing.md) and consult the module-level docs for internal APIs.
 - **Plan ahead:** check the roadmap snapshot in the [Technical Overview](Technical_Overview.md#roadmap-snapshot) to understand upcoming work.
 
@@ -44,10 +44,10 @@ Welcome! This page is your starting point for FlowForge docs. Pick the track tha
 ## Reference Map
 
 - **Modeling reference** — Jinja configuration, macros, helper functions: [`Config_and_Macros.md`](Config_and_Macros.md)
-- **CLI entry point & commands** — `src/flowforge/cli.py`
-- **Registry & node loading** — `src/flowforge/core.py`
-- **Unit test runner** — `src/flowforge/utest.py`
-- **Rendered DAG templates** — `src/flowforge/docs/templates/`
+- **CLI entry point & commands** — `src/fastflowtransform/cli.py`
+- **Registry & node loading** — `src/fastflowtransform/core.py`
+- **Unit test runner** — `src/fastflowtransform/utest.py`
+- **Rendered DAG templates** — `src/fastflowtransform/docs/templates/`
 
 ---
 

@@ -1,8 +1,8 @@
 # tests/common/test_docs_materialization_badges.py
 from pathlib import Path
 
-from flowforge.core import Node
-from flowforge.docs import render_site
+from fastflowtransform.core import Node
+from fastflowtransform.docs import render_site
 
 
 def _mk_node(tmp: Path, name: str, kind: str, materialized: str):

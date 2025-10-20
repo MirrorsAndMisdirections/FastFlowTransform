@@ -6,8 +6,8 @@ from typing import Any
 import pytest
 from jinja2 import Environment, FileSystemLoader
 
-from flowforge.core import REGISTRY, Node
-from flowforge.executors.base import BaseExecutor
+from fastflowtransform.core import REGISTRY, Node
+from fastflowtransform.executors.base import BaseExecutor
 
 
 # -------- Minimal no-DB executor to drive render_sql/run_sql --------

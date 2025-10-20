@@ -3,9 +3,9 @@ requires = ["hatchling>=1.25,<2"]
 build-backend = "hatchling.build"
 
 [project]
-name = "flowforge"
+name = "fastflowtransform"
 version = "0.3.0"
-description = "FlowForge PoC: SQL+Python Models, DAG, DuckDB executor"
+description = "FastFlowTransform PoC: SQL+Python Models, DAG, DuckDB executor"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [ { name = "Marko Lekic", email = "you@example.com" } ]
@@ -49,18 +49,18 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/MirrorsAndMisdirections/FlowForge"
-Issues = "https://github.com/MirrorsAndMisdirections/FlowForge/issues"
-Repository = "https://github.com/MirrorsAndMisdirections/FlowForge.git"
+Homepage = "https://github.com/MirrorsAndMisdirections/FastFlowTransform"
+Issues = "https://github.com/MirrorsAndMisdirections/FastFlowTransform/issues"
+Repository = "https://github.com/MirrorsAndMisdirections/FastFlowTransform.git"
 
 [project.scripts]
-flowforge = "flowforge.cli:app"
+fft = "fastflowtransform.cli:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/flowforge"]
+packages = ["src/fastflowtransform"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/flowforge/**", "pyproject.toml", "README.md"]
+include = ["src/fastflowtransform/**", "pyproject.toml", "README.md"]
 
 [tool.black]
 line-length = 100
@@ -90,7 +90,7 @@ ignore = [
 fixable = ["ALL"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["flowforge"]
+known-first-party = ["fastflowtransform"]
 known-third-party = ["duckdb", "pandas"]
 combine-as-imports = true
 
@@ -102,7 +102,7 @@ max-statements = 60
 
 # Keep __init__.py tidy without false positives on re-exports.
 [tool.ruff.lint.per-file-ignores]
-"src/flowforge/__init__.py" = ["F401"]
+"src/fastflowtransform/__init__.py" = ["F401"]
 
 # ---------------------------
 # MyPy (type checker)
@@ -136,12 +136,12 @@ ignore_errors = true
 repository = "pypi"
 
 [tool.pytest.ini_options]
-addopts = "-q --cov=src/flowforge --cov-report=term-missing --cov-report=xml --cov-report=html"
+addopts = "-q --cov=src/fastflowtransform --cov-report=term-missing --cov-report=xml --cov-report=html"
 testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
-source = ["src/flowforge"]
+source = ["src/fastflowtransform"]
 omit = [
   "src/**/__main__.py",
   "src/**/_version.py",

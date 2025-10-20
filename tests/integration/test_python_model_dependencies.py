@@ -1,8 +1,8 @@
 # tests/test_py_model_dep_loading.py
 import pandas as pd
 
-from flowforge.core import REGISTRY, Node
-from flowforge.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.core import REGISTRY, Node
+from fastflowtransform.executors.duckdb_exec import DuckExecutor
 
 
 def test_python_model_dep_loading_single_and_multi(tmp_path):

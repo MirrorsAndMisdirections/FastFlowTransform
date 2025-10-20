@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from flowforge.core import REGISTRY
-from flowforge.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.core import REGISTRY
+from fastflowtransform.executors.duckdb_exec import DuckExecutor
 
 
 @pytest.mark.duckdb

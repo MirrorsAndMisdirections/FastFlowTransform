@@ -1,9 +1,9 @@
 ### 🆕 `docs/Cache_and_Parallelism.md`
 
 ````markdown
-# Parallelism & Cache (FlowForge v0.3)
+# Parallelism & Cache (FastFlowTransform v0.3)
 
-FlowForge 0.3 introduces a level-wise parallel scheduler and a build cache driven by stable fingerprints. This document explains **how parallel execution works**, **when nodes are skipped**, the exact **fingerprint formula**, and the **meta table** written after successful builds.
+FastFlowTransform 0.3 introduces a level-wise parallel scheduler and a build cache driven by stable fingerprints. This document explains **how parallel execution works**, **when nodes are skipped**, the exact **fingerprint formula**, and the **meta table** written after successful builds.
 
 ---
 
@@ -21,7 +21,7 @@ FlowForge 0.3 introduces a level-wise parallel scheduler and a build cache drive
 
 ## Parallel Scheduler
 
-FlowForge splits the DAG into **levels** (all nodes that can run together without violating dependencies). Within a level, up to `--jobs` nodes execute in **parallel**.
+FastFlowTransform splits the DAG into **levels** (all nodes that can run together without violating dependencies). Within a level, up to `--jobs` nodes execute in **parallel**.
 
 - Dependencies are **never** violated.
 - `--keep-going`: tasks already started in a level finish; **subsequent levels won’t start** if any task in the current level fails.
@@ -30,10 +30,10 @@ FlowForge splits the DAG into **levels** (all nodes that can run together withou
 **Quick start**
 ```bash
 # Run with 4 workers per level
-flowforge run . --env dev --jobs 4
+fft run . --env dev --jobs 4
 
 # Keep tasks in the same level running even if one fails
-flowforge run . --env dev --jobs 4 --keep-going
+fft run . --env dev --jobs 4 --keep-going
 ````
 
 ---
@@ -58,7 +58,7 @@ A node is skipped iff:
 1. The current **fingerprint** matches the on-disk cache value, **and**
 2. The **physical relation exists** on the target engine.
 
-If the relation was dropped externally, FlowForge will **rebuild** even if the fingerprint matches.
+If the relation was dropped externally, FastFlowTransform will **rebuild** even if the fingerprint matches.
 
 ---
 
@@ -92,7 +92,7 @@ Fingerprints are stable hashes that change on any relevant input:
 
 ## Meta Table Schema
 
-After a successful build, FlowForge writes a per-node audit row:
+After a successful build, FastFlowTransform writes a per-node audit row:
 
 ```
 _ff_meta (
@@ -118,29 +118,29 @@ Backends:
 
 ```bash
 # First run — builds everything, writes cache and meta
-flowforge run . --env dev --cache=rw
+fft run . --env dev --cache=rw
 
 # No-op run — should skip all nodes (if nothing changed)
-flowforge run . --env dev --cache=rw
+fft run . --env dev --cache=rw
 
 # Force rebuild of a single model (ignores cache for it)
-flowforge run . --env dev --cache=rw --rebuild marts_daily.ff
+fft run . --env dev --cache=rw --rebuild marts_daily.ff
 
 # Read-only cache (skip on match, build on miss, no writes)
-flowforge run . --env dev --cache=ro
+fft run . --env dev --cache=ro
 
 # Always build and write cache
-flowforge run . --env dev --cache=wo
+fft run . --env dev --cache=wo
 
 # Disable cache entirely
-flowforge run . --env dev --no-cache
+fft run . --env dev --no-cache
 ```
 
 With parallelism:
 
 ```bash
-flowforge run . --env dev --jobs 4
-flowforge run . --env dev --jobs 4 --keep-going
+fft run . --env dev --jobs 4
+fft run . --env dev --jobs 4 --keep-going
 ```
 
 ---
@@ -159,13 +159,13 @@ A skip requires a fingerprint match and an existing relation. Fingerprints inclu
 Any change in the above triggers a rebuild downstream.
 
 **“Relation missing but cache says skip?”**
-We also check relation existence. If the table/view was dropped externally, FlowForge will **rebuild**.
+We also check relation existence. If the table/view was dropped externally, FastFlowTransform will **rebuild**.
 
 **“My logs interleave under parallelism.”**
 Logs are serialized via a queue; use `-v` / `-vv` for richer but still stable output. Each node prints start/end and duration; levels summarize.
 
 **“Utest cache?”**
-`flowforge utest --cache {off|ro|rw}` defaults to `off` for deterministic runs. With `rw`, expensive unit cases can be accelerated. Unit tests do not rely on the meta table by default.
+`fft utest --cache {off|ro|rw}` defaults to `off` for deterministic runs. With `rw`, expensive unit cases can be accelerated. Unit tests do not rely on the meta table by default.
 
 ---
 
@@ -177,16 +177,16 @@ Makefile targets:
 
 ```makefile
 run_parallel:
-	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" flowforge run "$(PROJECT)" --env dev --jobs 4
+	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" fft run "$(PROJECT)" --env dev --jobs 4
 
 cache_rw_first:
-	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" flowforge run "$(PROJECT)" --env dev --cache=rw
+	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" fft run "$(PROJECT)" --env dev --cache=rw
 
 cache_rw_second:
-	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" flowforge run "$(PROJECT)" --env dev --cache=rw
+	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" fft run "$(PROJECT)" --env dev --cache=rw
 
 cache_invalidate_env:
-	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" FF_DEMO_TOGGLE=1 flowforge run "$(PROJECT)" --env dev --cache=rw
+	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" FF_DEMO_TOGGLE=1 fft run "$(PROJECT)" --env dev --cache=rw
 ```
 
 ---
@@ -197,7 +197,7 @@ Only environment variables with the `FF_` prefix affect fingerprints (keys and v
 
 ```bash
 # Will invalidate fingerprints and rebuild affected nodes
-FF_RUN_DATE=2025-01-01 flowforge run . --env dev --cache=rw
+FF_RUN_DATE=2025-01-01 fft run . --env dev --cache=rw
 ```
 
 ````

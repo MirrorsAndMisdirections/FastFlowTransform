@@ -3,10 +3,10 @@ from pathlib import Path
 import pytest
 from jinja2 import Environment, FileSystemLoader
 
-from flowforge.core import REGISTRY
-from flowforge.executors.duckdb_exec import DuckExecutor
-from flowforge.executors.postgres_exec import PostgresExecutor
-from flowforge.seeding import seed_project
+from fastflowtransform.core import REGISTRY
+from fastflowtransform.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.executors.postgres_exec import PostgresExecutor
+from fastflowtransform.seeding import seed_project
 
 
 def _make_env(project: Path) -> Environment:

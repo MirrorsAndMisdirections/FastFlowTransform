@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 import time
 
-from flowforge.log_queue import LogQueue
-from flowforge.run_executor import ScheduleResult, schedule
+from fastflowtransform.log_queue import LogQueue
+from fastflowtransform.run_executor import ScheduleResult, schedule
 
 
 def _normalize(lines: list[str]) -> list[str]:

@@ -1,4 +1,4 @@
-from flowforge.lineage import infer_sql_lineage
+from fastflowtransform.lineage import infer_sql_lineage
 
 
 def test_simple_alias_and_function_transformed():

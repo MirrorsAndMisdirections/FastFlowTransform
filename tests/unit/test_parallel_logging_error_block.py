@@ -6,12 +6,12 @@ from types import SimpleNamespace
 from jinja2 import Environment
 from typer.testing import CliRunner
 
-from flowforge.cli import app
-from flowforge.core import REGISTRY, Node
-from flowforge.run_executor import schedule as real_schedule
+from fastflowtransform.cli import app
+from fastflowtransform.core import REGISTRY, Node
+from fastflowtransform.run_executor import schedule as real_schedule
 
-cli_bootstrap = importlib.import_module("flowforge.cli.bootstrap")
-cli_run = importlib.import_module("flowforge.cli.run")
+cli_bootstrap = importlib.import_module("fastflowtransform.cli.bootstrap")
+cli_run = importlib.import_module("fastflowtransform.cli.run")
 
 
 def test_error_block_prints_after_logs_without_interleaving(monkeypatch):

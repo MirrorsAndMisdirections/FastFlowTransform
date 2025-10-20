@@ -107,13 +107,13 @@ jobs:
         env:
           FF_ENGINE: duckdb
           FF_DUCKDB_PATH: examples/simple_duckdb/.local/demo.duckdb
-        run: uv run flowforge seed examples/simple_duckdb --env dev
+        run: uv run fft seed examples/simple_duckdb --env dev
 
       - name: Run models (ephemeral inline + view materialization)
         env:
           FF_ENGINE: duckdb
           FF_DUCKDB_PATH: examples/simple_duckdb/.local/demo.duckdb
-        run: uv run flowforge run examples/simple_duckdb --env dev
+        run: uv run fft run examples/simple_duckdb --env dev
 
       - name: Smoke assertions (query DuckDB)
         run: |
@@ -136,5 +136,5 @@ jobs:
           FF_ENGINE: duckdb
           FF_DUCKDB_PATH: examples/simple_duckdb/.local/demo.duckdb
         run: |
-          uv run flowforge dag examples/simple_duckdb --env dev --html
+          uv run fft dag examples/simple_duckdb --env dev --html
           test -f examples/simple_duckdb/site/dag/index.html

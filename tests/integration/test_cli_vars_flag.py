@@ -4,9 +4,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from flowforge.cli import app
-from flowforge.core import REGISTRY
-from flowforge.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.cli import app
+from fastflowtransform.core import REGISTRY
+from fastflowtransform.executors.duckdb_exec import DuckExecutor
 
 runner = CliRunner()
 

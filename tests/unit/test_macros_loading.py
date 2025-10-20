@@ -3,7 +3,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from flowforge.core import REGISTRY
+from fastflowtransform.core import REGISTRY
 
 
 # ----------------------- SQL Macros ---------------------------------

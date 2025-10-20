@@ -1,7 +1,7 @@
 # tests/unit/test_cache_skip_logic.py
 from __future__ import annotations
 
-from flowforge.cache import FingerprintCache, can_skip_node
+from fastflowtransform.cache import FingerprintCache, can_skip_node
 
 
 class _DummyExec:

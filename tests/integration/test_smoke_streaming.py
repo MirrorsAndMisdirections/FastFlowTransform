@@ -4,8 +4,8 @@ import duckdb
 import pandas as pd
 import pytest
 
-from flowforge import testing
-from flowforge.streaming import StreamSessionizer
+from fastflowtransform import testing
+from fastflowtransform.streaming import StreamSessionizer
 
 
 @pytest.mark.streaming

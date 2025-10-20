@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from flowforge.core import Node
-from flowforge.fingerprint import (
+from fastflowtransform.core import Node
+from fastflowtransform.fingerprint import (
     EnvCtx,
     build_env_ctx,
     fingerprint_py,

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from flowforge.core import Node
-from flowforge.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.core import Node
+from fastflowtransform.executors.duckdb_exec import DuckExecutor
 
 
 def test_duckdb_on_node_built_no_crash(tmp_path: Path):
