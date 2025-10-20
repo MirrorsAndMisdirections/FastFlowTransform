@@ -30,6 +30,10 @@
   - [Troubleshooting](#troubleshooting)
   - [Error Codes](#error-codes)
   - [Profiles & Environment Overrides](#profiles--environment-overrides)
+  - [Parallel Scheduler (v0.3)](#parallel-scheduler-v03)
+  - [Cache Policy (v0.3)](#cache-policy-v03)
+  - [Fingerprint Formula (v0.3)](#fingerprint-formula-v03)
+  - [Meta Table Schema (v0.3)](#meta-table-schema-v03)
   - [Jinja DSL Quick Reference](#jinja-dsl-quick-reference)
   - [Roadmap Snapshot](#roadmap-snapshot)
 - [Part II – Architecture & Internals](#part-ii--architecture--internals)
@@ -432,6 +436,86 @@ bq:
 **Priority (lowest → highest):** `profiles.yml` < environment variables (`FF_*`) < CLI flags (e.g. `--engine`).
 
 For the Pydantic models and resolution flow, see [Settings Infrastructure](#settings-infrastructure).
+
+### Parallel Scheduler (v0.3)
+
+FlowForge executes the DAG in **levels**. Each level contains nodes without mutual dependencies.
+
+- `--jobs N` limits the **maximum concurrency per level**.
+- `--keep-going` keeps tasks within the current level running even if one fails; subsequent levels are not started.
+
+**CLI**
+```bash
+flowforge run . --env dev --jobs 4            # parallel (level-wise)
+flowforge run . --env dev --jobs 4 --keep-going
+```
+
+**Internals**
+- `dag.levels(nodes)` builds level lists using indegrees.
+- `run_executor.schedule(levels, jobs, fail_policy)` spawns a thread pool per level and aggregates timings.
+
+### Cache Policy (v0.3)
+
+**Modes**
+```
+off  – always build
+rw   – default; skip if fingerprint matches and relation exists; write cache after build
+ro   – skip on match; on miss build but do not write cache
+wo   – always build and write cache
+```
+`--rebuild <glob>` ignores cache for matching nodes.
+
+**Skip condition**
+1) Fingerprint matches the stored value (file-backed cache)  
+2) Physical relation exists on the target engine
+
+**Examples**
+```bash
+flowforge run . --env dev --cache=rw
+flowforge run . --env dev --cache=ro
+flowforge run . --env dev --cache=rw --rebuild marts_daily.ff
+```
+
+### Fingerprint Formula (v0.3)
+
+**SQL nodes**:  
+`fingerprint_sql(node, rendered_sql, env_ctx, dep_fps)`
+
+**Python nodes**:  
+`fingerprint_py(node, func_src, env_ctx, dep_fps)`
+
+**`env_ctx` content**
+- `engine` (e.g. duckdb, postgres, bigquery)
+- `profile_name` (CLI `--env`)
+- selected environment keys/values: all `FF_*`
+- normalized excerpt of `sources.yml` (sorted dump)
+
+**Properties**
+- Same inputs ⇒ same hash.
+- Minimal change in SQL/function ⇒ different hash.
+- Any dependency fingerprint change bubbles downstream via `dep_fps`.
+
+### Meta Table Schema (v0.3)
+
+FlowForge writes a per-node audit row after successful builds:
+
+```
+_ff_meta (
+  node_name   TEXT / STRING      -- logical name, e.g. "users.ff"
+  relation    TEXT / STRING      -- physical name, e.g. "users"
+  fingerprint TEXT / STRING
+  engine      TEXT / STRING
+  built_at    TIMESTAMP
+)
+```
+
+**Backends**
+- DuckDB: table `_ff_meta` in `main`.
+- Postgres: table `_ff_meta` in the active schema.
+- BigQuery: table `<dataset>._ff_meta`.
+
+**Notes**
+- Meta is currently used for auditing and tooling; skip logic relies on fingerprint cache + relation existence checks.
 
 ### Jinja DSL Quick Reference
 

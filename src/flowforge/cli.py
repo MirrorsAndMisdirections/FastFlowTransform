@@ -55,7 +55,7 @@ from .utest import discover_unit_specs, run_unit_specs
 
 app = typer.Typer(
     name="flowforge",
-    help="FlowForge - kleine ELT/DAG-Engine (SQL + Python)",
+    help="FlowForge - kleine ELT/DAG-Engine (SQL  Python)",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -175,8 +175,8 @@ def _error_block(title: str, body: str, hint: str | None = None) -> str:
     border = "─" * 70
     lines = [f"✖ {title}", "", textwrap.dedent(body).rstrip()]
     if hint:
-        lines += ["", "Hints:", textwrap.dedent(hint).rstrip()]
-    text = "│ " + "\n│ ".join("\n".join(lines).splitlines())
+        lines = ["", "Hints:", textwrap.dedent(hint).rstrip()]
+    text = "│ \n│ ".join("\n".join(lines).splitlines())
     return f"\n┌{border}\n{text}\n└{border}\n"
 
 
@@ -191,7 +191,7 @@ def _get_test_con(executor: Any) -> Any:
             return SAConnShim(executor.engine, schema=getattr(executor, "schema", None))
         except Exception:
             pass
-    # 2) BigQuery (pandas variant): client + dataset -> BQConnShim
+    # 2) BigQuery (pandas variant): client  dataset -> BQConnShim
     if hasattr(executor, "client") and hasattr(executor, "dataset"):
         try:
             return BigQueryConnShim(executor.client, executor.dataset, executor.location)
@@ -372,6 +372,75 @@ def _execute_models(
             on_error(name, node, exc)
 
 
+def _selected_subgraph_names(
+    nodes: dict[str, Any],
+    select_tokens: list[str] | None,
+    exclude_tokens: list[str] | None,
+) -> set[str]:
+    """
+    Compute the reduced set of node names to execute:
+      1) Seeds = nodes matching --select (or all if --select omitted)
+      2) Remove excluded nodes and their downstream closure
+      3) Final = upstream-closure of remaining seeds within the remaining graph
+    This guarantees that all dependencies of every kept seed are present;
+    if a required dep was excluded, the affected seed is dropped.
+    """
+    if not nodes:
+        return set()
+
+    # Predicates
+    _, sel_pred = _compile_selector(select_tokens or [])
+    _, ex_pred = _compile_selector(exclude_tokens or [])
+
+    all_names = set(nodes.keys())
+    seeds = {n for n in all_names if (sel_pred(nodes[n]) if select_tokens else True)}
+    if not seeds:
+        return set()
+
+    # Build adjacency
+    deps_map: dict[str, set[str]] = {n: set(nodes[n].deps or []) for n in all_names}
+    # downstream (reverse edges)
+    rev_map: dict[str, set[str]] = {n: set() for n in all_names}
+    for u, ds in deps_map.items():
+        for d in ds:
+            if d in rev_map:
+                rev_map[d].add(u)
+
+    # Excluded  their downstream
+    excluded = {n for n in all_names if (ex_pred(nodes[n]) if exclude_tokens else False)}
+    if excluded:
+        # BFS/DFS over reverse edges to collect all dependants
+        stack = list(excluded)
+        downstream = set()
+        while stack:
+            cur = stack.pop()
+            for v in rev_map.get(cur, ()):
+                if v not in downstream and v not in excluded:
+                    downstream.add(v)
+                    stack.append(v)
+        removed = excluded | downstream
+    else:
+        removed = set()
+
+    remaining = all_names - removed
+    seeds = seeds - removed
+    if not seeds:
+        return set()
+
+    # Upstream closure within the remaining graph
+    result: set[str] = set()
+    stack = list(seeds)
+    while stack:
+        cur = stack.pop()
+        if cur in result or cur not in remaining:
+            continue
+        result.add(cur)
+        for d in deps_map.get(cur, ()):
+            if d in remaining:
+                stack.append(d)
+    return result
+
+
 def _resolve_dag_out_dir(proj: Path, override: Path | None) -> Path:
     if override:
         return override.expanduser().resolve()
@@ -401,7 +470,7 @@ def _setup_logging(verbose: int, quiet: int) -> None:
       -q        → ERROR
        (default)→ WARNING
       -v        → INFO
-      -vv+      → DEBUG
+      -vv      → DEBUG
     Also wires the SQL channel and keeps FLOWFORGE_SQL_DEBUG compatibility.
     """
     eff_level_threshold = 2
@@ -488,6 +557,18 @@ KeepOpt = Annotated[
     ),
 ]
 
+ExcludeOpt = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--exclude",
+        help=(
+            "Exclude models by the same matcher syntax as --select. "
+            "Excluded models and everything downstream of them are removed "
+            "from the run subgraph."
+        ),
+    ),
+]
+
 
 # ---------------- Cache policy options ----------------
 class CacheMode(str, Enum):
@@ -515,11 +596,20 @@ NoCacheOpt = Annotated[
     ),
 ]
 
-RebuildOpt = Annotated[
+RebuildAllOpt = Annotated[
     bool,
     typer.Option(
         "--rebuild",
-        help="Ignore cache for selected nodes (build them even if cache matches).",
+        help="Rebuild all selected nodes (ignore cache for them).",
+    ),
+]
+
+RebuildOnlyOpt = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--rebuild-only",
+        "-R",
+        help="Rebuild only specific nodes (repeatable).",
     ),
 ]
 
@@ -576,9 +666,9 @@ def main(
 class _RunEngine:
     ctx: Any
     env_name: str
-    pred: Callable[[Any], bool]
+    pred: Callable[[Any], bool] | None
     cache_mode: CacheMode
-    rebuild: bool
+    force_rebuild: set[str] = field(default_factory=set)
     shared: tuple[Any, Callable, Callable] = field(init=False)
     tls: threading.local = field(default_factory=threading.local, init=False)
     cache: FingerprintCache = field(init=False)
@@ -656,11 +746,23 @@ class _RunEngine:
     def run_node(self, name: str) -> None:
         node = REGISTRY.nodes[name]
         ex, run_sql_fn, run_py_fn = self._get_runner()
+
+        # ----- Forced rebuild: ignore cache entirely
+        if name in self.force_rebuild:
+            (run_sql_fn if node.kind == "sql" else run_py_fn)(node)
+            cand_fp = self._maybe_fingerprint(node, ex)  # compute after build for coherence
+            if cand_fp:
+                with self.fps_lock:
+                    self.computed_fps[name] = cand_fp
+                with suppress(Exception):
+                    ex.on_node_built(node, relation_for(name), cand_fp)
+            return
+
+        # ----- Normal cache path
         cand_fp = self._maybe_fingerprint(node, ex)
         if cand_fp is not None:
             materialized = (getattr(node, "meta", {}) or {}).get("materialized", "table")
-            # Decide if skipping is allowed (rw/ro) and not forced rebuild
-            may_skip = self.cache_mode in (CacheMode.RW, CacheMode.RO) and not self.rebuild
+            may_skip = self.cache_mode in (CacheMode.RW, CacheMode.RO)
             if may_skip and can_skip_node(
                 node_name=name,
                 new_fp=cand_fp,
@@ -668,18 +770,18 @@ class _RunEngine:
                 executor=ex,
                 materialized=materialized,
             ):
+                # record the fp so it can be persisted at end (rw) but do NOT write meta
                 with self.fps_lock:
                     self.computed_fps[name] = cand_fp
-                if LOG.isEnabledFor(logging.INFO):
-                    typer.echo(f"↻ Skipped {name} (cache hit)")
-                return
-        if LOG.isEnabledFor(logging.INFO):
-            typer.echo(f"→ Running {name} ({node.kind})")
+                return  # skipped
+
+        # ----- Execute (built)
         (run_sql_fn if node.kind == "sql" else run_py_fn)(node)
+
+        # record & meta only after successful build
         if cand_fp is not None:
             with self.fps_lock:
                 self.computed_fps[name] = cand_fp
-            # Notify executor to upsert meta after a successful build
             with suppress(Exception):
                 ex.on_node_built(node, relation_for(name), cand_fp)
 
@@ -704,7 +806,7 @@ class _RunEngine:
             raise typer.Exit(1) from err
         body = _pretty_exc(err)
         if os.getenv("FLOWFORGE_TRACE") == "1":
-            body += "\n\n" + "".join(traceback.format_exc())
+            body += "\n\n".join(traceback.format_exc())
         typer.echo(_error_block(f"Model failed: {name}", body, "• See cause above."))
         raise typer.Exit(1) from err
 
@@ -737,19 +839,74 @@ def run(
     engine: EngineOpt = None,
     vars: VarsOpt = None,
     select: SelectOpt = None,
+    exclude: ExcludeOpt = None,
     jobs: JobsOpt = 1,
     keep_going: KeepOpt = False,
     cache: CacheOpt = CacheMode.RW,
     no_cache: NoCacheOpt = False,
-    rebuild: RebuildOpt = False,
+    rebuild: RebuildAllOpt = False,  # ← bool
+    rebuild_only: RebuildOnlyOpt = None,  # ← list[str] | None
 ) -> None:
     ctx = _prepare_context(project, env_name, engine, vars)
-    _, pred = _compile_selector(select)
+
     # Resolve cache mode (no-cache overrides)
     cache_mode = CacheMode.OFF if no_cache else cache
-    engine_ = _RunEngine(
-        ctx=ctx, env_name=env_name, pred=pred, cache_mode=cache_mode, rebuild=rebuild
+
+    # ---- 1) Roh-Selection (ohne Dep-Expansion) für "explizite Targets"
+    _, raw_pred = _compile_selector(select)
+    raw_selected: list[str] = [k for k, v in REGISTRY.nodes.items() if raw_pred(v)]
+
+    # ---- 2) Normaler Subgraph (mit Deps), für Default-Fall
+    wanted: set[str] = _selected_subgraph_names(
+        REGISTRY.nodes,
+        select_tokens=select,
+        exclude_tokens=exclude,
     )
+
+    # ---- 3) Rebuild-Only Namen normalisieren
+    rebuild_only_names = _normalize_node_names_or_warn(rebuild_only)
+
+    # Wenn --rebuild-only übergeben: die *expliziten* Namen sind die Targets
+    explicit_targets: list[str] = []
+    if rebuild_only_names:
+        explicit_targets = [n for n in (rebuild_only or []) if n in REGISTRY.nodes]
+    elif rebuild and select:
+        # Bei --rebuild + --select: nur die *explizit* selektierten bauen (ohne Deps)
+        explicit_targets = raw_selected
+
+    if not wanted and not explicit_targets:
+        typer.secho(
+            "Nothing to run (empty selection after applying --select/--exclude).",
+            fg="yellow",
+        )
+        raise typer.Exit(0)
+
+    # ---- 4) Force-Rebuild-Menge bestimmen
+    if explicit_targets:
+        force_rebuild = set(explicit_targets)  # nur die explizit gewählten
+    elif rebuild:
+        force_rebuild = set(wanted)  # alle (selektierten) Knoten
+    else:
+        force_rebuild = set()
+
+    # ---- 5) Levels bestimmen:
+    if explicit_targets:
+        # *Wichtig:* Ein einziges Level nur mit den expliziten Targets.
+        # Das umgeht auch gemockte dag_levels in Tests, die sonst Deps reinziehen.
+        lvls = [explicit_targets]
+    else:
+        sub_nodes = {k: v for k, v in REGISTRY.nodes.items() if k in wanted}
+        lvls = dag_levels(sub_nodes)
+
+    # ---- 6) RunEngine instanziieren (unverändert)
+    engine_ = _RunEngine(
+        ctx=ctx,
+        pred=None,
+        env_name=env_name,
+        cache_mode=cache_mode,
+        force_rebuild=force_rebuild,
+    )
+
     # Thread-safe log queue to avoid interleaving
     logq = LogQueue()
 
@@ -763,9 +920,6 @@ def run(
         }
         return mapping.get(e, e.upper()[:4])
 
-    lvls_all = dag_levels(REGISTRY.nodes)
-    lvls = [[n for n in lvl if pred(REGISTRY.nodes[n])] for lvl in lvls_all]
-    lvls = [lvl for lvl in lvls if lvl]
     result: ScheduleResult = schedule(
         lvls,
         jobs=jobs,
@@ -976,6 +1130,17 @@ def _print_summary(results: list[DQResult]) -> None:
     typer.echo("──────")
     typer.echo(f"✓ passed: {passed}")
     typer.echo(f"✗ failed: {failed}")
+
+
+def _normalize_node_names_or_warn(names: list[str] | None) -> set[str]:
+    """Normalize CLI tokens to canonical node names; warn on unknown tokens."""
+    out: set[str] = set()
+    for tok in _parse_select(names or []):
+        try:
+            out.add(REGISTRY.get_node(tok).name)  # akzeptiert 'users' und 'users.ff'
+        except KeyError:
+            LOG.warning(f"Unknown model in --rebuild: {tok}")
+    return out
 
 
 @app.command(

@@ -2,6 +2,13 @@
 
 > Authoritative reference for FlowForge’s modeling layer: SQL/Python models, configuration macros, templating helpers, and testing hooks.
 > Works with FlowForge v0.1 (T1–T11). Supported engines: DuckDB, Postgres, BigQuery (pandas & BigFrames), Databricks/Spark, Snowflake/Snowpark.
+> **Execution & Cache (v0.3) quick notes**
+> - Parallelism is level-wise; use `flowforge run --jobs N`.
+> - Use `--cache={off|ro|rw|wo}` to control skipping behavior.
+> - Fingerprints include rendered SQL / Python function source, selected `FF_*` env vars, `sources.yml` and upstream fingerprints.
+> - Change any of these → downstream nodes rebuild.
+> - `--rebuild <glob>` forces rebuilding selected models (ignores cache).
+
 
 For an operational walkthrough (CLI usage, troubleshooting, pipelines) see the [Technical Overview](./Technical_Overview.md). This document focuses purely on how you author and test models.
 

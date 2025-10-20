@@ -97,6 +97,8 @@ combine-as-imports = true
 [tool.ruff.lint.pylint]
 max-args = 12
 max-returns = 8
+max-branches = 15
+max-statements = 60
 
 # Keep __init__.py tidy without false positives on re-exports.
 [tool.ruff.lint.per-file-ignores]
@@ -134,4 +136,25 @@ ignore_errors = true
 repository = "pypi"
 
 [tool.pytest.ini_options]
-addopts = "-q"
+addopts = "-q --cov=src/flowforge --cov-report=term-missing --cov-report=xml --cov-report=html"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["src/flowforge"]
+omit = [
+  "src/**/__main__.py",
+  "src/**/_version.py",
+  "tests/**",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 80 
+
+[dependency-groups]
+dev = [
+    "coverage>=7.11.0",
+    "pytest-cov>=7.0.0",
+]

@@ -194,42 +194,46 @@ def _digest_file(path: Path) -> str | None:
 
 
 def _resolve_csv_path(spec: Any, csv_val: str) -> Path:
-    """Resolve CSV paths for utests:
-    1) absolute path → return as-is
-    2) relative to spec.path's parent (preferred, YAML-local)
-    3) fallback to spec.project_dir or project root
-    4) fallback to CWD
+    """
+    Resolve CSV path for utests with robust fallbacks:
+      1) absolute path → return as-is
+      2) spec.path's parent (YAML dir)
+      3) spec.project_dir (project root)
+      4) derived project root via _project_root_for_spec(spec)
+      5) current working directory
+
+    We return the first candidate that exists; if none exist, return the first candidate anyway.
     """
     p = Path(csv_val)
     if p.is_absolute():
         return p
 
-    base: Path | None = None
+    candidates: list[Path] = []
 
-    # Prefer the YAML file's directory (most intuitive for tests)
+    # 1) YAML file directory
     sp = getattr(spec, "path", None)
     if sp:
-        try:
-            base = Path(sp).parent
-        except Exception:
-            base = None
+        with suppress(Exception):
+            candidates.append(Path(sp).parent / p)
 
-    # Then the explicit project_dir or derived project root
-    if base is None:
-        proj_dir = getattr(spec, "project_dir", None)
-        if proj_dir:
-            base = Path(proj_dir)
-        else:
-            try:
-                base = Path(_project_root_for_spec(spec))
-            except Exception:
-                base = None
+    # 2) Explicit project_dir
+    proj_dir = getattr(spec, "project_dir", None)
+    if proj_dir:
+        candidates.append(Path(proj_dir) / p)
 
-    # Last resort: current working directory
-    if base is None:
-        base = Path.cwd()
+    # 3) Heuristic project root
+    with suppress(Exception):
+        candidates.append(_project_root_for_spec(spec) / p)
 
-    return (base / p).resolve()
+    # 4) CWD
+    candidates.append(Path.cwd() / p)
+
+    for c in candidates:
+        if c.exists():
+            return c.resolve()
+
+    # If nothing exists, return best guess (first candidate) to surface a clear error upstream
+    return (candidates[0] if candidates else (Path.cwd() / p)).resolve()
 
 
 def _extract_defaults_inputs(spec: Any) -> dict[str, Any]:

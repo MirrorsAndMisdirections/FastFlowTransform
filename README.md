@@ -1,4 +1,4 @@
-# FlowForge (PoC 0.1)
+# FlowForge (PoC 0.3)
 
 [![CI](https://github.com/<org>/<repo>/actions/workflows/ci.yml/badge.svg)](https://github.com/<org>/<repo>/actions/workflows/ci.yml)
 [![PyPI version](https://img.shields.io/pypi/v/flowforge.svg)](https://pypi.org/project/flowforge/)
@@ -93,6 +93,68 @@ flowforge test examples/simple_duckdb --env dev --select batch
 ```
 
 ---
+
+> For a deep dive into the v0.3 features, see **[Parallelism & Cache](docs/Cache_and_Parallelism.md)**.
+
+## Parallelism & Cache (v0.3)
+
+FlowForge 0.3 adds a level-wise parallel scheduler and an opt-in build cache.
+
+### Parallel execution
+- DAG is split into **levels** (all nodes with the same maximum distance from sources).
+- Within a level, up to `--jobs` nodes run **in parallel**. Dependencies are never violated.
+- `--keep-going`: tasks already started in a level run to completion, but **subsequent levels won’t start** if any task in the current level fails.
+
+**Examples**
+```bash
+# run with 4 workers per level
+flowforge run examples/simple_duckdb --env dev --jobs 4
+
+# keep tasks in the current level running even if one fails
+flowforge run examples/simple_duckdb --env dev --jobs 4 --keep-going
+```
+
+### Cache modes
+The cache decides whether a node can be **skipped** when nothing relevant changed.
+
+```
+--cache=off  # always build
+--cache=rw   # default: skip on match; write cache after build
+--cache=ro   # skip on match; build on miss, but don't write cache
+--cache=wo   # always build and write cache
+--rebuild <glob>  # ignore cache for selected nodes
+--no-cache       # alias for --cache=off
+```
+
+**When is a node skipped?**
+FlowForge computes a **fingerprint** from:
+- SQL/Python source (rendered SQL or function source)
+- environment context (engine, profile name, selected `FF_*` env vars, normalized `sources.yml`)
+- **dependency fingerprints** (change upstream ⇒ downstream fingerprint changes)
+The node is skipped if the fingerprint matches the on-disk cache **and** the physical relation exists.
+
+**Examples**
+```bash
+# first run (build + cache write)
+flowforge run . --env dev --cache=rw
+
+# second run (no-op if nothing changed)
+flowforge run . --env dev --cache=rw
+
+# force rebuild of a specific model
+flowforge run . --env dev --cache=rw --rebuild marts_daily.ff
+
+# diagnose a surprising skip: change an FF_* env var to invalidate fingerprints
+FF_DEMO_TOGGLE=1 flowforge run . --env dev --cache=rw
+```
+
+**Troubleshooting**
+- *“Why did it skip?”* → Compare your last changes: SQL/Python code, `sources.yml`, `FF_*` env vars, profile/engine. Any change alters the fingerprint.
+- *“Relation missing but cache says skip”* → FlowForge also checks relation existence; if it was dropped externally, it will **rebuild**.
+- *“Parallel tasks interleave logs”* → Logs are serialized via an internal queue to keep lines readable; use `-v`/`-vv` for more detail.
+
+---
+
 
 ## Documentation
 
