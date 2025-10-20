@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from flowforge.core import REGISTRY
-from flowforge.dag import topo_sort
-from flowforge.executors.duckdb_exec import DuckExecutor
-from flowforge.seeding import seed_project
+from fastflowtransform.core import REGISTRY
+from fastflowtransform.dag import topo_sort
+from fastflowtransform.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.seeding import seed_project
 
 pytestmark = pytest.mark.duckdb  # uses DuckDB
 

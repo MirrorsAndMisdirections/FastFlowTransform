@@ -36,7 +36,7 @@ def duckdb_seeded(duckdb_project, duckdb_env):
             db_file.unlink()
             # ensure parent dir exists for fresh DB creation
             db_file.parent.mkdir(parents=True, exist_ok=True)
-    run(["flowforge", "seed", str(duckdb_project), "--env", "dev"], duckdb_env)
+    run(["fft", "seed", str(duckdb_project), "--env", "dev"], duckdb_env)
     yield
 
 
@@ -64,5 +64,5 @@ def pg_seeded(pg_project, pg_env):
             conn.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
             conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
             conn.commit()
-    run(["flowforge", "seed", str(pg_project), "--env", "stg"], pg_env)
+    run(["fft", "seed", str(pg_project), "--env", "stg"], pg_env)
     yield

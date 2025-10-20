@@ -12,7 +12,7 @@ ENV = {"FF_ENGINE": "duckdb", "FF_DUCKDB_PATH": str(DB)}
 @pytest.mark.duckdb
 def test_ref_and_source_duckdb(duckdb_seeded, duckdb_project, duckdb_env):
     # Seeds sind durch duckdb_seeded geladen
-    run(["flowforge", "run", str(duckdb_project), "--env", "dev"], duckdb_env)
+    run(["fft", "run", str(duckdb_project), "--env", "dev"], duckdb_env)
 
     con = duckdb.connect(duckdb_env["FF_DUCKDB_PATH"])
     orders_count = con.execute("select count(*) from orders").fetchone()

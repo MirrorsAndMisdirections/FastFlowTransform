@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from types import SimpleNamespace
 
-from flowforge.meta import ensure_meta_table, get_meta, relation_exists, upsert_meta
+from fastflowtransform.meta import ensure_meta_table, get_meta, relation_exists, upsert_meta
 
 
 class FakeBQClient:

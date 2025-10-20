@@ -18,7 +18,7 @@ PG_DSN = os.environ.get(
 @pytest.mark.cli
 @pytest.mark.slow
 def test_pg_html_dag_generated(pg_env):
-    run(["flowforge", "dag", str(PROJECT), "--env", "stg", "--html"], pg_env)
+    run(["fft", "dag", str(PROJECT), "--env", "stg", "--html"], pg_env)
     assert (DOCS / "index.html").exists(), "index.html was not created"
 
 
@@ -26,7 +26,7 @@ def test_pg_html_dag_generated(pg_env):
 @pytest.mark.cli
 @pytest.mark.slow
 def test_pg_batch_tests_green(pg_env):
-    run(["flowforge", "test", str(PROJECT), "--env", "stg", "--select", "batch"], pg_env)
+    run(["fft", "test", str(PROJECT), "--env", "stg", "--select", "batch"], pg_env)
 
 
 @pytest.mark.postgres
@@ -43,10 +43,10 @@ def test_pg_result_exists():
 @pytest.mark.slow
 def test_pg_run_builds_tables(pg_project, pg_env):
     # 1) Load seeds (uses FF_ENGINE=postgres & DSN)
-    run(["flowforge", "seed", str(pg_project), "--env", "stg"], pg_env)
+    run(["fft", "seed", str(pg_project), "--env", "stg"], pg_env)
 
     # 2) Run the pipeline
-    run(["flowforge", "run", str(pg_project), "--env", "stg"], pg_env)
+    run(["fft", "run", str(pg_project), "--env", "stg"], pg_env)
 
 
 @pytest.mark.postgres

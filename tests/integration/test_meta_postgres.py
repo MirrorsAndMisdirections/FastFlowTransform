@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import create_engine, text
 
-from flowforge.meta import ensure_meta_table, get_meta, relation_exists, upsert_meta
+from fastflowtransform.meta import ensure_meta_table, get_meta, relation_exists, upsert_meta
 
 pytestmark = pytest.mark.postgres  # mark to opt-in in CI
 

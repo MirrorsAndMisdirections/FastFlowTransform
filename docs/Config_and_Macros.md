@@ -1,9 +1,9 @@
-# FlowForge Modeling Reference (v0.1)
+# FastFlowTransform Modeling Reference (v0.1)
 
-> Authoritative reference for FlowForge’s modeling layer: SQL/Python models, configuration macros, templating helpers, and testing hooks.
-> Works with FlowForge v0.1 (T1–T11). Supported engines: DuckDB, Postgres, BigQuery (pandas & BigFrames), Databricks/Spark, Snowflake/Snowpark.
+> Authoritative reference for FastFlowTransform’s modeling layer: SQL/Python models, configuration macros, templating helpers, and testing hooks.
+> Works with FastFlowTransform v0.1 (T1–T11). Supported engines: DuckDB, Postgres, BigQuery (pandas & BigFrames), Databricks/Spark, Snowflake/Snowpark.
 > **Execution & Cache (v0.3) quick notes**
-> - Parallelism is level-wise; use `flowforge run --jobs N`.
+> - Parallelism is level-wise; use `fft run --jobs N`.
 > - Use `--cache={off|ro|rw|wo}` to control skipping behavior.
 > - Fingerprints include rendered SQL / Python function source, selected `FF_*` env vars, `sources.yml` and upstream fingerprints.
 > - Change any of these → downstream nodes rebuild.
@@ -41,12 +41,12 @@ For an operational walkthrough (CLI usage, troubleshooting, pipelines) see the [
 
 ## 1. Model Fundamentals
 
-FlowForge discovers models under `<project>/models/` with two primary flavours:
+FastFlowTransform discovers models under `<project>/models/` with two primary flavours:
 
 ### 1.1 SQL models (`*.ff.sql`)
 
 - File stem defines the logical DAG node (`users.ff.sql` → `users.ff`).
-- Jinja template rendered with FlowForge context (helpers like `ref`, `source`, `var`, `config`, `this`).
+- Jinja template rendered with FastFlowTransform context (helpers like `ref`, `source`, `var`, `config`, `this`).
 - Output relation defaults to the stem without `.ff` (configurable via `config(alias=...)` if supported in future releases).
 
 ```sql
@@ -59,7 +59,7 @@ from {{ source('crm', 'users') }};
 
 ### 1.2 Python models (`*.ff.py`)
 
-Use the `@model` decorator from `flowforge.core` to register a callable. The decorator accepts:
+Use the `@model` decorator from `fastflowtransform.core` to register a callable. The decorator accepts:
 
 - `name` (optional) → overrides the logical name (defaults to stem).
 - `deps` → list of dependency nodes (file stems or logical names).
@@ -72,7 +72,7 @@ Dependencies determine the call signature:
 
 ```python
 # models/users_enriched.ff.py
-from flowforge.core import model
+from fastflowtransform.core import model
 import pandas as pd
 
 @model(
@@ -90,7 +90,7 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
 
 - Declare external tables in `sources.yml`; they become available via `source('group','table')`.
 - Provide reproducible inputs with CSV/Parquet seeds in `<project>/seeds/`.
-- FlowForge auto-detects dependencies:
+- FastFlowTransform auto-detects dependencies:
   - SQL models → parse `ref()` / `source()` calls.
   - Python models → use the decorator’s `deps`.
   - Additional runtime dependencies can be expressed via `relation_for(<node>)`.
@@ -122,7 +122,7 @@ Supported keys (v0.1):
 
 | Key            | Type            | Description                                                                  |
 |----------------|-----------------|------------------------------------------------------------------------------|
-| `materialized` | `"table" \| "view" \| "ephemeral"` | Controls how FlowForge persists the model. See [Materialization semantics](#6-materialization-semantics). |
+| `materialized` | `"table" \| "view" \| "ephemeral"` | Controls how FastFlowTransform persists the model. See [Materialization semantics](#6-materialization-semantics). |
 | `tags`         | `list[str]`     | Arbitrary labels surfaced in docs / selection tooling.                       |
 | (future)       | –               | Additional metadata is stored under `node.meta[...]` if added later.         |
 
@@ -146,7 +146,7 @@ vars:
 ```
 
 ```bash
-flowforge run . --vars snapshot_day='2025-10-01' limit=50
+fft run . --vars snapshot_day='2025-10-01' limit=50
 ```
 
 Usage in templates:
@@ -219,7 +219,7 @@ from {{ ref('users.ff') }};
 
 - Keep macros idempotent and side-effect free.
 - Group related macros per file (e.g., string utilities, date helpers).
-- Document macros with inline comments; FlowForge’s generated docs list each macro with its path.
+- Document macros with inline comments; FastFlowTransform’s generated docs list each macro with its path.
 
 ---
 
@@ -233,7 +233,7 @@ from {{ ref('users.ff') }};
 | `view`          | `CREATE OR REPLACE VIEW … AS <SELECT …>` |
 | `ephemeral`     | No object is created; downstream `ref()` expands to a subquery. |
 
-**Postgres-specific:** FlowForge rewrites the “create or replace” pattern into `DROP TABLE IF EXISTS …; CREATE TABLE … AS …` for compatibility.
+**Postgres-specific:** FastFlowTransform rewrites the “create or replace” pattern into `DROP TABLE IF EXISTS …; CREATE TABLE … AS …` for compatibility.
 
 ### Python models
 
@@ -247,7 +247,7 @@ from {{ ref('users.ff') }};
 
 ### 7.1 Column contracts (`requires`)
 
-Use the decorator’s `requires` argument (Python models) to ensure upstream inputs carry expected columns. Under the hood FlowForge calls `validation.validate_required_columns`, raising `RequiredColumnsError` with a descriptive diff.
+Use the decorator’s `requires` argument (Python models) to ensure upstream inputs carry expected columns. Under the hood FastFlowTransform calls `validation.validate_required_columns`, raising `RequiredColumnsError` with a descriptive diff.
 
 ```python
 @model(
@@ -263,7 +263,7 @@ def join_orders(inputs: dict[str, pd.DataFrame]) -> pd.DataFrame:
 
 ### 7.2 Data quality tests (`project.yml`)
 
-Declare checks under `project.yml → tests:`. Each entry maps directly to a function in `flowforge.testing` (`not_null`, `unique`, `row_count_between`, `greater_equal`, `non_negative_sum`, `freshness`). Run them via `flowforge test …`.
+Declare checks under `project.yml → tests:`. Each entry maps directly to a function in `fastflowtransform.testing` (`not_null`, `unique`, `row_count_between`, `greater_equal`, `non_negative_sum`, `freshness`). Run them via `fft test …`.
 
 ```yaml
 tests:
@@ -273,7 +273,7 @@ tests:
     tags: [batch]
 ```
 
-### 7.3 Model unit tests (`flowforge utest`)
+### 7.3 Model unit tests (`fft utest`)
 
 Keep transformation logic honest with small, engine-agnostic specs:
 
@@ -305,11 +305,11 @@ cases:
 Run with:
 
 ```bash
-flowforge utest . --env dev
-flowforge utest . --model users_enriched --case flags_gmail
+fft utest . --env dev
+fft utest . --model users_enriched --case flags_gmail
 ```
 
-See the [Technical Overview](./Technical_Overview.md#model-unit-tests-flowforge-utest) for an exhaustive walkthrough (engine overrides, CI examples, troubleshooting).
+See the [Technical Overview](./Technical_Overview.md#model-unit-tests-fastflowtransform-utest) for an exhaustive walkthrough (engine overrides, CI examples, troubleshooting).
 
 ---
 
@@ -325,8 +325,8 @@ See the [Technical Overview](./Technical_Overview.md#model-unit-tests-flowforge-
 | Reference source | `{{ source('crm','users') }}` |
 | Macro definition | `models/macros/*.sql` |
 | Guarantee columns (Python) | `@model(..., requires={'users': {'id','email'}})` |
-| Data-quality test | `project.yml → tests` + `flowforge test …` |
-| Unit test | `tests/unit/*.yml` + `flowforge utest …` |
+| Data-quality test | `project.yml → tests` + `fft test …` |
+| Unit test | `tests/unit/*.yml` + `fft utest …` |
 
 ---
 

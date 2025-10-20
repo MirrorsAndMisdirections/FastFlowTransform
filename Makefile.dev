@@ -19,19 +19,19 @@ ci:
 	pytest -q
 
 test-pg-batch:
-	FLOWFORGE_SQL_DEBUG=1 $(UV) run pytest -q tests/test_smoke_postgres.py::test_pg_batch_tests_green
+	FFT_SQL_DEBUG=1 $(UV) run pytest -q tests/test_smoke_postgres.py::test_pg_batch_tests_green
 
 unittest:
-	FLOWFORGE_SQL_DEBUG=1 $(UV) run pytest -q tests
+	FFT_SQL_DEBUG=1 $(UV) run pytest -q tests
 
 cover:
-	uv run pytest --cov=src/flowforge --cov-report=term-missing --cov-report=xml --cov-report=html
+	uv run pytest --cov=src/fastflowtransform --cov-report=term-missing --cov-report=xml --cov-report=html
 
 utest:
-	flowforge utest "$(FF_PROJECT)" --env "$(FF_ENV)"
+	fft utest "$(FF_PROJECT)" --env "$(FF_ENV)"
 
 utest-duckdb:
-	flowforge utest "$(FF_PROJECT)" --env "$(FF_ENV)" --model users_enriched
+	fft utest "$(FF_PROJECT)" --env "$(FF_ENV)" --model users_enriched
 
 # Lint & format helpers
 fmt:

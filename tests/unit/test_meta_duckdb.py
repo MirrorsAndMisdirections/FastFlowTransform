@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from flowforge.executors.duckdb_exec import DuckExecutor
-from flowforge.meta import ensure_meta_table, get_meta, relation_exists, upsert_meta
+from fastflowtransform.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.meta import ensure_meta_table, get_meta, relation_exists, upsert_meta
 
 
 def test_duckdb_meta_roundtrip(tmp_path: Path):

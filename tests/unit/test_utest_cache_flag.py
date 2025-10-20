@@ -7,8 +7,8 @@ import pytest
 from jinja2 import Environment
 from typer.testing import CliRunner
 
-from flowforge.cli import app
-from flowforge.core import REGISTRY, Node
+from fastflowtransform.cli import app
+from fastflowtransform.core import REGISTRY, Node
 
 
 def _stub_minimal_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
@@ -35,9 +35,11 @@ def _stub_minimal_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     def fake_make_executor(_prof, _env):
         return DummyExec(), lambda n: None, lambda n: None
 
-    monkeypatch.setattr("flowforge.cli.bootstrap._load_project_and_env", fake_load_project_and_env)
-    monkeypatch.setattr("flowforge.cli.bootstrap._resolve_profile", fake_resolve_profile)
-    monkeypatch.setattr("flowforge.cli.bootstrap._make_executor", fake_make_executor)
+    monkeypatch.setattr(
+        "fastflowtransform.cli.bootstrap._load_project_and_env", fake_load_project_and_env
+    )
+    monkeypatch.setattr("fastflowtransform.cli.bootstrap._resolve_profile", fake_resolve_profile)
+    monkeypatch.setattr("fastflowtransform.cli.bootstrap._make_executor", fake_make_executor)
 
 
 def test_utest_cache_default_off(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
@@ -52,8 +54,8 @@ def test_utest_cache_default_off(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
         captured.update(kw)
         return 0
 
-    monkeypatch.setattr("flowforge.cli.utest_cmd.discover_unit_specs", fake_discover)
-    monkeypatch.setattr("flowforge.cli.utest_cmd.run_unit_specs", fake_run)
+    monkeypatch.setattr("fastflowtransform.cli.utest_cmd.discover_unit_specs", fake_discover)
+    monkeypatch.setattr("fastflowtransform.cli.utest_cmd.run_unit_specs", fake_run)
 
     res = CliRunner().invoke(app, ["utest", str(tmp_path)])
     assert res.exit_code == 0, res.output
@@ -74,8 +76,8 @@ def test_utest_cache_rw_and_reuse(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
         captured.update(kw)
         return 0
 
-    monkeypatch.setattr("flowforge.cli.utest_cmd.discover_unit_specs", fake_discover)
-    monkeypatch.setattr("flowforge.cli.utest_cmd.run_unit_specs", fake_run)
+    monkeypatch.setattr("fastflowtransform.cli.utest_cmd.discover_unit_specs", fake_discover)
+    monkeypatch.setattr("fastflowtransform.cli.utest_cmd.run_unit_specs", fake_run)
 
     res = CliRunner().invoke(app, ["utest", str(tmp_path), "--cache", "rw", "--reuse-meta"])
     assert res.exit_code == 0, res.output
@@ -95,8 +97,8 @@ def test_utest_cache_ro(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         captured.update(kw)
         return 0
 
-    monkeypatch.setattr("flowforge.cli.utest_cmd.discover_unit_specs", fake_discover)
-    monkeypatch.setattr("flowforge.cli.utest_cmd.run_unit_specs", fake_run)
+    monkeypatch.setattr("fastflowtransform.cli.utest_cmd.discover_unit_specs", fake_discover)
+    monkeypatch.setattr("fastflowtransform.cli.utest_cmd.run_unit_specs", fake_run)
 
     res = CliRunner().invoke(app, ["utest", str(tmp_path), "--cache", "ro"])
     assert res.exit_code == 0, res.output

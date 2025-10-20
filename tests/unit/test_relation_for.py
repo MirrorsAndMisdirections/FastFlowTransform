@@ -1,4 +1,4 @@
-from flowforge.core import relation_for
+from fastflowtransform.core import relation_for
 
 
 def test_relation_for_strips_ff_suffix():

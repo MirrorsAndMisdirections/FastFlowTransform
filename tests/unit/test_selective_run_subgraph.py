@@ -3,8 +3,8 @@ from types import SimpleNamespace
 from jinja2 import Environment
 from typer.testing import CliRunner
 
-from flowforge.cli import app
-from flowforge.core import REGISTRY, Node
+from fastflowtransform.cli import app
+from fastflowtransform.core import REGISTRY, Node
 
 
 def _mk_node(tmp, name, kind="sql", deps=None, mat="table", tags=None):
@@ -37,14 +37,16 @@ def test_run_select_includes_upstream_and_excludes_others(tmp_path, monkeypatch)
         REGISTRY.env = env
         return tmp_path, env
 
-    monkeypatch.setattr("flowforge.cli.bootstrap._load_project_and_env", fake_load_project_and_env)
+    monkeypatch.setattr(
+        "fastflowtransform.cli.bootstrap._load_project_and_env", fake_load_project_and_env
+    )
 
     def fake_resolve_profile(env_name, engine, proj):
         env = SimpleNamespace()
         prof = SimpleNamespace(engine="duckdb", duckdb=SimpleNamespace(path=":memory:"))
         return env, prof
 
-    monkeypatch.setattr("flowforge.cli.bootstrap._resolve_profile", fake_resolve_profile)
+    monkeypatch.setattr("fastflowtransform.cli.bootstrap._resolve_profile", fake_resolve_profile)
 
     calls = {"run_sql": [], "run_py": []}
 
@@ -62,7 +64,7 @@ def test_run_select_includes_upstream_and_excludes_others(tmp_path, monkeypatch)
 
         return ex, run_sql, run_py
 
-    monkeypatch.setattr("flowforge.cli.bootstrap._make_executor", fake_make_executor)
+    monkeypatch.setattr("fastflowtransform.cli.bootstrap._make_executor", fake_make_executor)
 
     # Use real dag.levels for safety (but graph is simple)
     runner = CliRunner()
@@ -84,7 +86,9 @@ def test_run_exclude_removes_targets_and_downstream(tmp_path, monkeypatch):
         REGISTRY.env = env
         return tmp_path, env
 
-    monkeypatch.setattr("flowforge.cli.bootstrap._load_project_and_env", fake_load_project_and_env)
+    monkeypatch.setattr(
+        "fastflowtransform.cli.bootstrap._load_project_and_env", fake_load_project_and_env
+    )
 
     def fake_resolve_profile(env_name, engine, proj):
         return (
@@ -92,7 +96,7 @@ def test_run_exclude_removes_targets_and_downstream(tmp_path, monkeypatch):
             SimpleNamespace(engine="duckdb", duckdb=SimpleNamespace(path=":memory:")),
         )
 
-    monkeypatch.setattr("flowforge.cli.bootstrap._resolve_profile", fake_resolve_profile)
+    monkeypatch.setattr("fastflowtransform.cli.bootstrap._resolve_profile", fake_resolve_profile)
 
     calls = {"run_sql": [], "run_py": []}
 
@@ -110,7 +114,7 @@ def test_run_exclude_removes_targets_and_downstream(tmp_path, monkeypatch):
 
         return ex, run_sql, run_py
 
-    monkeypatch.setattr("flowforge.cli.bootstrap._make_executor", fake_make_executor)
+    monkeypatch.setattr("fastflowtransform.cli.bootstrap._make_executor", fake_make_executor)
 
     runner = CliRunner()
     # No select → seeds = all; exclude mart_* removes mart and its downstream (none),
@@ -131,7 +135,9 @@ def test_run_select_conflicts_with_exclude_drops_invalid_targets(tmp_path, monke
         REGISTRY.env = env
         return tmp_path, env
 
-    monkeypatch.setattr("flowforge.cli.bootstrap._load_project_and_env", fake_load_project_and_env)
+    monkeypatch.setattr(
+        "fastflowtransform.cli.bootstrap._load_project_and_env", fake_load_project_and_env
+    )
 
     def fake_resolve_profile(env_name, engine, proj):
         return (
@@ -139,7 +145,7 @@ def test_run_select_conflicts_with_exclude_drops_invalid_targets(tmp_path, monke
             SimpleNamespace(engine="duckdb", duckdb=SimpleNamespace(path=":memory:")),
         )
 
-    monkeypatch.setattr("flowforge.cli.bootstrap._resolve_profile", fake_resolve_profile)
+    monkeypatch.setattr("fastflowtransform.cli.bootstrap._resolve_profile", fake_resolve_profile)
 
     calls = {"run_sql": [], "run_py": []}
 
@@ -157,7 +163,7 @@ def test_run_select_conflicts_with_exclude_drops_invalid_targets(tmp_path, monke
 
         return ex, run_sql, run_py
 
-    monkeypatch.setattr("flowforge.cli.bootstrap._make_executor", fake_make_executor)
+    monkeypatch.setattr("fastflowtransform.cli.bootstrap._make_executor", fake_make_executor)
 
     runner = CliRunner()
     res = runner.invoke(

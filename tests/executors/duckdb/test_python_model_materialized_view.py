@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from flowforge.core import REGISTRY
-from flowforge.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.core import REGISTRY
+from fastflowtransform.executors.duckdb_exec import DuckExecutor
 
 
 @pytest.mark.duckdb
@@ -20,7 +20,7 @@ def test_python_model_materialized_as_view(tmp_path: Path, monkeypatch):
     # Python model (returns a pandas DataFrame), configured as view
     (m / "py_users.ff.py").write_text(
         """
-from flowforge.decorators import model
+from fastflowtransform.decorators import model
 import pandas as pd
 
 @model(name="py_users.ff", deps=["base.ff"])

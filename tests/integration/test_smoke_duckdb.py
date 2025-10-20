@@ -43,21 +43,21 @@ def setup_module(module):
 @pytest.mark.cli
 @pytest.mark.slow
 def test_run_builds_tables(duckdb_seeded, duckdb_project, duckdb_env):
-    run(["flowforge", "run", str(duckdb_project), "--env", "dev"], duckdb_env)
+    run(["fft", "run", str(duckdb_project), "--env", "dev"], duckdb_env)
 
 
 @pytest.mark.duckdb
 @pytest.mark.cli
 @pytest.mark.slow
 def test_batch_tests_green(duckdb_seeded, duckdb_project, duckdb_env):
-    run(["flowforge", "test", str(duckdb_project), "--env", "dev", "--select", "batch"], duckdb_env)
+    run(["fft", "test", str(duckdb_project), "--env", "dev", "--select", "batch"], duckdb_env)
 
 
 @pytest.mark.duckdb
 @pytest.mark.cli
 @pytest.mark.slow
 def test_html_dag_generated():
-    run(["flowforge", "dag", str(PROJECT), "--env", "dev", "--html"])
+    run(["fft", "dag", str(PROJECT), "--env", "dev", "--html"])
     assert (DOCS / "index.html").exists(), "index.html was not created"
 
 
@@ -67,7 +67,7 @@ def test_html_dag_generated():
 def test_duckdb_end_to_end_with_multi_deps(
     duckdb_seeded, duckdb_project, duckdb_env, duckdb_db_path
 ):
-    run(["flowforge", "run", str(duckdb_project), "--env", "dev"], duckdb_env)
+    run(["fft", "run", str(duckdb_project), "--env", "dev"], duckdb_env)
     con = duckdb.connect(str(DB))
     # users (seed) -> users_enriched (python, 1 dep)
     users_rows = con.execute("select count(*) from users").fetchone()

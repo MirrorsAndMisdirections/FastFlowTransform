@@ -1,8 +1,8 @@
-# Contributing to FlowForge
+# Contributing to FastFlowTransform
 
 First off, thanks for taking the time to contribute! 🎉
 
-The following is a set of guidelines for contributing to FlowForge.
+The following is a set of guidelines for contributing to FastFlowTransform.
 
 ---
 
@@ -11,7 +11,7 @@ The following is a set of guidelines for contributing to FlowForge.
 ### Reporting Bugs
 
 * Use GitHub Issues.
-* Include reproduction steps, expected vs actual behavior, logs and version (`flowforge --version`).
+* Include reproduction steps, expected vs actual behavior, logs and version (`fft --version`).
 
 ### Suggesting Features
 
@@ -41,7 +41,7 @@ The following is a set of guidelines for contributing to FlowForge.
 
 ```bash
 # 1) clone
- git clone https://github.com/<org>/<repo>.git && cd flowforge
+ git clone https://github.com/<org>/<repo>.git && cd fastflowtransform
 
 # 2) create venv
  python -m venv .venv && source .venv/bin/activate

@@ -34,7 +34,7 @@ def run(cmd: list[str], env: dict | None = None) -> subprocess.CompletedProcess:
     except subprocess.CalledProcessError as cpe:
         out = cpe.stdout or ""
         pytest.fail(
-            f"\n================= flowforge stdout (exit {cpe.returncode}) =================\n"
+            f"\n============ fastflowtransform stdout (exit {cpe.returncode}) ============\n"
             f"{out.rstrip()}\n"
             f"============================================================================\n",
             pytrace=False,

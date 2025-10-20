@@ -3,10 +3,10 @@ import importlib
 
 from typer.testing import CliRunner
 
-from flowforge.cli import app
+from fastflowtransform.cli import app
 
-cli_bootstrap = importlib.import_module("flowforge.cli.bootstrap")
-cli_run = importlib.import_module("flowforge.cli.run")
+cli_bootstrap = importlib.import_module("fastflowtransform.cli.bootstrap")
+cli_run = importlib.import_module("fastflowtransform.cli.run")
 
 
 def test_verbose_flags_wiring(monkeypatch):

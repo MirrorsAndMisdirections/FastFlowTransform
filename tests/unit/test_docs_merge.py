@@ -2,7 +2,7 @@ from pathlib import Path
 
 import yaml
 
-from flowforge.docs import read_docs_metadata
+from fastflowtransform.docs import read_docs_metadata
 
 
 def _write(p: Path, text: str) -> None:

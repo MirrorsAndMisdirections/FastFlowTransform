@@ -15,13 +15,13 @@ down:
 # 	psql postgresql://postgres:postgres@localhost:5432/ffdb -c "insert into seed_users values (3,'c@gmail.com') on conflict do nothing;"
 
 seed:
-	FF_ENGINE=postgres FF_PG_DSN="$(PG_DSN)" flowforge seed "$(PROJECT)" --env stg
+	FF_ENGINE=postgres FF_PG_DSN="$(PG_DSN)" fft seed "$(PROJECT)" --env stg
 
 run:
-	FF_ENGINE=postgres FF_PG_DSN=$(PG_DSN) flowforge run examples/postgres --env stg
+	FF_ENGINE=postgres FF_PG_DSN=$(PG_DSN) fft run examples/postgres --env stg
 
 dag:
-	FF_ENGINE=postgres FF_PG_DSN=$(PG_DSN) flowforge dag examples/postgres --env stg --html
+	FF_ENGINE=postgres FF_PG_DSN=$(PG_DSN) fft dag examples/postgres --env stg --html
 
 test:
-	FF_ENGINE=postgres FF_PG_DSN=$(PG_DSN) flowforge test examples/postgres --env stg --select batch
+	FF_ENGINE=postgres FF_PG_DSN=$(PG_DSN) fft test examples/postgres --env stg --select batch

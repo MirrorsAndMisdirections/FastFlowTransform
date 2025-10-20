@@ -8,7 +8,7 @@ from tests.common.utils import run
 @pytest.mark.postgres
 def test_ref_and_source_pg(pg_seeded, pg_project, pg_env):
     # gleiche ENV wie beim Seeding → gleiches DSN/Schema
-    run(["flowforge", "run", str(pg_project), "--env", "stg"], pg_env)
+    run(["fft", "run", str(pg_project), "--env", "stg"], pg_env)
 
     eng = create_engine(pg_env["FF_PG_DSN"], future=True)
     schema = pg_env.get("FF_PG_SCHEMA", "public")

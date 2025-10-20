@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from flowforge.errors import ProfileConfigError
-from flowforge.settings import EnvSettings, resolve_profile
+from fastflowtransform.errors import ProfileConfigError
+from fastflowtransform.settings import EnvSettings, resolve_profile
 
 
 def _write_profiles(tmp_path: Path, yaml_text: str) -> None:
