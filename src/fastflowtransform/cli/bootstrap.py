@@ -21,6 +21,7 @@ from fastflowtransform.executors import (
 )
 from fastflowtransform.executors._shims import BigQueryConnShim, SAConnShim
 from fastflowtransform.executors.base import BaseExecutor
+from fastflowtransform.incremental import run_or_dispatch
 from fastflowtransform.settings import (
     EngineType,
     EnvSettings,
@@ -157,14 +158,14 @@ def _make_executor(prof: Profile, jenv: Environment) -> tuple[Any, Callable, Cal
     ex: BaseExecutor
     if prof.engine == "duckdb":
         ex = DuckExecutor(db_path=prof.duckdb.path)
-        return ex, (lambda n: ex.run_sql(n, jenv)), ex.run_python
+        return ex, (lambda n: run_or_dispatch(ex, n, jenv)), ex.run_python
 
     if prof.engine == "postgres":
         if prof.postgres.dsn is None:
             raise RuntimeError("Postgres DSN must be set")
 
         ex = PostgresExecutor(dsn=prof.postgres.dsn, schema=prof.postgres.db_schema)
-        return ex, (lambda n: ex.run_sql(n, jenv)), ex.run_python
+        return ex, (lambda n: run_or_dispatch(ex, n, jenv)), ex.run_python
 
     if prof.engine == "bigquery":
         if prof.bigquery.dataset is None:
@@ -182,14 +183,14 @@ def _make_executor(prof: Profile, jenv: Environment) -> tuple[Any, Callable, Cal
                 dataset=prof.bigquery.dataset,
                 location=prof.bigquery.location,
             )
-        return ex, (lambda n: ex.run_sql(n, jenv)), ex.run_python
+        return ex, (lambda n: run_or_dispatch(ex, n, jenv)), ex.run_python
 
     if prof.engine == "databricks_spark":
         ex = DatabricksSparkExecutor(
             master=prof.databricks_spark.master,
             app_name=prof.databricks_spark.app_name,
         )
-        return ex, (lambda n: ex.run_sql(n, jenv)), ex.run_python
+        return ex, (lambda n: run_or_dispatch(ex, n, jenv)), ex.run_python
 
     if prof.engine == "snowflake_snowpark":
         cfg = {
@@ -203,7 +204,7 @@ def _make_executor(prof: Profile, jenv: Environment) -> tuple[Any, Callable, Cal
         if prof.snowflake_snowpark.role:
             cfg["role"] = prof.snowflake_snowpark.role
         ex = SnowflakeSnowparkExecutor(cfg)
-        return ex, (lambda n: ex.run_sql(n, jenv)), ex.run_python
+        return ex, (lambda n: run_or_dispatch(ex, n, jenv)), ex.run_python
 
     _die(f"Unbekannter Engine-Typ: {getattr(prof, 'engine', None)}", code=1)
     raise AssertionError("unreachable")

@@ -349,3 +349,31 @@ class BaseExecutor[TFrame](ABC):
         Default: no-op.
         """
         return
+
+    # ── Incremental API (MVP) ───────────────────────────────────────────────
+    def exists_relation(self, relation: str) -> bool:  # pragma: no cover - abstract
+        """Returns True if physical relation exists (table/view)."""
+        raise NotImplementedError
+
+    def create_table_as(self, relation: str, select_sql: str) -> None:  # pragma: no cover
+        """CREATE TABLE AS SELECT …"""
+        raise NotImplementedError
+
+    def incremental_insert(self, relation: str, select_sql: str) -> None:  # pragma: no cover
+        """INSERT-only (Append)."""
+        raise NotImplementedError
+
+    def incremental_merge(
+        self, relation: str, select_sql: str, unique_key: list[str]
+    ) -> None:  # pragma: no cover
+        """Best-effort UPSERT; Default fallback via staging delete+insert."""
+        raise NotImplementedError
+
+    def alter_table_sync_schema(
+        self, relation: str, select_sql: str, *, mode: str = "append_new_columns"
+    ) -> None:  # pragma: no cover
+        """
+        Optional: Additive schema synchronisation. 'mode' = append_new_columns|sync_all_columns.
+        Default implementation: No-Op.
+        """
+        return None

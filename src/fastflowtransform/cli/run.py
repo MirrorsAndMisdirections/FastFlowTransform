@@ -22,6 +22,7 @@ from fastflowtransform.fingerprint import (
     fingerprint_sql,
     get_function_source,
 )
+from fastflowtransform.incremental import run_or_dispatch as run_sql_with_incremental
 from fastflowtransform.log_queue import LogQueue
 from fastflowtransform.meta import ensure_meta_table
 from fastflowtransform.run_executor import ScheduleResult, schedule
@@ -81,18 +82,20 @@ class _RunEngine:
     def _get_runner(self) -> tuple[Any, Callable, Callable]:
         if getattr(self.tls, "runner", None) is None:
             ex, run_sql_shared, run_py_shared = self.shared
-            run_sql_fn, run_py_fn = run_sql_shared, run_py_shared
+            run_sql_wrapped, run_py_wrapped = run_sql_shared, run_py_shared
             if self.ctx.profile.engine == "duckdb" and hasattr(ex, "clone"):
                 try:
                     ex = ex.clone()
 
-                    def run_sql_fn(n):
-                        return ex.run_sql(n, self.ctx.jinja_env)
+                    def _run_sql_duckdb(n):
+                        # Planner: intercept incremental materializations
+                        return run_sql_with_incremental(ex, n, self.ctx.jinja_env)
 
-                    run_py_fn = ex.run_python
+                    run_sql_wrapped = _run_sql_duckdb
+                    run_py_wrapped = ex.run_python
                 except Exception:
                     pass
-            self.tls.runner = (ex, run_sql_fn, run_py_fn)
+            self.tls.runner = (ex, run_sql_wrapped, run_py_wrapped)
         return self.tls.runner
 
     def _maybe_fingerprint(self, node: Any, ex: Any) -> str | None:

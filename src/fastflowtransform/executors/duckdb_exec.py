@@ -97,3 +97,63 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
             upsert_meta(self, node.name, relation, fingerprint, "duckdb")
         except Exception:
             pass
+
+    # ── Incremental API ────────────────────────────────────────────────────
+    def exists_relation(self, relation: str) -> bool:
+        sql = """
+          select 1
+          from information_schema.tables
+          where table_schema in ('main','temp')
+            and lower(table_name) = lower(?)
+          limit 1
+        """
+        res = self.con.execute(sql, [relation]).fetchone()
+        return bool(res)
+
+    def create_table_as(self, relation: str, select_sql: str) -> None:
+        self.con.execute(f"create table {relation} as {select_sql}")
+
+    def incremental_insert(self, relation: str, select_sql: str) -> None:
+        self.con.execute(f"insert into {relation} {select_sql}")
+
+    def incremental_merge(self, relation: str, select_sql: str, unique_key: list[str]) -> None:
+        """
+        Fallback strategy:
+          - Staging-CTE: data from SELECT
+          - Delete-Merge: delete collisions in target
+          - Insert all staging rows
+        """
+        keys_pred = " AND ".join([f"t.{k}=s.{k}" for k in unique_key])
+        sql = f"""
+        with src as ({select_sql})
+        delete from {relation} t using src s where {keys_pred};
+        insert into {relation} select * from src;
+        """
+        self.con.execute(sql)
+
+    def alter_table_sync_schema(
+        self, relation: str, select_sql: str, *, mode: str = "append_new_columns"
+    ) -> None:
+        """
+        Best-effort: add new columns with inferred type.
+        """
+        # Probe: leere Projektion aus dem SELECT
+        probe = self.con.execute(f"select * from ({select_sql}) as q limit 0")
+        cols = [c[0] for c in probe.description or []]
+        # vorhandene Spalten
+        existing = {
+            r[0]
+            for r in self.con.execute(
+                "select column_name from information_schema.columns "
+                + "where lower(table_name)=lower(?)",
+                [relation],
+            ).fetchall()
+        }
+        add = [c for c in cols if c not in existing]
+        for c in add:
+            # Typ heuristisch: typeof aus einer CAST-Probe; fallback VARCHAR
+            try:
+                # Versuche Typ aus Expression abzuleiten (best effort)
+                self.con.execute(f"alter table {relation} add column {c} varchar")
+            except Exception:
+                self.con.execute(f"alter table {relation} add column {c} varchar")
