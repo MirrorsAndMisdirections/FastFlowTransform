@@ -123,12 +123,52 @@ def _pretty_sql(sql: Any) -> str:
     return repr(sql)
 
 
+def _sql_list(values: list) -> str:
+    def lit(v):
+        if v is None:
+            return "NULL"
+        if isinstance(v, (int, float)):
+            return str(v)
+        s = str(v).replace("'", "''")
+        return f"'{s}'"
+
+    return ", ".join(lit(v) for v in values)
+
+
+def accepted_values(
+    con: Any, table: str, column: str, *, values: list, where: str | None = None
+) -> bool:
+    """
+    Checks that all non-NULL values of table.column are in the set 'values'.
+    """
+    in_list = _sql_list(values or [])
+    sql = f"select count(*) from {table} where {column} is not null and {column} not in ({in_list})"
+    if where:
+        sql += f" and ({where})"
+    n = _scalar(con, sql)
+    if int(n or 0) > 0:
+        # Beispielwerte zeigen
+        sample_sql = (
+            f"select distinct {column} "
+            f"from {table} "
+            f"where {column} is not null and {column} not in ({in_list})"
+        )
+        if where:
+            sample_sql += f" and ({where})"
+        sample_sql += " limit 5"
+        rows = [r[0] for r in _exec(con, sample_sql).fetchall()]
+        raise TestFailure(f"{table}.{column} has {n} value(s) outside accepted set; e.g. {rows}")
+    return True
+
+
 # ===== Tests ==============================================================
 
 
 class TestFailure(Exception):
-    """Error class for data-quality checks."""
+    """Raised when a data-quality check fails."""
 
+    # Prevent pytest from collecting this as a test when imported into a test module.
+    __test__ = False
     pass
 
 

@@ -11,18 +11,18 @@ import typer
 import yaml
 
 from fastflowtransform import testing
-from fastflowtransform.core import REGISTRY
-from fastflowtransform.dag import topo_sort
-
-from .bootstrap import _get_test_con, _prepare_context
-from .options import (
+from fastflowtransform.cli.bootstrap import _get_test_con, _prepare_context
+from fastflowtransform.cli.options import (
     EngineOpt,
     EnvOpt,
     ProjectArg,
     SelectOpt,
     VarsOpt,
 )
-from .selectors import _compile_selector
+from fastflowtransform.cli.selectors import _compile_selector
+from fastflowtransform.core import REGISTRY
+from fastflowtransform.dag import topo_sort
+from fastflowtransform.schema_loader import Severity, TestSpec, load_schema_tests
 
 
 @dataclass
@@ -33,6 +33,7 @@ class DQResult:
     ok: bool
     msg: str | None
     ms: int
+    severity: Severity = "error"
 
 
 def _execute_models(
@@ -85,47 +86,75 @@ def _is_legacy_test_token(tokens: list[str]) -> bool:
 
 
 def _apply_legacy_tag_filter(
-    tests: list[dict], tokens: list[str], *, legacy_token: bool
-) -> list[dict]:
+    tests: list[Any], tokens: list[str], *, legacy_token: bool
+) -> list[Any]:
     if not legacy_token:
         return tests
     legacy_tag = tokens[0]
 
-    def has_tag(t: dict) -> bool:
-        tags = t.get("tags") or []
-        return (legacy_tag in tags) if isinstance(tags, list) else (legacy_tag == tags)
+    def has_tag(t: Any) -> bool:
+        # Dict (altes Format)
+        if isinstance(t, dict):
+            tags = t.get("tags") or []
+            return (legacy_tag in tags) if isinstance(tags, list) else (legacy_tag == tags)
+        # TestSpec (neues Schema)
+        if isinstance(t, TestSpec):
+            return legacy_tag in (t.tags or [])
+        return False
 
     return [t for t in tests if has_tag(t)]
 
 
-def _run_dq_tests(con: Any, tests: Iterable[dict]) -> list[DQResult]:
+def _run_dq_tests(con: Any, tests: Iterable[Any]) -> list[DQResult]:
     results: list[DQResult] = []
     for t in tests:
-        kind = t["type"]
-        table: str | None = None
-        col: str | None = None
-        if kind.startswith("reconcile_"):
-            if "left" in t and "right" in t:
-                lt = (t.get("left") or {}).get("table")
-                rt = (t.get("right") or {}).get("table")
-                table = f"{lt} ⇔ {rt}"
-            elif "source" in t and "target" in t:
-                st = (t.get("source") or {}).get("table")
-                tt = (t.get("target") or {}).get("table")
-                table = f"{st} ⇒ {tt}"
-            else:
-                table = "<reconcile>"
+        severity: Severity
+        if isinstance(t, TestSpec):
+            kind = t.type
+            col = t.column
+            severity = t.severity
+            params = t.params or {}
+            display_table = t.table
+            table_for_exec = t.table
         else:
-            table = t.get("table")
-            if not isinstance(table, str) or not table:
-                raise typer.BadParameter("Missing or invalid 'table' in test config")
+            kind = t["type"]
+            _sev = str(t.get("severity", "error")).lower()
+            severity = "warn" if _sev == "warn" else "error"
+            params = t
             col = t.get("column")
+            if kind.startswith("reconcile_"):
+                if isinstance(t.get("left"), dict) and isinstance(t.get("right"), dict):
+                    lt = (t.get("left") or {}).get("table")
+                    rt = (t.get("right") or {}).get("table")
+                    display_table = f"{lt} ⇔ {rt}"
+                elif isinstance(t.get("source"), dict) and isinstance(t.get("target"), dict):
+                    st = (t.get("source") or {}).get("table")
+                    tt = (t.get("target") or {}).get("table")
+                    display_table = f"{st} ⇒ {tt}"
+                else:
+                    display_table = "<reconcile>"
+                table_for_exec = t.get("table")
+            else:
+                table_for_exec = t.get("table")
+                if not isinstance(table_for_exec, str) or not table_for_exec:
+                    raise typer.BadParameter("Missing or invalid 'table' in test config")
+                display_table = table_for_exec
 
         t0 = time.perf_counter()
-        ok, msg = _exec_test_kind(con, kind, t, table, col)
+        ok, msg = _exec_test_kind(con, kind, params, table_for_exec, col)
         ms = int((time.perf_counter() - t0) * 1000)
 
-        results.append(DQResult(kind=kind, table=table, column=col, ok=ok, msg=msg, ms=ms))
+        results.append(
+            DQResult(
+                kind=kind,
+                table=str(display_table),
+                column=col,
+                ok=ok,
+                msg=msg,
+                ms=ms,
+                severity=severity,
+            )
+        )
     return results
 
 
@@ -139,6 +168,9 @@ def _exec_test_kind(con: Any, kind: str, t: dict, table: Any, col: Any) -> tuple
             con, table, t.get("min", 1), t.get("max")
         ),
         "freshness": lambda: testing.freshness(con, table, col, t["max_delay_minutes"]),
+        "accepted_values": lambda: testing.accepted_values(
+            con, table, col, values=t.get("values", []), where=t.get("where")
+        ),
         "reconcile_equal": lambda: testing.reconcile_equal(
             con,
             t["left"],
@@ -183,12 +215,13 @@ def _exec_test_kind(con: Any, kind: str, t: dict, table: Any, col: Any) -> tuple
 
 def _print_summary(results: list[DQResult]) -> None:
     passed = sum(1 for r in results if r.ok)
-    failed = len(results) - passed
+    failed = sum((not r.ok) and (r.severity != "warn") for r in results)
+    warned = sum((not r.ok) and (r.severity == "warn") for r in results)
 
     typer.echo("\nData Quality Summary")
     typer.echo("────────────────────")
     for r in results:
-        mark = "✅" if r.ok else "❌"
+        mark = "✅" if r.ok else "❕" if r.severity == "warn" else "❌"
         scope = f"{r.table}" + (f".{r.column}" if r.column else "")
         typer.echo(f"{mark} {r.kind:<18} {scope:<40} ({r.ms}ms)")
         if not r.ok and r.msg:
@@ -197,6 +230,8 @@ def _print_summary(results: list[DQResult]) -> None:
     typer.echo("\nTotals")
     typer.echo("──────")
     typer.echo(f"✓ passed: {passed}")
+    if warned:
+        typer.echo(f"! warned: {warned}")
     typer.echo(f"✗ failed: {failed}")
 
 
@@ -219,7 +254,11 @@ def test(
     model_pred = (lambda _n: True) if legacy_tag_only else pred
     _run_models(model_pred, run_sql, run_py)
 
-    tests = _load_tests(ctx.project)
+    # 1) project.yml tests
+    tests: list[Any] = _load_tests(ctx.project)
+    # 2) schema YAML tests
+    tests.extend(load_schema_tests(ctx.project))
+    # 3) optional legacy tagfilter (e.g., "batch")
     tests = _apply_legacy_tag_filter(tests, tokens, legacy_token=legacy_tag_only)
     if not tests:
         typer.secho("No tests configured.", fg="bright_black")
@@ -228,7 +267,8 @@ def test(
     results = _run_dq_tests(con, tests)
     _print_summary(results)
 
-    failed = sum(not r.ok for r in results)
+    # Exit code: count only ERROR fails
+    failed = sum((not r.ok) and (r.severity != "warn") for r in results)
     raise typer.Exit(code=2 if failed > 0 else 0)
 
 
