@@ -1,4 +1,4 @@
-# 🧭 FastFlowTransform – Technical Developer Documentation (v0.1)
+# 🧭 FastFlowTransform – Technical Developer Documentation (v0.4)
 
 > Status: latest updates from your context dump. This document consolidates project structure, architecture, core APIs, error handling, CLI, examples, and roadmap into a print/git-friendly Markdown.
 >

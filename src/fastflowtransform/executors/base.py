@@ -20,6 +20,27 @@ from fastflowtransform.validation import validate_required_columns
 TFrame = TypeVar("TFrame")
 
 
+class _ThisProxy:
+    """
+    Jinja-kompatibler Proxy für {{ this }}:
+    - Als String verwendbar ({{ this }}) -> physischer Relationsname.
+    - Attribute verfügbar ({{ this.name }}, {{ this.materialized }}, ...)
+    """
+
+    def __init__(self, relation: str, materialized: str, schema: str | None, database: str | None):
+        self.name = relation  # Back-compat: {{ this.name }}
+        self.relation = relation  # Alias, falls jemand {{ this.relation }} nutzt
+        self.materialized = materialized
+        self.schema = schema
+        self.database = database
+
+    def __str__(self) -> str:
+        return self.name
+
+    def __repr__(self) -> str:
+        return f"_ThisProxy(name={self.name!r})"
+
+
 class BaseExecutor[TFrame](ABC):
     """
     Shared workflow for SQL rendering and Python models.
@@ -90,14 +111,14 @@ class BaseExecutor[TFrame](ABC):
             return identifier
 
         _RENDER_CFG.set({})
-        # expose 'this' to the template
-        this_obj = {
-            "name": relation_for(node.name),
-            "materialized": (getattr(node, "meta", {}) or {}).get("materialized", "table"),
-            # best-effort: these are engine-specific and may be None
-            "schema": getattr(self, "schema", None) or getattr(self, "dataset", None),
-            "database": getattr(self, "database", None) or getattr(self, "project", None),
-        }
+
+        # expose 'this' to the template: Proxy-Objekt, das wie String wirkt
+        this_obj = _ThisProxy(
+            relation_for(node.name),
+            (getattr(node, "meta", {}) or {}).get("materialized", "table"),
+            getattr(self, "schema", None) or getattr(self, "dataset", None),
+            getattr(self, "database", None) or getattr(self, "project", None),
+        )
 
         sql = tmpl.render(
             ref=ref_resolver or _default_ref,
@@ -177,6 +198,12 @@ class BaseExecutor[TFrame](ABC):
         sql = tmpl.render(
             ref=lambda n: self._resolve_ref(n, env),
             source=self._resolve_source,
+            this=_ThisProxy(
+                relation_for(node.name),
+                (getattr(node, "meta", {}) or {}).get("materialized", "table"),
+                getattr(self, "schema", None) or getattr(self, "dataset", None),
+                getattr(self, "database", None) or getattr(self, "project", None),
+            ),
         )
         sql = self._strip_leading_config(sql).strip()
         body = self._first_select_body(sql).rstrip(" ;\n\t")
