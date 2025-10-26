@@ -11,7 +11,7 @@ import typer
 import yaml
 
 from fastflowtransform import testing
-from fastflowtransform.cli.bootstrap import _get_test_con, _prepare_context
+from fastflowtransform.cli.bootstrap import _ensure_logging, _get_test_con, _prepare_context
 from fastflowtransform.cli.options import (
     EngineOpt,
     EnvOpt,
@@ -296,6 +296,7 @@ def test(
     vars: VarsOpt = None,
     select: SelectOpt = None,
 ) -> None:
+    _ensure_logging()
     ctx = _prepare_context(project, env_name, engine, vars)
     tokens, pred = _compile_selector(select)
     has_model_matches = any(pred(node) for node in REGISTRY.nodes.values())

@@ -8,28 +8,21 @@ import traceback
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 import typer
 
-from fastflowtransform.cache import FingerprintCache, can_skip_node
-from fastflowtransform.core import REGISTRY, relation_for
-from fastflowtransform.dag import levels as dag_levels
-from fastflowtransform.fingerprint import (
-    EnvCtx,
-    build_env_ctx,
-    fingerprint_py,
-    fingerprint_sql,
-    get_function_source,
+from fastflowtransform.artifacts import (
+    RunNodeResult,
+    write_catalog,
+    write_manifest,
+    write_run_results,
 )
-from fastflowtransform.incremental import run_or_dispatch as run_sql_with_incremental
-from fastflowtransform.log_queue import LogQueue
-from fastflowtransform.meta import ensure_meta_table
-from fastflowtransform.run_executor import ScheduleResult, schedule
-
-from .bootstrap import _prepare_context
-from .logging_utils import LOG
-from .options import (
+from fastflowtransform.cache import FingerprintCache, can_skip_node
+from fastflowtransform.cli.bootstrap import _ensure_logging, _prepare_context
+from fastflowtransform.cli.logging_utils import LOG
+from fastflowtransform.cli.options import (
     CacheMode,
     CacheOpt,
     EngineOpt,
@@ -44,6 +37,20 @@ from .options import (
     SelectOpt,
     VarsOpt,
 )
+from fastflowtransform.core import REGISTRY, relation_for
+from fastflowtransform.dag import levels as dag_levels
+from fastflowtransform.fingerprint import (
+    EnvCtx,
+    build_env_ctx,
+    fingerprint_py,
+    fingerprint_sql,
+    get_function_source,
+)
+from fastflowtransform.incremental import run_or_dispatch as run_sql_with_incremental
+from fastflowtransform.log_queue import LogQueue
+from fastflowtransform.meta import ensure_meta_table
+from fastflowtransform.run_executor import ScheduleResult, schedule
+
 from .selectors import _compile_selector, _parse_select, _selected_subgraph_names
 
 
@@ -245,6 +252,7 @@ def run(
     rebuild: RebuildAllOpt = False,
     rebuild_only: RebuildOnlyOpt = None,
 ) -> None:
+    _ensure_logging()
     ctx = _prepare_context(project, env_name, engine, vars)
     cache_mode = CacheMode.OFF if no_cache else cache
 
@@ -305,6 +313,7 @@ def run(
         }
         return mapping.get(e, e.upper()[:4])
 
+    started_at = datetime.now(UTC).isoformat(timespec="seconds")
     result: ScheduleResult = schedule(
         lvls,
         jobs=jobs,
@@ -316,6 +325,44 @@ def run(
         engine_abbr=_abbr(ctx.profile.engine),
         name_width=28,
     )
+    finished_at = datetime.now(UTC).isoformat(timespec="seconds")
+
+    # --- Artifacts ---
+    write_manifest(ctx.project)
+    # Map ScheduleResult (per_node_s + failed) -> RunNodeResult
+    node_results: list[RunNodeResult] = []
+    failed = result.failed or {}
+    # Alle bekannten Nodes: aus per_node_s und failed vereinigen
+    all_names = set(result.per_node_s.keys()) | set(failed.keys())
+    # Deterministische Reihenfolge
+    for name in sorted(all_names):
+        dur_s = float(result.per_node_s.get(name, 0.0))
+        status = "error" if name in failed else "success"
+        msg = str(failed.get(name)) if name in failed else None
+        # MVP: keine per-Node Start/Ende vorhanden -> setze auf Run-Zeiten
+        node_results.append(
+            RunNodeResult(
+                name=name,
+                status=status,
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_ms=int(dur_s * 1000),
+                message=msg,
+            )
+        )
+    write_run_results(
+        ctx.project,
+        started_at=started_at,
+        finished_at=finished_at,
+        node_results=node_results,
+    )
+    # Attempt catalog (best-effort)
+    try:
+        execu, _, _ = ctx.make_executor()
+        write_catalog(ctx.project, execu)
+    except Exception:
+        pass
+
     for line in logq.drain():
         typer.echo(line)
     if result.failed:

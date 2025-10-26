@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
+import sys
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn, cast
@@ -9,6 +12,7 @@ import typer
 import yaml
 from jinja2 import Environment
 
+from fastflowtransform.cli.logging_utils import LOG, _setup_logging
 from fastflowtransform.core import REGISTRY
 from fastflowtransform.errors import DependencyNotFoundError, ProfileConfigError
 from fastflowtransform.executors import (
@@ -208,3 +212,41 @@ def _make_executor(prof: Profile, jenv: Environment) -> tuple[Any, Callable, Cal
 
     _die(f"Unbekannter Engine-Typ: {getattr(prof, 'engine', None)}", code=1)
     raise AssertionError("unreachable")
+
+
+def _ensure_logging() -> None:
+    """Ensure console logging to STDOUT for tests calling commands directly.
+    Configures root and fastflowtransform.* loggers if they lack handlers.
+    """
+    # If the CLI callback ran, handlers may already exist — then leave them.
+    root = logging.getLogger()
+    if not root.handlers:
+        h = logging.StreamHandler(sys.stdout)
+        fmt = logging.Formatter("%(message)s")
+        h.setFormatter(fmt)
+        root.addHandler(h)
+        root.setLevel(logging.INFO)
+    # Ensure our package logger has a StreamHandler to stdout as well
+    pkg = logging.getLogger("fastflowtransform")
+    if not pkg.handlers:
+        h2 = logging.StreamHandler(sys.stdout)
+        h2.setFormatter(logging.Formatter("%(message)s"))
+        pkg.addHandler(h2)
+        pkg.setLevel(logging.INFO)
+        pkg.propagate = False  # write once to stdout, avoid double prints
+    # Make sure our canonical LOG uses stdout too
+    if not LOG.handlers:
+        _setup_logging(verbose=0, quiet=0)
+    for handler in list(LOG.handlers):
+        # Narrow via isinstance: handler is StreamHandler inside this block
+        if (
+            isinstance(handler, logging.StreamHandler)
+            # Prefer typed API instead of direct attribute assignment
+            and getattr(handler, "stream", None) is not sys.stdout
+        ):
+            try:
+                handler.setStream(sys.stdout)
+            except Exception:
+                # Fallback if setStream is missing/unexpected
+                with suppress(Exception):
+                    handler.stream = sys.stdout
