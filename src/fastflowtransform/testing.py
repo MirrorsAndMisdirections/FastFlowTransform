@@ -175,24 +175,23 @@ class TestFailure(Exception):
 def _wrap_db_error(
     check: str, table: str, column: str | None, sql: str, err: Exception
 ) -> TestFailure:
-    msg = [f"[{check}] Fehler in {table}{('.' + column) if column else ''}"]
-    msg.append(f"DB-Fehler: {type(err).__name__}: {err}")
+    msg = [f"[{check}] Error in {table}{('.' + column) if column else ''}"]
+    msg.append(f"DB-Error: {type(err).__name__}: {err}")
     # Common Postgres/SQLAlchemy hints
     txt = str(err).lower()
     if "undefinedcolumn" in txt and "having" in sql.lower():
-        msg.append(
-            "Hinweis: Postgres erlaubt Alias-Nutzung im HAVING nicht. "
-            "Lösung: Alias außerhalb verwenden (Subquery) oder die Bedingung "
-            "in WHERE der äußeren Abfrage prüfen."
-        )
+        msg.append("Note: Postgres does not permit alias usage in HAVING statement.")
     if "f405" in txt or "textual sql expression" in txt:
-        msg.append("Hinweis: SQLAlchemy 2.0 verlangt text('...') für rohe SQL-Strings.")
+        msg.append("Note: SQLAlchemy 2.0 requires text('...') for raw SQL stings.")
     msg.append("SQL:\n" + sql.strip())
     return TestFailure("\n".join(msg))
 
 
-def not_null(con: Any, table: str, column: str) -> None:
+def not_null(con: Any, table: str, column: str, where: str | None = None) -> None:
+    """Fails if any non-filtered row has NULL in `column`."""
     sql = f"select count(*) from {table} where {column} is null"
+    if where:
+        sql += f" and ({where})"
     try:
         c = _scalar(con, sql)
     except Exception as e:
@@ -200,24 +199,24 @@ def not_null(con: Any, table: str, column: str) -> None:
     c = _scalar(con, sql)
     _dprint("not_null:", sql, "=>", c)
     if c and c != 0:
-        _fail("not_null", table, column, sql, f"hat {c} NULL-Werte")
+        _fail("not_null", table, column, sql, f"has {c} NULL-values")
 
 
-def unique(con: Any, table: str, column: str) -> None:
+def unique(con: Any, table: str, column: str, where: str | None = None) -> None:
+    """Fails if any duplicate appears in `column` within the (optionally) filtered set."""
     sql = (
-        "select count(*) from ("
-        f"  select {column}, count(*) as c"
-        f"  from {table}"
-        "  group by 1"
-        ") t where c > 1"
+        "select count(*) from (select {col} as v, "
+        "count(*) as c from {tbl}{w} group by 1 having count(*) > 1) as q"
     )
+    w = f" where ({where})" if where else ""
+    sql = sql.format(col=column, tbl=table, w=w)
     try:
         c = _scalar(con, sql)
     except Exception as e:
         raise _wrap_db_error("unique", table, column, sql, e) from e
     _dprint("unique:", sql, "=>", c)
     if c and c != 0:
-        _fail("unique", table, column, sql, f"enthält {c} Duplikate")
+        _fail("unique", table, column, sql, f"contains {c} duplicates")
 
 
 def greater_equal(con: Any, table: str, column: str, threshold: float = 0.0) -> None:
@@ -249,7 +248,7 @@ def row_count_between(con: Any, table: str, min_rows: int = 1, max_rows: int | N
 def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None:
     # Straightforward for DuckDB/PG; BQ would need a TIMESTAMPDIFF variant.
     sql = f"select date_part('epoch', now() - max({ts_col})) / 60.0 as delay_min from {table}"
-    # Note: DuckDB has different date_diff signatures; for DuckDB-only you could use:
+    # Note: DuckDB has different date_diff signatures; for DuckDB-only might use:
     # sql_duckdb =
     # f\"\"\"select date_diff('minute', max({ts_col}), now()) as delay_min from {table}\"\"\"
     delay = _scalar(con, sql)

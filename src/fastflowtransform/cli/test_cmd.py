@@ -23,6 +23,7 @@ from fastflowtransform.cli.selectors import _compile_selector
 from fastflowtransform.core import REGISTRY
 from fastflowtransform.dag import topo_sort
 from fastflowtransform.schema_loader import Severity, TestSpec, load_schema_tests
+from fastflowtransform.test_registry import TESTS
 
 
 @dataclass
@@ -34,6 +35,8 @@ class DQResult:
     msg: str | None
     ms: int
     severity: Severity = "error"
+    param_str: str = ""
+    example_sql: str | None = None
 
 
 def _execute_models(
@@ -113,14 +116,14 @@ def _run_dq_tests(con: Any, tests: Iterable[Any]) -> list[DQResult]:
             kind = t.type
             col = t.column
             severity = t.severity
-            params = t.params or {}
+            params: dict[str, Any] = t.params or {}
             display_table = t.table
             table_for_exec = t.table
         else:
             kind = t["type"]
             _sev = str(t.get("severity", "error")).lower()
             severity = "warn" if _sev == "warn" else "error"
-            params = t
+            params = dict(t)
             col = t.get("column")
             if kind.startswith("reconcile_"):
                 if isinstance(t.get("left"), dict) and isinstance(t.get("right"), dict):
@@ -140,9 +143,17 @@ def _run_dq_tests(con: Any, tests: Iterable[Any]) -> list[DQResult]:
                     raise typer.BadParameter("Missing or invalid 'table' in test config")
                 display_table = table_for_exec
 
+        # Dispatch via registry if available; otherwise fallback to legacy map
         t0 = time.perf_counter()
-        ok, msg = _exec_test_kind(con, kind, params, table_for_exec, col)
+        if kind in TESTS:
+            ok, msg, example = TESTS[kind](con, table_for_exec, col, params)
+        else:
+            ok, msg = _exec_test_kind(con, kind, params, table_for_exec, col)
+            example = None
         ms = int((time.perf_counter() - t0) * 1000)
+
+        # Build short parameter display for the summary line
+        param_str = _format_params_for_summary(kind, params)
 
         results.append(
             DQResult(
@@ -153,21 +164,31 @@ def _run_dq_tests(con: Any, tests: Iterable[Any]) -> list[DQResult]:
                 msg=msg,
                 ms=ms,
                 severity=severity,
+                param_str=param_str,
+                example_sql=example,
             )
         )
     return results
 
 
 def _exec_test_kind(con: Any, kind: str, t: dict, table: Any, col: Any) -> tuple[bool, str | None]:
+    # Guard for column-required tests in legacy path
+    def _need_col() -> str:
+        if not isinstance(col, str) or not col:
+            raise typer.BadParameter(f"Test '{kind}' requires a non-empty 'column' parameter")
+        return col
+
     try_map = {
-        "not_null": lambda: testing.not_null(con, table, col),
-        "unique": lambda: testing.unique(con, table, col),
-        "greater_equal": lambda: testing.greater_equal(con, table, col, t.get("threshold", 0)),
-        "non_negative_sum": lambda: testing.non_negative_sum(con, table, col),
+        "not_null": lambda: testing.not_null(con, table, _need_col()),
+        "unique": lambda: testing.unique(con, table, _need_col()),
+        "greater_equal": lambda: testing.greater_equal(
+            con, table, _need_col(), t.get("threshold", 0)
+        ),
+        "non_negative_sum": lambda: testing.non_negative_sum(con, table, _need_col()),
         "row_count_between": lambda: testing.row_count_between(
             con, table, t.get("min", 1), t.get("max")
         ),
-        "freshness": lambda: testing.freshness(con, table, col, t["max_delay_minutes"]),
+        "freshness": lambda: testing.freshness(con, table, _need_col(), t["max_delay_minutes"]),
         "accepted_values": lambda: testing.accepted_values(
             con, table, col, values=t.get("values", []), where=t.get("where")
         ),
@@ -223,9 +244,14 @@ def _print_summary(results: list[DQResult]) -> None:
     for r in results:
         mark = "✅" if r.ok else "❕" if r.severity == "warn" else "❌"
         scope = f"{r.table}" + (f".{r.column}" if r.column else "")
-        typer.echo(f"{mark} {r.kind:<18} {scope:<40} ({r.ms}ms)")
+        kind_with_params = f"{r.kind}"
+        if r.param_str:
+            kind_with_params += f" {r.param_str}"
+        typer.echo(f"{mark} {kind_with_params:<28} {scope:<40} ({r.ms}ms)")
         if not r.ok and r.msg:
             typer.echo(f"   ↳ {r.msg}")
+        if not r.ok and r.example_sql:
+            typer.echo(f"   ↳ e.g. SQL: {r.example_sql}")
 
     typer.echo("\nTotals")
     typer.echo("──────")
@@ -233,6 +259,34 @@ def _print_summary(results: list[DQResult]) -> None:
     if warned:
         typer.echo(f"! warned: {warned}")
     typer.echo(f"✗ failed: {failed}")
+
+
+def _format_params_for_summary(kind: str, params: dict[str, Any]) -> str:
+    """Format a short, readable parameter snippet for the summary line."""
+    if not params:
+        return ""
+    # Common keys first for stable display
+    keys = []
+    if "column" in params:
+        keys.append("column")
+    if "values" in params:
+        keys.append("values")
+    if "where" in params:
+        keys.append("where")
+    # Add remaining keys deterministically
+    for k in sorted(params.keys()):
+        if k not in keys and k not in ("type", "table", "severity", "tags"):
+            keys.append(k)
+    parts: list[str] = []
+    for k in keys:
+        v = params.get(k)
+        preview_len = 4
+        if k == "values" and isinstance(v, list):
+            preview = v if len(v) <= preview_len else [*v[:3], "…"]
+            parts.append(f"values={preview}")
+        elif v is not None:
+            parts.append(f"{k}={v}")
+    return "(" + ", ".join(parts) + ")" if parts else ""
 
 
 def test(
