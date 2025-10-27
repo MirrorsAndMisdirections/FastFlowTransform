@@ -1,1 +1,179 @@
-{"metadata":{"generated_at":"2025-10-26T21:06:47+00:00","tool":"fastflowtransform"},"relations":{"ephemeral_ids":{"columns":[]},"mart_orders_enriched":{"columns":[{"dtype":"BIGINT","name":"order_id","nullable":true},{"dtype":"BIGINT","name":"user_id","nullable":true},{"dtype":"DOUBLE","name":"amount","nullable":true},{"dtype":"BIGINT","name":"id","nullable":true},{"dtype":"VARCHAR","name":"email","nullable":true},{"dtype":"TIMESTAMP","name":"signup_ts","nullable":true},{"dtype":"BOOLEAN","name":"is_gmail","nullable":true},{"dtype":"BOOLEAN","name":"valid_amt","nullable":true}]},"mart_users":{"columns":[{"dtype":"BIGINT","name":"id","nullable":true},{"dtype":"VARCHAR","name":"email","nullable":true},{"dtype":"BOOLEAN","name":"is_gmail","nullable":true},{"dtype":"VARCHAR","name":"email_domain","nullable":true}]},"orders":{"columns":[{"dtype":"BIGINT","name":"order_id","nullable":true},{"dtype":"BIGINT","name":"user_id","nullable":true},{"dtype":"DOUBLE","name":"amount","nullable":true}]},"users":{"columns":[{"dtype":"BIGINT","name":"id","nullable":true},{"dtype":"VARCHAR","name":"email","nullable":true},{"dtype":"DATE","name":"signup_ts","nullable":true}]},"users_enriched":{"columns":[{"dtype":"BIGINT","name":"id","nullable":true},{"dtype":"VARCHAR","name":"email","nullable":true},{"dtype":"TIMESTAMP","name":"signup_ts","nullable":true},{"dtype":"BOOLEAN","name":"is_gmail","nullable":true}]},"v_users":{"columns":[{"dtype":"BIGINT","name":"id","nullable":true},{"dtype":"VARCHAR","name":"email","nullable":true},{"dtype":"VARCHAR","name":"email_upper","nullable":true}]},"v_users_enriched":{"columns":[{"dtype":"BIGINT","name":"id","nullable":true},{"dtype":"VARCHAR","name":"email","nullable":true},{"dtype":"BOOLEAN","name":"is_gmail","nullable":true}]}}}
+{
+  "metadata": {
+    "generated_at": "2025-10-27T16:30:48+00:00",
+    "tool": "fastflowtransform"
+  },
+  "relations": {
+    "ephemeral_ids": {
+      "columns": []
+    },
+    "mart_orders_enriched": {
+      "columns": [
+        {
+          "dtype": "BIGINT",
+          "name": "order_id",
+          "nullable": true
+        },
+        {
+          "dtype": "BIGINT",
+          "name": "user_id",
+          "nullable": true
+        },
+        {
+          "dtype": "DOUBLE",
+          "name": "amount",
+          "nullable": true
+        },
+        {
+          "dtype": "BIGINT",
+          "name": "id",
+          "nullable": true
+        },
+        {
+          "dtype": "VARCHAR",
+          "name": "email",
+          "nullable": true
+        },
+        {
+          "dtype": "TIMESTAMP",
+          "name": "signup_ts",
+          "nullable": true
+        },
+        {
+          "dtype": "BOOLEAN",
+          "name": "is_gmail",
+          "nullable": true
+        },
+        {
+          "dtype": "BOOLEAN",
+          "name": "valid_amt",
+          "nullable": true
+        }
+      ]
+    },
+    "mart_users": {
+      "columns": [
+        {
+          "dtype": "BIGINT",
+          "name": "id",
+          "nullable": true
+        },
+        {
+          "dtype": "VARCHAR",
+          "name": "email",
+          "nullable": true
+        },
+        {
+          "dtype": "BOOLEAN",
+          "name": "is_gmail",
+          "nullable": true
+        },
+        {
+          "dtype": "VARCHAR",
+          "name": "email_domain",
+          "nullable": true
+        }
+      ]
+    },
+    "orders": {
+      "columns": [
+        {
+          "dtype": "BIGINT",
+          "name": "order_id",
+          "nullable": true
+        },
+        {
+          "dtype": "BIGINT",
+          "name": "user_id",
+          "nullable": true
+        },
+        {
+          "dtype": "DOUBLE",
+          "name": "amount",
+          "nullable": true
+        }
+      ]
+    },
+    "users": {
+      "columns": [
+        {
+          "dtype": "BIGINT",
+          "name": "id",
+          "nullable": true
+        },
+        {
+          "dtype": "VARCHAR",
+          "name": "email",
+          "nullable": true
+        },
+        {
+          "dtype": "DATE",
+          "name": "signup_ts",
+          "nullable": true
+        }
+      ]
+    },
+    "users_enriched": {
+      "columns": [
+        {
+          "dtype": "BIGINT",
+          "name": "id",
+          "nullable": true
+        },
+        {
+          "dtype": "VARCHAR",
+          "name": "email",
+          "nullable": true
+        },
+        {
+          "dtype": "TIMESTAMP",
+          "name": "signup_ts",
+          "nullable": true
+        },
+        {
+          "dtype": "BOOLEAN",
+          "name": "is_gmail",
+          "nullable": true
+        }
+      ]
+    },
+    "v_users": {
+      "columns": [
+        {
+          "dtype": "BIGINT",
+          "name": "id",
+          "nullable": true
+        },
+        {
+          "dtype": "VARCHAR",
+          "name": "email",
+          "nullable": true
+        },
+        {
+          "dtype": "VARCHAR",
+          "name": "email_upper",
+          "nullable": true
+        }
+      ]
+    },
+    "v_users_enriched": {
+      "columns": [
+        {
+          "dtype": "BIGINT",
+          "name": "id",
+          "nullable": true
+        },
+        {
+          "dtype": "VARCHAR",
+          "name": "email",
+          "nullable": true
+        },
+        {
+          "dtype": "BOOLEAN",
+          "name": "is_gmail",
+          "nullable": true
+        }
+      ]
+    }
+  }
+}

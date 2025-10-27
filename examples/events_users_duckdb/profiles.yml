@@ -1,0 +1,10 @@
+dev:
+  engine: duckdb
+  duckdb:
+    path: .local/demo.duckdb
+
+stg:
+  engine: postgres
+  postgres:
+    dsn: postgresql+psycopg://postgres:postgres@localhost:5432/ffdb
+    db_schema: public

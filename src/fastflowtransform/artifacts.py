@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,7 +28,8 @@ def _rel(p: Path, base: Path) -> str:
 
 
 def _rel_safe(p_like: Any, base: Path) -> str:
-    """Best-effort relative path rendering.
+    """
+    Best-effort relative path rendering.
     Accepts None/str/Path; returns empty string on None or conversion failure.
     """
     if p_like is None:
@@ -50,14 +52,17 @@ def _iso_now() -> str:
 
 
 def _json_dump(path: Path, obj: Any) -> None:
-    """Write JSON deterministically (sorted keys, compact separators + trailing newline).
-    Ensures the parent directory exists before writing.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
+    Write JSON deterministically (sorted keys) with a trailing newline.
+    Pretty-print by default (indent=2). Set FFT_ARTIFACTS_PRETTY=0 to use compact form.
+    """
+    pretty_env = os.getenv("FFT_ARTIFACTS_PRETTY", "1").lower()
+    pretty = pretty_env not in {"0", "false", "no"}
+    if pretty:
+        txt = json.dumps(obj, sort_keys=True, ensure_ascii=False, indent=2)
+    else:
+        txt = json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    path.write_text(txt + "\n", encoding="utf-8")
 
 
 # ---------- MANIFEST ----------

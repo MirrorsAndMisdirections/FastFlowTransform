@@ -151,10 +151,13 @@ def _get_project_dir() -> Path | None:
 
 
 def _materialization_legend() -> dict[str, dict[str, str]]:
+    # Add 'incremental' to avoid UndefinedError in templates that render badges
+    # for materialization types (index & model pages).
     return {
         "table": {"label": "table", "class": "badge-table"},
         "view": {"label": "view", "class": "badge-view"},
         "ephemeral": {"label": "ephemeral", "class": "badge-ephemeral"},
+        "incremental": {"label": "incremental", "class": "badge-incremental"},
     }
 
 
@@ -315,12 +318,25 @@ def _render_model_pages(
     for m in models:
         phys = relation_for(m.name)
         cols = cols_by_table.get(phys, [])
+
+        # Provide a 'this' context for templates that expect it.
+        # Matches what SQL-rendering exposes: name, materialized,
+        # (schema/database best-effort), and 'incremental'.
+        this_ctx = {
+            "name": phys,
+            "materialized": m.materialized,
+            "schema": None,  # optional: could derive from executor if you want
+            "database": None,  # optional: could derive from executor if you want
+            "incremental": (str(m.materialized).lower() == "incremental"),
+        }
+
         html = tmpl.render(
             m=m,
             used_by=used_by.get(m.name, []),
             cols=cols,
             macros=macros,
             materialization_legend=materialization_legend,
+            this=this_ctx,
         )
         (out_dir / f"{_safe_filename(m.name)}.html").write_text(html, encoding="utf-8")
 
@@ -364,201 +380,6 @@ def render_site(
         materialization_legend=mat_legend,
         macros=macro_list,
     )
-
-
-# def render_site(
-#     out_dir: Path,
-#     nodes: dict[str, Node],
-#     executor: Any | None = None,
-#     *,
-#     with_schema: bool = True,
-# ) -> None:
-#     out_dir.mkdir(parents=True, exist_ok=True)
-
-#     # Load templates bundled with the package
-#     tmpl_dir = Path(__file__).parent / "templates"
-#     env = Environment(
-#         loader=FileSystemLoader([str(tmpl_dir)]),
-#         autoescape=select_autoescape(["html", "xml"]),
-#     )
-
-#     # 1) Mermaid source from dag.mermaid (avoid duplication)
-#     mermaid_src = dag_mermaid(nodes)
-
-#     # 2) Optional docs metadata from project + markdown (Descriptions)
-#     proj_dir: Path | None = None
-#     if hasattr(REGISTRY, "get_project_dir"):
-#         try:
-#             proj_dir = REGISTRY.get_project_dir()
-#         except Exception:
-#             proj_dir = None
-#     docs_meta = read_docs_metadata(proj_dir) if proj_dir else {"models": {}, "columns": {}}
-
-#     # 3) Model data for table/detail pages
-#     models = [
-#         ModelDoc(
-#             name=n.name,
-#             kind=n.kind,
-#             path=str(n.path),
-#             relation=relation_for(n.name),
-#             deps=list(n.deps or []),
-#             materialized=(getattr(n, "meta", {}) or {}).get("materialized", "table"),
-#             description_html=None,
-#             description_short=None,
-#         )
-#         for n in nodes.values()
-#     ]
-#     models.sort(key=lambda m: m.name)
-
-#     materialization_legend = {
-#         "table": {"label": "table", "class": "badge-table"},
-#         "view": {"label": "view", "class": "badge-view"},
-#         "ephemeral": {"label": "ephemeral", "class": "badge-ephemeral"},
-#     }
-
-#     # Build macro inventory BEFORE rendering index
-#     macro_list: list[dict[str, str]] = []
-#     for name, p in getattr(REGISTRY, "macros", {}).items():
-#         mp = Path(p)
-#         rel = mp.name
-#         kind = "python" if p.suffix.lower() == ".py" else "sql"
-#         if proj_dir:
-#             try:
-#                 rel = str(mp.relative_to(proj_dir))
-#             except Exception:
-#                 rel = mp.name
-#         macro_list.append({"name": name, "path": rel, "kind": kind})
-#     macro_list.sort(key=lambda x: (x["kind"], x["name"]))
-
-#     # 4) Collect columns (schema) and enrich with descriptions
-#     index_tmpl = env.get_template("index.html.j2")
-#     cols_by_table = _collect_columns(executor) if (executor and with_schema) else {}
-
-#     # Enrich models with descriptions (already merged: Markdown > YAML)
-#     for m in models:
-#         model_meta = (
-#             (docs_meta.get("models", {}) or {}).get(m.name, {})
-#             if isinstance(docs_meta, dict)
-#             else {}
-#         )
-
-#         # --- Model description (HTML already) ---
-#         desc_html = model_meta.get("description_html")
-#         m.description_html = desc_html
-#         desc_char_limit = 160
-#         if desc_html:
-#             short = _strip_html(desc_html)
-#             m.description_short = (
-#                 (short[:desc_char_limit] + "…") if len(short) > desc_char_limit else short
-#             )
-#         else:
-#             m.description_short = None
-
-#         # --- Column descriptions (HTML) ---
-#         # Priority: docs/columns/<relation>/<column>.md  >  YAML under docs.models[model].columns
-#         rel_desc_map = (docs_meta.get("columns", {}) or {}).get(m.relation, {})
-#         mdl_desc_map = model_meta.get("columns") or {}
-
-#         if with_schema and (m.relation in cols_by_table):
-#             for c in cols_by_table[m.relation]:
-#                 # Both maps contain HTML already; no extra rendering here
-#                 c.description_html = rel_desc_map.get(c.name) or mdl_desc_map.get(c.name)
-
-#         # ---- Column lineage (best-effort)
-#         inferred_lineage: dict[str, list[dict[str, Any]]] = {}
-#         try:
-#             if m.kind == "sql" and executor is not None:
-#                 # Render SQL and infer FROM/JOIN alias map + select expressions
-#                 try:
-#                     rendered = executor.render_sql(
-#                         REGISTRY.nodes[m.name],
-#                         REGISTRY.env,
-#                         ref_resolver=lambda nm: executor._resolve_ref(nm, REGISTRY.env),
-#                         source_resolver=executor._resolve_source,
-#                     )
-#                 except Exception:
-#                     rendered = None
-
-#                 if rendered:
-#                     # Heuristic inference
-#                     inferred = infer_sql_lineage(rendered)
-#                     # Optional comment-based overrides
-#                     overrides = parse_sql_lineage_overrides(rendered)
-#                     inferred_lineage = merge_lineage(inferred, overrides)
-
-#             elif m.kind == "python":
-#                 func = getattr(REGISTRY, "py_funcs", {}).get(m.name)
-#                 inferred_lineage = infer_py_lineage(func)
-#         except Exception:
-#             inferred_lineage = {}
-
-#         # YAML overrides for lineage (if present) win over inference
-#         try:
-#             model_meta = (
-#                 (docs_meta.get("models", {}) or {}).get(m.name, {})
-#                 if isinstance(docs_meta, dict)
-#                 else {}
-#             )
-#             ylin = model_meta.get("lineage") if isinstance(model_meta, dict) else None
-#             if isinstance(ylin, dict):
-#                 # Normalize YAML shape
-#                 norm: dict[str, list[dict[str, Any]]] = {}
-#                 for out_col, spec in ylin.items():
-#                     # Expect: { from: [{table:.., column:..}], transformed: bool }
-#                     items: list[dict[str, Any]] = []
-#                     sources = spec.get("from", []) if isinstance(spec, dict) else []
-#                     transformed_flag = (
-#                         bool(spec.get("transformed")) if isinstance(spec, dict) else False
-#                     )
-#                     for s in sources:
-#                         if isinstance(s, dict) and "table" in s and "column" in s:
-#                             items.append(
-#                                 {
-#                                     "from_relation": s["table"],
-#                                     "from_column": s["column"],
-#                                     "transformed": transformed_flag,
-#                                 }
-#                             )
-#                     if items:
-#                         norm[out_col] = items
-#                 if norm:
-#                     inferred_lineage = merge_lineage(inferred_lineage, norm)
-#         except Exception:
-#             pass
-
-#         # Attach lineage to columns (if we know the schema)
-#         if with_schema and (m.relation in cols_by_table) and inferred_lineage:
-#             for c in cols_by_table[m.relation]:
-#                 if c.name in inferred_lineage:
-#                     c.lineage = inferred_lineage[c.name]
-
-#     index_html = index_tmpl.render(
-#         mermaid_src=Markup(mermaid_src),
-#         models=models,
-#         materialization_legend=materialization_legend,
-#         macros=macro_list,  # ← HIER reinreichen
-#     )
-#     (out_dir / "index.html").write_text(index_html, encoding="utf-8")
-
-#     rev: dict[str, list[str]] = {n: [] for n in nodes}
-#     for n in nodes.values():
-#         for d in n.deps or []:
-#             if d in rev:
-#                 rev[d].append(n.name)
-
-#     # 5) One detail page per model (pass descriptions + column descriptions)
-#     model_tmpl = env.get_template("model.html.j2")
-#     for m in models:
-#         phys = relation_for(m.name)
-#         cols = cols_by_table.get(phys, [])
-#         html = model_tmpl.render(
-#             m=m,
-#             used_by=sorted(rev.get(m.name, [])),
-#             cols=cols,
-#             macros=macro_list,
-#             materialization_legend=materialization_legend,
-#         )
-#         (out_dir / f"{_safe_filename(m.name)}.html").write_text(html, encoding="utf-8")
 
 
 @dataclass

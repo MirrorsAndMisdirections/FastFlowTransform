@@ -11,9 +11,8 @@ import pandas as pd
 from duckdb import CatalogException
 
 from fastflowtransform.core import Node, relation_for
+from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
-
-from .base import BaseExecutor
 
 
 def _q(ident: str) -> str:
@@ -111,10 +110,14 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
         return bool(res)
 
     def create_table_as(self, relation: str, select_sql: str) -> None:
-        self.con.execute(f"create table {relation} as {select_sql}")
+        # Use only the SELECT body and strip trailing semicolons for safety.
+        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
+        self.con.execute(f"create table {relation} as {body}")
 
     def incremental_insert(self, relation: str, select_sql: str) -> None:
-        self.con.execute(f"insert into {relation} {select_sql}")
+        # Ensure the inner SELECT is clean (no trailing semicolon; SELECT body only).
+        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
+        self.con.execute(f"insert into {relation} {body}")
 
     def incremental_merge(self, relation: str, select_sql: str, unique_key: list[str]) -> None:
         """
@@ -124,8 +127,10 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
           - Insert all staging rows
         """
         keys_pred = " AND ".join([f"t.{k}=s.{k}" for k in unique_key])
+        # Clean inner SELECT for CTE: remove trailing semicolon and keep only SELECT body
+        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
         sql = f"""
-        with src as ({select_sql})
+        with src as ({body})
         delete from {relation} t using src s where {keys_pred};
         insert into {relation} select * from src;
         """
@@ -137,8 +142,9 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
         """
         Best-effort: add new columns with inferred type.
         """
-        # Probe: leere Projektion aus dem SELECT
-        probe = self.con.execute(f"select * from ({select_sql}) as q limit 0")
+        # Probe: empty projection from the SELECT (cleaned to avoid parser issues).
+        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
+        probe = self.con.execute(f"select * from ({body}) as q limit 0")
         cols = [c[0] for c in probe.description or []]
         # vorhandene Spalten
         existing = {

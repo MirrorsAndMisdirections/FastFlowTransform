@@ -188,7 +188,9 @@ Examples:
 
 - **Documentation hub:** choose your path (operators vs contributors) — see [`docs/index.md`](docs/index.md).
 - **User & operator guide:** project layout, CLI usage, troubleshooting tips — see [`docs/Technical_Overview.md`](docs/Technical_Overview.md).
+- **Docgen shortcut:** append `--open-source` to `fft docgen ...` to launch the freshly rendered `index.html` immediately; use `--no-schema` when column introspection should be skipped.
 - **Modeling reference:** configuration, Jinja helpers, macros — see [`docs/Config_and_Macros.md`](docs/Config_and_Macros.md).
+- **Database comments sync:** preview database comment updates with `fft sync-db-comments . --env dev --dry-run` before applying them to Postgres or Snowflake.
 - **Examples:** runnable demo projects live under `examples/`; each README covers engine-specific setup.
 
 ---

@@ -1,0 +1,5 @@
+app:
+  users:
+    identifier: seed_users
+  events:
+    identifier: seed_events_initial

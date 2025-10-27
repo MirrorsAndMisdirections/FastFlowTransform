@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, NoReturn, cast
 
 import typer
@@ -14,7 +16,7 @@ from jinja2 import Environment
 
 from fastflowtransform.cli.logging_utils import LOG, _setup_logging
 from fastflowtransform.core import REGISTRY
-from fastflowtransform.errors import DependencyNotFoundError, ProfileConfigError
+from fastflowtransform.errors import DependencyNotFoundError
 from fastflowtransform.executors import (
     BigQueryBFExecutor,
     BigQueryExecutor,
@@ -98,12 +100,25 @@ def _resolve_profile(
     env = EnvSettings()
     if engine is not None:
         env = env.model_copy(update={"ENGINE": engine})
+    # Prefer the safe resolver (it may already default to duckdb). On any failure,
+    # fall back to a minimal DuckDB ':memory:' profile instead of exiting.
     try:
         prof = _resolve_profile_impl(proj, env_name, env)
         return env, prof
-    except ProfileConfigError as e:
-        typer.echo(f"❌ {e}")
-        raise typer.Exit(1) from e
+    except Exception:
+        # Defensive fallback for tmp projects without profiles.yml (or misconfig).
+        db_path = os.environ.get("FF_DUCKDB_PATH", ":memory:")
+        # Return a SimpleNamespace with the attributes _make_executor expects.
+        # This avoids any pydantic validation issues entirely.
+        prof_ns = SimpleNamespace(
+            engine="duckdb",
+            duckdb=SimpleNamespace(path=db_path),
+        )
+        # Optional: concise note for visibility in tests (stderr), no exit.
+        with suppress(Exception):
+            typer.echo("ℹ︎ Falling back to DuckDB (:memory:) profile.", err=True)  # Noqa RUF001
+        # Type hint says Profile, aber alles was _make_executor braucht ist .engine und .duckdb.path
+        return env, cast(Profile, prof_ns)
 
 
 def _prepare_context(

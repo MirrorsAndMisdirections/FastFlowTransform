@@ -1,6 +1,9 @@
 # src/fastflowtransform/cache.py
 from __future__ import annotations
 
+import builtins
+import hashlib
+import inspect
 import json
 import os
 import tempfile
@@ -9,7 +12,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .core import relation_for
+import yaml
+from jinja2 import Environment
+
+from .core import REGISTRY, relation_for
+from .dag import topo_sort
 from .meta import relation_exists as _relation_exists_engine
 
 
@@ -85,6 +92,100 @@ class FingerprintCache:
         """Bulk update cache entries."""
         for k, v in fps.items():
             self.entries[k] = v
+
+    # ------------------------ read-only fingerprint computation ------------------------
+    def _env_ctx_blob(self) -> str:
+        """
+        Build a stable JSON blob for environment context used in the fingerprint:
+          - engine (from cache instance)
+          - profile (from cache instance)
+          - all FF_* environment variables (key+value)
+          - normalized sources.yml (best-effort)
+        """
+        ff_env = {k: v for k, v in os.environ.items() if k.startswith("FF_")}
+        try:
+            src_norm = yaml.safe_dump(REGISTRY.sources or {}, sort_keys=True)
+        except Exception:
+            src_norm = ""
+        payload = {
+            "engine": self.engine,
+            "profile": self.profile,
+            "ff_env": ff_env,
+            "sources": src_norm,
+        }
+        return json.dumps(payload, sort_keys=True)
+
+    def compute_current(self, env: Environment, executor: Any) -> dict[str, str]:
+        """
+        Compute CURRENT fingerprints for all registered nodes (read-only).
+        Uses the documented formula:
+          - SQL: rendered SQL (via executor.render_sql to mirror real run)
+          - Python: function source (inspect.getsource) with file-content fallback
+          - env_ctx blob (engine/profile/FF_* vars/sources.yml)
+          - dependency fingerprints chained downstream
+        Does NOT write to disk.
+        """
+        env_ctx_blob = self._env_ctx_blob()
+
+        # Preload sources for SQL / Python
+        sql_render: dict[str, str] = {}
+        py_src: dict[str, str] = {}
+
+        for name, node in REGISTRY.nodes.items():
+            if node.kind == "sql":
+                try:
+                    # Render with same substitutions as in run()
+                    sql_render[name] = executor.render_sql(node, env)
+                except Exception:
+                    # Fallback: raw template content to still capture file changes
+                    try:
+                        raw = node.path.read_text(encoding="utf-8") if node.path else ""
+                    except Exception:
+                        raw = ""
+                    sql_render[name] = raw
+            else:
+                func = REGISTRY.py_funcs.get(name)
+                src = ""
+                if func is not None:
+                    try:
+                        src = inspect.getsource(func)
+                    except Exception:
+                        try:
+                            src = node.path.read_text(encoding="utf-8") if node.path else ""
+                        except Exception:
+                            src = ""
+                py_src[name] = src
+
+        def _hash(parts: list[str]) -> str:
+            h = hashlib.sha256()
+            for part in parts:
+                h.update(part.encode("utf-8"))
+                h.update(b"\x00")
+            return h.hexdigest()
+
+        current: dict[str, str] = {}
+        order = topo_sort(REGISTRY.nodes)
+        for name in order:
+            node = REGISTRY.nodes[name]
+            dep_fps = [current[d] for d in (node.deps or []) if d in current]
+            if node.kind == "sql":
+                blob = ["sql", name, sql_render.get(name, ""), env_ctx_blob, *dep_fps]
+            else:
+                blob = ["py", name, py_src.get(name, ""), env_ctx_blob, *dep_fps]
+            current[name] = _hash(blob)
+        return current
+
+    def modified_set(self, env: Environment, executor: Any) -> builtins.set[str]:
+        """
+        Return the set of nodes whose CURRENT fingerprint differs from saved cache.
+        Missing saved entries count as modified.
+        """
+        # Ensure we have the saved entries loaded
+        if not self.entries:
+            self.load()
+        current = self.compute_current(env, executor)
+        modified = {n for n, fp in current.items() if self.entries.get(n) != fp}
+        return modified
 
 
 # ------------------------ artifact existence helpers ------------------------

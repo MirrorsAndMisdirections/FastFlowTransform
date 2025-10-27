@@ -1,1 +1,18 @@
-{"metadata":{"generated_at":"2025-10-26T21:06:18+00:00","tool":"fastflowtransform"},"results":[{"duration_ms":0,"finished_at":"2025-10-26T21:06:18+00:00","message":"'boom'","name":"failing","started_at":"2025-10-26T21:06:18+00:00","status":"error"}],"run_finished_at":"2025-10-26T21:06:18+00:00","run_started_at":"2025-10-26T21:06:18+00:00"}
+{
+  "metadata": {
+    "generated_at": "2025-10-27T16:31:00+00:00",
+    "tool": "fastflowtransform"
+  },
+  "results": [
+    {
+      "duration_ms": 0,
+      "finished_at": "2025-10-27T16:31:00+00:00",
+      "message": "'boom'",
+      "name": "failing",
+      "started_at": "2025-10-27T16:31:00+00:00",
+      "status": "error"
+    }
+  ],
+  "run_finished_at": "2025-10-27T16:31:00+00:00",
+  "run_started_at": "2025-10-27T16:31:00+00:00"
+}

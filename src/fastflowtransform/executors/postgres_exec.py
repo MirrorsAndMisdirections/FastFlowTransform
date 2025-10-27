@@ -126,23 +126,34 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
             return bool(con.execute(sql, {"t": relation}).fetchone())
 
     def create_table_as(self, relation: str, select_sql: str) -> None:
+        # Use only the SELECT body and strip any trailing semicolons
+        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
+        qrel = self._qualified(relation)
         with self.engine.begin() as con:
-            con.execute(text(f"create table {relation} as {select_sql}"))
+            con.execute(text(f"create table {qrel} as {body}"))
 
     def incremental_insert(self, relation: str, select_sql: str) -> None:
+        # Clean inner SELECT for safety
+        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
+        qrel = self._qualified(relation)
         with self.engine.begin() as con:
-            con.execute(text(f"insert into {relation} {select_sql}"))
+            con.execute(text(f"insert into {qrel} {body}"))
 
     def incremental_merge(self, relation: str, select_sql: str, unique_key: list[str]) -> None:
         """
         Portable fallback (without columns list): staging + delete + insert.
         """
+        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
+        qrel = self._qualified(relation)
+        pred = " AND ".join([f"t.{k}=s.{k}" for k in unique_key])
         with self.engine.begin() as con:
-            con.execute(text(f"create temporary table ff_stg as {select_sql}"))
-            pred = " AND ".join([f"t.{k}=s.{k}" for k in unique_key])
-            con.execute(text(f"delete from {relation} t using ff_stg s where {pred}"))
-            con.execute(text(f"insert into {relation} select * from ff_stg"))
-            con.execute(text("drop table if exists ff_stg"))
+            # Use a temp table to avoid re-running the SELECT twice
+            con.execute(text(f"create temporary table ff_stg as {body}"))
+            try:
+                con.execute(text(f"delete from {qrel} t using ff_stg s where {pred}"))
+                con.execute(text(f"insert into {qrel} select * from ff_stg"))
+            finally:
+                con.execute(text("drop table if exists ff_stg"))
 
     def alter_table_sync_schema(
         self, relation: str, select_sql: str, *, mode: str = "append_new_columns"
@@ -151,8 +162,9 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
         Additive: add new columns as text/varchar.
         """
         with self.engine.begin() as con:
-            # Probe-Schema via LIMIT 0
-            cols = [r[0] for r in con.execute(text(f"select * from ({select_sql}) q limit 0"))]
+            # Probe schema from a cleaned SELECT to avoid parser issues
+            body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
+            cols = [r[0] for r in con.execute(text(f"select * from ({body}) q limit 0"))]
             existing = {
                 r[0]
                 for r in con.execute(
@@ -165,4 +177,5 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
             }
             add = [c for c in cols if c not in existing]
             for c in add:
-                con.execute(text(f'alter table {relation} add column "{c}" text'))
+                qrel = self._qualified(relation)
+                con.execute(text(f'alter table {qrel} add column "{c}" text'))

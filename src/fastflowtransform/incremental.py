@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
+from contextlib import suppress
 from typing import Any
 
 from sqlalchemy import text as _sa_text
 
-from .core import relation_for
+from fastflowtransform.core import relation_for
+from fastflowtransform.errors import ModelExecutionError
 
 
 def _normalize_unique_key(val: Any) -> list[str]:
@@ -30,54 +33,39 @@ def _get_on_schema_change(meta: dict | None) -> str:
     return v
 
 
-def run_or_dispatch(executor: Any, node: Any, jenv: Any) -> None:
-    """
-    Wrapper for executor.run_sql(...):
-    - catches materialized='incremental' and plans nenewu/merge/insert.
-    - else delegate to executor.
-    """
-    meta = getattr(node, "meta", {}) or {}
-    materialized = meta.get("materialized", "table")
-    if materialized != "incremental":
-        # normaler Pfad
-        return executor.run_sql(node, jenv)
+# ---------- Helper ----------
 
-    relation = relation_for(node.name)
 
-    # ------- kleine Helfer zum robusten Ausführen von rohem SQL -------
-    def _exec_sql(sql: str) -> None:
-        """Best-effort SQL execution across engines (DuckDB/PG/Snowflake/BQ shims)."""
-        # DuckDB
-        if hasattr(executor, "con") and hasattr(executor.con, "execute"):
-            executor.con.execute(sql)
-            return
-        # SQLAlchemy Engine (Postgres, Snowflake Snowpark shim)
-        if hasattr(executor, "engine"):
-            with executor.engine.begin() as conn:
-                conn.execute(_sa_text(sql))
-            return
-        # BigQuery shim(s)
-        if hasattr(executor, "execute"):
-            executor.execute(sql)
-            return
-        if hasattr(executor, "run_sql_raw"):
-            executor.run_sql_raw(sql)
-            return
-        raise RuntimeError("No suitable raw-SQL execution path on executor")
+def _exec_sql(exe: Any, sql: str) -> None:
+    """Best-effort SQL execution across engines (DuckDB/PG/Snowflake/BQ shims)."""
+    if hasattr(exe, "con") and hasattr(exe.con, "execute"):  # DuckDB
+        exe.con.execute(sql)
+        return
+    if hasattr(exe, "engine"):  # SQLAlchemy Engine
+        with exe.engine.begin() as conn:
+            conn.execute(_sa_text(sql))
+        return
+    if hasattr(exe, "execute"):  # BigQuery-like shim
+        exe.execute(sql)
+        return
+    if hasattr(exe, "run_sql_raw"):
+        exe.run_sql_raw(sql)
+        return
+    raise RuntimeError("No suitable raw-SQL execution path on executor")
 
-    exists = False
+
+def _safe_exists(executor: Any, relation: Any) -> bool:
     try:
-        exists = bool(executor.exists_relation(relation))
+        return bool(executor.exists_relation(relation))
     except Exception:
-        exists = False
+        return False
 
-    def _is_incr() -> bool:
-        return exists
 
+def _env_with_incremental(jenv: Any, is_incr: bool) -> Any:
     _overlay = getattr(jenv, "overlay", None)
-    loc_env = _overlay() if callable(_overlay) else None
-    if loc_env is None:
-        # Fallback: Shim with own globals dict
+    env = _overlay() if callable(_overlay) else None
+    if env is None:
+
         class _EnvShim:
             def __init__(self, base):
                 self._base = base
@@ -86,50 +74,117 @@ def run_or_dispatch(executor: Any, node: Any, jenv: Any) -> None:
             def __getattr__(self, name):
                 return getattr(self._base, name)
 
-        loc_env = _EnvShim(jenv)
-    # 'this' = physisal relation
-    getattr(loc_env, "globals", {}).update({"is_incremental": _is_incr, "this": relation})
+        env = _EnvShim(jenv)
+    getattr(env, "globals", {}).update({"is_incremental": lambda: is_incr})
+    return env
 
+
+def _render_sql_safe(executor: Any, node: Any, env: Any) -> str:
     try:
-        rendered_sql = executor.render_sql(
+        return executor.render_sql(
             node,
-            loc_env,
-            ref_resolver=lambda nm: executor._resolve_ref(nm, loc_env),
+            env,
+            ref_resolver=lambda nm: executor._resolve_ref(nm, env),
             source_resolver=executor._resolve_source,
         )
     except Exception:
-        # Fallback
-        rendered_sql = executor.render_sql(node, loc_env)
+        return executor.render_sql(node, env)
+
+
+def _wrap_and_raise_factory(node_name: str, relation: Any, rendered_sql: str | None) -> Callable:
+    def _wrap_and_raise(e: Exception) -> None:
+        tail = rendered_sql[-600:].strip() if rendered_sql else None
+        msg = f"{e.__class__.__name__}: {e}"
+        raise ModelExecutionError(node_name, relation, msg, sql_snippet=tail) from e
+
+    return _wrap_and_raise
+
+
+def _maybe_schema_sync(executor: Any, relation: Any, rendered_sql: str, policy: str) -> None:
+    if policy in {"append_new_columns", "sync_all_columns"} and hasattr(
+        executor, "alter_table_sync_schema"
+    ):
+        with suppress(Exception):
+            executor.alter_table_sync_schema(relation, rendered_sql, mode=policy)
+
+
+def _create_table_as_or_replace(executor: Any, relation: Any, rendered_sql: str) -> None:
+    try:
+        executor.create_table_as(relation, rendered_sql)
+    except Exception:
+        _exec_sql(executor, f"create or replace table {relation} as {rendered_sql}")
+
+
+UniqueKey = str | Sequence[str] | None
+
+
+def _merge_or_insert_with_fallback(
+    executor: Any,
+    relation: Any,
+    rendered_sql: str,
+    unique_key: UniqueKey,
+) -> None:
+    if unique_key:
+        # auf Liste normalisieren
+        if isinstance(unique_key, str):
+            keys: list[str] = [unique_key]
+        else:
+            keys = list(unique_key)  # Sequence[str] -> List[str]
+
+        try:
+            # merge mit Keys
+            executor.incremental_merge(relation, rendered_sql, keys)
+            return
+        except Exception:
+            _exec_sql(executor, f"create or replace table {relation} as {rendered_sql}")
+            return
+
+    # kein unique_key -> insert
+    try:
+        executor.incremental_insert(relation, rendered_sql)
+    except Exception:
+        _exec_sql(executor, f"create or replace table {relation} as {rendered_sql}")
+
+
+# ---------- Run or dispatch ----------
+
+
+def run_or_dispatch(executor: Any, node: Any, jenv: Any) -> None:
+    """
+    Wrapper für executor.run_sql(...):
+    - fängt materialized='incremental' ab und plant nenewu/merge/insert.
+    - sonst Delegation an executor.
+    """
+    meta = getattr(node, "meta", {}) or {}
+    materialized = meta.get("materialized", "table")
+
+    if materialized != "incremental":
+        try:
+            return executor.run_sql(node, jenv)
+        except Exception as e:
+            rel = relation_for(node.name)
+            msg = f"{e.__class__.__name__}: {e}"
+            raise ModelExecutionError(node.name, rel, msg, sql_snippet=None) from e
+
+    relation = relation_for(node.name)
+    exists = _safe_exists(executor, relation)
+    env = _env_with_incremental(jenv, exists)
+    rendered_sql = _render_sql_safe(executor, node, env)
+    wrap_and_raise = _wrap_and_raise_factory(node.name, relation, rendered_sql)
 
     unique_key = _normalize_unique_key(meta.get("unique_key"))
     schema_policy = _get_on_schema_change(meta)
 
     if not exists:
-        # Cold start → CREATE TABLE AS SELECT
         try:
-            executor.create_table_as(relation, rendered_sql)
-        except Exception:
-            # Fallback: raw SQL
-            _exec_sql(f"create or replace table {relation} as {rendered_sql}")
-    else:
-        try:
-            if schema_policy in {"append_new_columns", "sync_all_columns"} and hasattr(
-                executor, "alter_table_sync_schema"
-            ):
-                executor.alter_table_sync_schema(relation, rendered_sql, mode=schema_policy)
-        except Exception:
-            pass
+            _create_table_as_or_replace(executor, relation, rendered_sql)
+        except Exception as e:
+            wrap_and_raise(e)
+        return
 
-        # Incremental Load
-        if unique_key:
-            try:
-                executor.incremental_merge(relation, rendered_sql, unique_key)
-            except Exception:
-                # Fallback: Full replace
-                _exec_sql(f"create or replace table {relation} as {rendered_sql}")
-        else:
-            try:
-                executor.incremental_insert(relation, rendered_sql)
-            except Exception:
-                # Fallback: full replace
-                _exec_sql(f"create or replace table {relation} as {rendered_sql}")
+    # exists -> inkrementeller Pfad
+    _maybe_schema_sync(executor, relation, rendered_sql, schema_policy)
+    try:
+        _merge_or_insert_with_fallback(executor, relation, rendered_sql, unique_key)
+    except Exception as e:
+        wrap_and_raise(e)

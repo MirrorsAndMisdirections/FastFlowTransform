@@ -172,11 +172,26 @@ Targets wrap the CLI commands showcased below. Feel free to copy the pattern int
 
 ### CLI Flows
 
-> 📚 **Mehr lesen … Quickstart & Rezepte**
-> Die Schritt-für-Schritt-Befehle findest du im [`README.md`](../README.md#quickstart). Dort bleibt der vollständige Ablauf gepflegt; dieser Abschnitt fokussiert auf weiterführende Hinweise.
+> 📚 **Need recipes?** The step-by-step walkthrough lives in [`README.md`](../README.md#quickstart); this section highlights additional guidance.
 
-- CLI-Flags und interne Abläufe sind im Abschnitt [CLI Implementation](#cli-implementation) dokumentiert.
-- Beispiele für Automatisierung findest du in den [Makefile Targets](#makefile-targets).
+- CLI flags and internals are documented under [CLI Implementation](#cli-implementation).
+- Automation examples appear in the [Makefile Targets](#makefile-targets).
+
+#### DAG & Documentation
+
+- Narrow the graph with `fft dag ... --select <pattern>` (for example `state:modified` or `tag:finance`). Combined with `--html` this produces a focused mini site.
+- Control schema introspection via `--with-schema/--no-schema`. Use `--no-schema` when the executor should avoid fetching column metadata (for example, BigQuery without sufficient permissions).
+- `fft docgen` renders the DAG, model pages, and an optional JSON manifest in one command. Append `--open-source` to open `index.html` in your default browser after rendering.
+
+#### Sync Database Comments
+
+`fft sync-db-comments <project> --env <env>` pushes model and column descriptions from project YAML or Markdown into database comments. The command currently supports Postgres and Snowflake Snowpark:
+
+- Start with `--dry-run` to review the generated `COMMENT` statements.
+- Postgres honors `profiles.yml -> postgres.db_schema` (and any `FF_PG_SCHEMA` override).
+- Snowflake reuses the session or connection exposed by the executor.
+
+If no descriptions are found, the command exits without making changes.
 
 ### Logging & Verbosity
 
@@ -238,6 +253,7 @@ fft run . -vv    # full debug + SQL channel
 Notes:
 - UTests key the cache with `profile="utest"`.
 - Fingerprints include case inputs (CSV content hash / inline rows), so changing inputs invalidates the cache.
+- `--reuse-meta` is currently a reserved flag: it is exposed in the CLI, acts as a no-op today, and will enable future meta-table optimizations.
 
 
 #### Why?
@@ -660,6 +676,8 @@ fft dag . --env dev --html
 fft docgen . --env dev --out site/docs --emit-json site/docs/docs_manifest.json
 ```
 
+Add `--open-source` if you want the default browser to open the rendered `index.html` immediately.
+
 **Descriptions** can be provided in YAML (project.yml) and/or Markdown files. Markdown has higher priority.
 
 YAML in `project.yml`:
@@ -908,9 +926,12 @@ Operational usage lives in [CLI Flows](#cli-flows). This section drills into the
 **Commands:**
 
 - `fft run <project> [--env dev] [--engine ...]`
-- `fft dag <project> [--env dev] [--html]`
-- `fft test <project> [--env dev] [--select batch|streaming]`
+- `fft dag <project> [--env dev] [--html] [--select ...] [--with-schema/--no-schema]`
+- `fft docgen <project> [--env dev] [--out dir] [--emit-json path] [--open-source]`
+- `fft test <project> [--env dev] [--select batch|streaming|tag:...]`
 - `fft seed <project> [--env dev]`
+- `fft sync-db-comments <project> [--env dev] [--dry-run]`
+- `fft utest <project> [--env dev] [--cache off|ro|rw] [--reuse-meta]`
 - `fft --version`
 
 **Key components:**

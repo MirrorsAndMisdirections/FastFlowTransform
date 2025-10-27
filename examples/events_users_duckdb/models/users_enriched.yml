@@ -1,0 +1,15 @@
+version: 2
+models:
+  - name: users_enriched
+    description: "Adds gmail flag"
+    columns:
+      - name: id
+        tests:
+          - not_null: { severity: error }
+          - unique
+      - name: email
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["a@example.com","b@gmail.com","c@gmail.com"]
+              severity: warn

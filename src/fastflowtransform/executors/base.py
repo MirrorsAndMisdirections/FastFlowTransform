@@ -95,6 +95,23 @@ class BaseExecutor[TFrame](ABC):
 
             env.globals["var"] = _var
 
+        # ---- is_incremental() builtin
+        # True iff materialization is 'incremental' AND the target relation already exists.
+        if "is_incremental" not in env.globals:
+
+            def _is_incremental() -> bool:
+                try:
+                    mat = (getattr(node, "meta", {}) or {}).get("materialized", "table")
+                    if mat != "incremental":
+                        return False
+                    rel = relation_for(node.name)
+                    return bool(self.exists_relation(rel))
+                except Exception:
+                    # Be conservative: if anything is off, treat as non-incremental.
+                    return False
+
+            env.globals["is_incremental"] = _is_incremental
+
         raw = Path(node.path).read_text(encoding="utf-8")
         tmpl = env.from_string(raw)
 

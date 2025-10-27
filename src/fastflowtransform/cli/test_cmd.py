@@ -22,6 +22,7 @@ from fastflowtransform.cli.options import (
 from fastflowtransform.cli.selectors import _compile_selector
 from fastflowtransform.core import REGISTRY
 from fastflowtransform.dag import topo_sort
+from fastflowtransform.errors import ModelExecutionError
 from fastflowtransform.schema_loader import Severity, TestSpec, load_schema_tests
 from fastflowtransform.test_registry import TESTS
 
@@ -37,6 +38,19 @@ class DQResult:
     severity: Severity = "error"
     param_str: str = ""
     example_sql: str | None = None
+
+
+def _print_model_error_block(node_name: str, relation: str, message: str, sql: str | None) -> None:
+    header = "┌" + "─" * 70
+    footer = "└" + "─" * 70
+    typer.echo(header)
+    typer.echo(f"│ Model: {node_name}  (relation: {relation})")
+    typer.echo(f"│ Error: {message}")
+    if sql:
+        typer.echo("│ SQL (tail):")
+        for line in sql.splitlines():
+            typer.echo("│   " + line)
+    typer.echo(footer)
 
 
 def _execute_models(
@@ -55,7 +69,11 @@ def _execute_models(
             (run_sql if node.kind == "sql" else run_py)(node)
         except Exception as exc:
             if on_error is None:
-                raise
+                # Convert known domain error to friendly output
+                if isinstance(exc, ModelExecutionError):
+                    _print_model_error_block(exc.node_name, exc.relation, str(exc), exc.sql_snippet)
+                    raise typer.Exit(1) from exc
+                raise Exception from exc
             on_error(name, node, exc)
 
 
@@ -307,6 +325,7 @@ def test(
     _maybe_print_marker(con)
 
     model_pred = (lambda _n: True) if legacy_tag_only else pred
+    # Run models; if a model fails, show friendly error then exit(1).
     _run_models(model_pred, run_sql, run_py)
 
     # 1) project.yml tests

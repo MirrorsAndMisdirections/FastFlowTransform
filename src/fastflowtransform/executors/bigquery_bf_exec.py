@@ -9,10 +9,11 @@ from bigframes._config.bigquery_options import BigQueryOptions
 from google.api_core.exceptions import BadRequest, NotFound
 from google.cloud import bigquery
 
-from ..core import Node, relation_for
-from ._bigquery_mixin import BigQueryIdentifierMixin
-from ._shims import BigQueryConnShim
-from .base import BaseExecutor
+from fastflowtransform.core import Node, relation_for
+from fastflowtransform.executors._bigquery_mixin import BigQueryIdentifierMixin
+from fastflowtransform.executors._shims import BigQueryConnShim
+from fastflowtransform.executors.base import BaseExecutor
+from fastflowtransform.meta import ensure_meta_table, upsert_meta
 
 if TYPE_CHECKING:
     from bigframes.dataframe import DataFrame as BFDataFrame
@@ -73,6 +74,16 @@ class BigQueryBFExecutor(BigQueryIdentifierMixin, BaseExecutor[BFDataFrame]):
             "BigQuery DataFrames: Ergebnis nicht materialisierbar. "
             "Erwarte df.to_gbq(...) oder df.materialize(...)."
         )
+
+    # ---- Meta hook ----
+    def on_node_built(self, node: Node, relation: str, fingerprint: str) -> None:
+        """Mirror DuckDB/PG: write/update _ff_meta after successful build."""
+        try:
+            ensure_meta_table(self)
+            upsert_meta(self, node.name, relation, fingerprint, "bigquery")
+        except Exception:
+            # Best-effort: meta must not break the run
+            pass
 
     def _validate_required(
         self, node_name: str, inputs: Any, requires: dict[str, set[str]]
@@ -169,3 +180,115 @@ class BigQueryBFExecutor(BigQueryIdentifierMixin, BaseExecutor[BFDataFrame]):
             f"CREATE OR REPLACE VIEW {view_id} AS SELECT * FROM {back_id}",
             location=self.location,
         ).result()
+
+    # ── Incremental API (feature parity with DuckDB/PG) ──────────────────
+    def exists_relation(self, relation: str) -> bool:
+        """Check presence in TABLES or VIEWS information schema."""
+        proj = self.project
+        dset = self.dataset
+        rel = relation
+        q = f"""
+        SELECT 1
+        FROM `{proj}.{dset}.INFORMATION_SCHEMA.TABLES`
+        WHERE LOWER(table_name)=LOWER(@rel)
+        UNION ALL
+        SELECT 1
+        FROM `{proj}.{dset}.INFORMATION_SCHEMA.VIEWS`
+        WHERE LOWER(table_name)=LOWER(@rel)
+        LIMIT 1
+        """
+        job = self.client.query(
+            q,
+            job_config=bigquery.QueryJobConfig(
+                query_parameters=[bigquery.ScalarQueryParameter("rel", "STRING", rel)]
+            ),
+            location=self.location,
+        )
+        return bool(list(job.result()))
+
+    def create_table_as(self, relation: str, select_sql: str) -> None:
+        """CTAS with cleaned SELECT body (no trailing semicolons)."""
+        self._ensure_dataset()
+        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
+        target = self._qualified_identifier(relation, project=self.project, dataset=self.dataset)
+        self.client.query(
+            f"CREATE TABLE {target} AS {body}",
+            location=self.location,
+        ).result()
+
+    def incremental_insert(self, relation: str, select_sql: str) -> None:
+        """INSERT INTO with cleaned SELECT body."""
+        self._ensure_dataset()
+        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
+        target = self._qualified_identifier(relation, project=self.project, dataset=self.dataset)
+        self.client.query(
+            f"INSERT INTO {target} {body}",
+            location=self.location,
+        ).result()
+
+    def incremental_merge(self, relation: str, select_sql: str, unique_key: list[str]) -> None:
+        """
+        Portable fallback in BigQuery (without full MERGE):
+          - DELETE collisions via WHERE EXISTS against the cleaned SELECT body
+          - INSERT all rows from the body
+        Executed as two statements to keep error surfaces clean.
+        """
+        self._ensure_dataset()
+        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
+        target = self._qualified_identifier(relation, project=self.project, dataset=self.dataset)
+        pred = " AND ".join([f"t.{k}=s.{k}" for k in unique_key]) or "FALSE"
+
+        # DELETE … WHERE EXISTS (SELECT 1 FROM (body) s WHERE pred)
+        delete_sql = f"""
+        DELETE FROM {target} t
+        WHERE EXISTS (SELECT 1 FROM ({body}) s WHERE {pred})
+        """
+        self.client.query(delete_sql, location=self.location).result()
+
+        # INSERT new rows
+        insert_sql = f"INSERT INTO {target} SELECT * FROM ({body})"
+        self.client.query(insert_sql, location=self.location).result()
+
+    def alter_table_sync_schema(
+        self, relation: str, select_sql: str, *, mode: str = "append_new_columns"
+    ) -> None:
+        """
+        Best-effort additive schema sync:
+          - infer select schema via dry-run (schema on QueryJob)
+          - add missing columns as NULLABLE with inferred type
+        """
+        if mode not in {"append_new_columns", "sync_all_columns"}:
+            return
+
+        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
+        # Infer target schema from the query (no data read)
+        probe_job = self.client.query(
+            f"SELECT * FROM ({body}) WHERE 1=0",
+            job_config=bigquery.QueryJobConfig(dry_run=False, use_query_cache=False),
+            location=self.location,
+        )
+        probe_job.result()
+        select_fields = {f.name: f for f in (probe_job.schema or [])}
+
+        # Existing table schema
+        table_ref = f"{self.project}.{self.dataset}.{relation}"
+        try:
+            tbl = self.client.get_table(table_ref)
+        except NotFound:
+            return
+        existing_cols = {f.name for f in (tbl.schema or [])}
+
+        to_add = [name for name in select_fields if name not in existing_cols]
+        if not to_add:
+            return
+
+        target = self._qualified_identifier(relation, project=self.project, dataset=self.dataset)
+        for col in to_add:
+            bf = select_fields[col]
+            # Use BigQuery standard SQL type string (e.g., STRING, INT64, BOOL, FLOAT64, …)
+            typ = str(bf.field_type) if hasattr(bf, "field_type") else "STRING"
+            # Nullable by default
+            self.client.query(
+                f"ALTER TABLE {target} ADD COLUMN {col} {typ}",
+                location=self.location,
+            ).result()

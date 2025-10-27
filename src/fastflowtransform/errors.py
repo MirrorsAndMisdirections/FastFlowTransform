@@ -84,3 +84,15 @@ class ProfileConfigError(FastFlowTransformError):
     def __init__(self, message: str):
         # keep to a single line for CLI readability
         super().__init__(message.replace("\n", " ").strip())
+
+
+class ModelExecutionError(Exception):
+    """Raised when a model fails to execute/render on the engine.
+    Carries friendly context for CLI formatting.
+    """
+
+    def __init__(self, node_name: str, relation: str, message: str, sql_snippet: str | None = None):
+        self.node_name = node_name
+        self.relation = relation
+        self.sql_snippet = sql_snippet
+        super().__init__(message)
