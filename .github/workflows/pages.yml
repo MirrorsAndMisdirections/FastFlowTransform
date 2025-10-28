@@ -32,7 +32,21 @@ jobs:
       - name: Install docs (and dev) dependencies
         run: |
           uv sync --extra docs --extra dev
-
+      
+      - name: Generate doc pages from root files
+        run: |
+          mkdir -p docs
+          # Contributing
+          {
+            printf "# Contributing\n\n"
+            cat CONTRIBUTING.md
+          } > docs/contributing.md
+          # License
+          {
+            printf "# License\n\n"
+            cat LICENSE
+          } > docs/license.md
+      
       - name: Build site
         run: uv run mkdocs build --strict
 
