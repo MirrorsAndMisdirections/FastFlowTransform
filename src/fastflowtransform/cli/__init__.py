@@ -1,14 +1,11 @@
+# fastflowtransform/cli/__init__.py
 from __future__ import annotations
 
 import typer
 
 from fastflowtransform import __version__
 from fastflowtransform.cache import FingerprintCache
-from fastflowtransform.dag import levels as dag_levels, topo_sort
-from fastflowtransform.docs import render_site
-from fastflowtransform.run_executor import ScheduleResult, schedule
-
-from .bootstrap import (
+from fastflowtransform.cli.bootstrap import (
     CLIContext,
     _die,
     _get_test_con,
@@ -19,16 +16,15 @@ from .bootstrap import (
     _resolve_profile,
     _resolve_project_path,
 )
-from .dag_cmd import dag, register as _register_dag
-from .docgen_cmd import docgen, register as _register_docgen
-from .docs_utils import (
+from fastflowtransform.cli.dag_cmd import dag, register as _register_dag
+from fastflowtransform.cli.docgen_cmd import docgen, register as _register_docgen
+from fastflowtransform.cli.docs_utils import (
     _build_docs_manifest,
     _infer_sql_ref_aliases,
     _resolve_dag_out_dir,
     _strip_html,
 )
-from .logging_utils import LOG, SQL_LOG, _setup_logging
-from .options import (
+from fastflowtransform.cli.options import (
     CacheMode,
     CacheOpt,
     CaseOpt,
@@ -52,20 +48,20 @@ from .options import (
     VarsOpt,
     WithSchemaOpt,
 )
-from .run import (
+from fastflowtransform.cli.run import (
     _RunEngine,
     register as _register_run,
     run,
 )
-from .seed_cmd import register as _register_seed, seed
-from .selectors import (
+from fastflowtransform.cli.seed_cmd import register as _register_seed, seed
+from fastflowtransform.cli.selectors import (
     _build_predicates,
     _compile_selector,
     _parse_select,
     _selected_subgraph_names,
     _selector,
 )
-from .sync_db_comments_cmd import (
+from fastflowtransform.cli.sync_db_comments_cmd import (
     _pg_fq_table,
     _pg_quote_ident,
     _sf_fq_table,
@@ -76,8 +72,12 @@ from .sync_db_comments_cmd import (
     register as _register_sync_db_comments,
     sync_db_comments,
 )
-from .test_cmd import DQResult, register as _register_test, test
-from .utest_cmd import register as _register_utest, utest
+from fastflowtransform.cli.test_cmd import DQResult, register as _register_test, test
+from fastflowtransform.cli.utest_cmd import register as _register_utest, utest
+from fastflowtransform.dag import levels as dag_levels, topo_sort
+from fastflowtransform.docs import render_site
+from fastflowtransform.logging import echo, setup_from_cli_flags
+from fastflowtransform.run_executor import ScheduleResult, schedule
 
 app = typer.Typer(
     name="fft",
@@ -89,7 +89,7 @@ app = typer.Typer(
 
 def _version_callback(value: bool | None) -> None:
     if value:
-        typer.echo(__version__)
+        echo(__version__)
         raise typer.Exit()
 
 
@@ -107,8 +107,16 @@ def main(
         0, "--verbose", "-v", count=True, help="Increase verbosity (-v: INFO, -vv: DEBUG)"
     ),
     quiet: int = typer.Option(0, "--quiet", "-q", count=True, help="Reduce verbosity (-q: ERROR)"),
+    sql_debug: bool = typer.Option(False, "--sql-debug", help="Enable SQL debug logging"),
+    log_json: bool = typer.Option(False, "--log-json", help="Emit logs as JSON"),
 ) -> None:
-    _setup_logging(verbose, quiet)
+    setup_from_cli_flags(
+        verbose=verbose,
+        quiet=quiet,
+        json=log_json,
+        sql_debug=sql_debug,
+        to_stderr=False,
+    )
 
 
 _register_run(app)
@@ -121,8 +129,6 @@ _register_sync_db_comments(app)
 
 
 __all__ = [
-    "LOG",
-    "SQL_LOG",
     "CLIContext",
     "CacheMode",
     "CacheOpt",

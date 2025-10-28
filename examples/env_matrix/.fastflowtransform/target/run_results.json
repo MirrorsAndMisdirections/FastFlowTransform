@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "generated_at": "2025-10-28T18:36:20+00:00",
+    "tool": "fastflowtransform"
+  },
+  "results": [
+    {
+      "duration_ms": 5,
+      "finished_at": "2025-10-28T18:36:20+00:00",
+      "http": null,
+      "message": null,
+      "name": "env_vars.ff",
+      "started_at": "2025-10-28T18:36:20+00:00",
+      "status": "success"
+    },
+    {
+      "duration_ms": 2,
+      "finished_at": "2025-10-28T18:36:20+00:00",
+      "http": null,
+      "message": null,
+      "name": "users.ff",
+      "started_at": "2025-10-28T18:36:20+00:00",
+      "status": "success"
+    }
+  ],
+  "run_finished_at": "2025-10-28T18:36:20+00:00",
+  "run_started_at": "2025-10-28T18:36:20+00:00"
+}

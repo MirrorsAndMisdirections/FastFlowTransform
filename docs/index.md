@@ -5,13 +5,18 @@ Welcome! This page is your starting point for FastFlowTransform docs. Pick the t
 ---
 
 ## Docs Navigation
-1. **Getting Started** — you are here (`docs/index.md`)
-2. [User Guide](./Technical_Overview.md#part-i--operational-guide)
-3. [Modeling Reference](./Config_and_Macros.md)
-4. [Parallelism & Cache](./Cache_and_Parallelism.md)
-5. [Cross-Table Reconciliations](./Technical_Overview.md#cross-table-reconciliations)
-6. [Auto-Docs & Lineage](./Technical_Overview.md#auto-docs--lineage)
-7. [Developer Guide](./Technical_Overview.md#part-ii--architecture--internals)
+- **Getting Started** — you are here (`docs/index.md`)
+- [User Guide](./Technical_Overview.md#part-i--operational-guide)
+- [Modeling Reference](./Config_and_Macros.md)
+- [Parallelism & Cache](./Cache_and_Parallelism.md)
+- [API calls in Python models](./API_Models.md)
+- [Incremental Models](./Incremental.md)
+- [YAML Tests (Schema-bound)](./YAML_Tests.md)
+- [Data Quality Tests Reference](./Data_Quality_Tests.md)
+- [State Selection (changed & results)](./State_Selection.md)
+- [Cross-Table Reconciliations](./Technical_Overview.md#cross-table-reconciliations)
+- [Auto-Docs & Lineage](./Technical_Overview.md#auto-docs--lineage)
+- [Developer Guide](./Technical_Overview.md#part-ii--architecture--internals)
 
 ## Table of Contents
 
@@ -26,7 +31,7 @@ Welcome! This page is your starting point for FastFlowTransform docs. Pick the t
 
 ### 1. Build & Operate Projects (Data Practitioners)
 
-- **Get set up quickly:** run the DuckDB demo or install locally via the [Quickstart](../README.md#quickstart).
+- **Get set up quickly:** follow the dedicated [Quickstart](Quickstart.md) guide for installation, seeding, and a first run.
 - **Understand the project layout & CLI workflow:** see *Project Layout*, *Makefile Targets*, and *CLI Flows* in the [Technical Overview](Technical_Overview.md#project-layout).
 - **Configure runtimes & profiles:** review executor profiles, environment overrides, and logging options in the [Technical Overview](Technical_Overview.md#profiles--environment-overrides).
 - **Model data quality & troubleshoot runs:** the [Technical Overview](Technical_Overview.md#model-unit-tests-fastflowtransform-utest) covers unit tests, troubleshooting tips, and exit codes.

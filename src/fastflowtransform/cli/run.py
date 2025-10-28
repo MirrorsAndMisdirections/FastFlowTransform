@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 import textwrap
 import threading
@@ -8,11 +7,36 @@ import traceback
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 import typer
 
+from fastflowtransform.artifacts import (
+    RunNodeResult,
+    write_catalog,
+    write_manifest,
+    write_run_results,
+)
 from fastflowtransform.cache import FingerprintCache, can_skip_node
+from fastflowtransform.cli.bootstrap import CLIContext, _prepare_context
+from fastflowtransform.cli.options import (
+    CacheMode,
+    CacheOpt,
+    EngineOpt,
+    EnvOpt,
+    ExcludeOpt,
+    HttpCacheOpt,
+    JobsOpt,
+    KeepOpt,
+    NoCacheOpt,
+    OfflineOpt,
+    ProjectArg,
+    RebuildAllOpt,
+    RebuildOnlyOpt,
+    SelectOpt,
+    VarsOpt,
+)
 from fastflowtransform.core import REGISTRY, relation_for
 from fastflowtransform.dag import levels as dag_levels
 from fastflowtransform.fingerprint import (
@@ -22,28 +46,18 @@ from fastflowtransform.fingerprint import (
     fingerprint_sql,
     get_function_source,
 )
+from fastflowtransform.incremental import run_or_dispatch as run_sql_with_incremental
 from fastflowtransform.log_queue import LogQueue
+from fastflowtransform.logging import bind_context, bound_context, clear_context, echo, warn
 from fastflowtransform.meta import ensure_meta_table
 from fastflowtransform.run_executor import ScheduleResult, schedule
 
-from .bootstrap import _prepare_context
-from .logging_utils import LOG
-from .options import (
-    CacheMode,
-    CacheOpt,
-    EngineOpt,
-    EnvOpt,
-    ExcludeOpt,
-    JobsOpt,
-    KeepOpt,
-    NoCacheOpt,
-    ProjectArg,
-    RebuildAllOpt,
-    RebuildOnlyOpt,
-    SelectOpt,
-    VarsOpt,
+from .selectors import (
+    _compile_selector,
+    _parse_select,
+    _selected_subgraph_names,
+    augment_with_state_modified,
 )
-from .selectors import _compile_selector, _parse_select, _selected_subgraph_names
 
 
 @dataclass
@@ -59,10 +73,10 @@ class _RunEngine:
     env_ctx: EnvCtx = field(init=False)
     computed_fps: dict[str, str] = field(default_factory=dict, init=False)
     fps_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    http_snaps: dict[str, dict] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
-        if LOG.isEnabledFor(logging.INFO):
-            typer.echo(f"Profile: {self.env_name} | Engine: {self.ctx.profile.engine}")
+        echo(f"Profile: {self.env_name} | Engine: {self.ctx.profile.engine}")
         self.shared = self.ctx.make_executor()
         with suppress(Exception):
             ensure_meta_table(self.shared[0])
@@ -81,18 +95,23 @@ class _RunEngine:
     def _get_runner(self) -> tuple[Any, Callable, Callable]:
         if getattr(self.tls, "runner", None) is None:
             ex, run_sql_shared, run_py_shared = self.shared
-            run_sql_fn, run_py_fn = run_sql_shared, run_py_shared
+            run_sql_wrapped, run_py_wrapped = run_sql_shared, run_py_shared
             if self.ctx.profile.engine == "duckdb" and hasattr(ex, "clone"):
                 try:
-                    ex = ex.clone()
+                    db_path = getattr(ex, "db_path", None)
+                    clone_needed = not (isinstance(db_path, str) and db_path.strip() == ":memory:")
+                    if clone_needed:
+                        ex = ex.clone()
 
-                    def run_sql_fn(n):
-                        return ex.run_sql(n, self.ctx.jinja_env)
+                    def _run_sql_duckdb(n):
+                        # Planner: intercept incremental materializations
+                        return run_sql_with_incremental(ex, n, self.ctx.jinja_env)
 
-                    run_py_fn = ex.run_python
+                    run_sql_wrapped = _run_sql_duckdb
+                    run_py_wrapped = ex.run_python
                 except Exception:
                     pass
-            self.tls.runner = (ex, run_sql_fn, run_py_fn)
+            self.tls.runner = (ex, run_sql_wrapped, run_py_wrapped)
         return self.tls.runner
 
     def _maybe_fingerprint(self, node: Any, ex: Any) -> str | None:
@@ -138,6 +157,11 @@ class _RunEngine:
                     self.computed_fps[name] = cand_fp
                 with suppress(Exception):
                     ex.on_node_built(node, relation_for(name), cand_fp)
+            # HTTP snapshot (stored in node.meta by the executor)
+            with suppress(Exception):
+                snap = (getattr(node, "meta", {}) or {}).get("_http_snapshot")
+                if snap:
+                    self.http_snaps[name] = snap
             return
 
         cand_fp = self._maybe_fingerprint(node, ex)
@@ -162,6 +186,11 @@ class _RunEngine:
                 self.computed_fps[name] = cand_fp
             with suppress(Exception):
                 ex.on_node_built(node, relation_for(name), cand_fp)
+        # HTTP snapshot (stored in node.meta by the executor)
+        with suppress(Exception):
+            snap = (getattr(node, "meta", {}) or {}).get("_http_snapshot")
+            if snap:
+                self.http_snaps[name] = snap
 
     @staticmethod
     def before(_name: str, lvl_idx: int | None = None) -> None:
@@ -171,7 +200,7 @@ class _RunEngine:
     def on_error(name: str, err: BaseException) -> None:
         _node = REGISTRY.get_node(name)
         if isinstance(err, KeyError):
-            typer.echo(
+            echo(
                 _error_block(
                     f"Model failed: {name} (KeyError)",
                     _pretty_exc(err),
@@ -185,7 +214,7 @@ class _RunEngine:
         body = _pretty_exc(err)
         if os.getenv("FFT_TRACE") == "1":
             body += "\n\n" + traceback.format_exc()
-        typer.echo(_error_block(f"Model failed: {name}", body, "• See cause above."))
+        echo(_error_block(f"Model failed: {name}", body, "• See cause above."))
         raise typer.Exit(1) from err
 
     def persist_on_success(self, result: ScheduleResult) -> None:
@@ -197,12 +226,12 @@ class _RunEngine:
     def print_timings(result: ScheduleResult) -> None:
         if not result.per_node_s:
             return
-        typer.echo("\nRuntime per model")
-        typer.echo("─────────────────")
+        echo("\nRuntime per model")
+        echo("─────────────────")
         for name in sorted(result.per_node_s, key=lambda k: k):
             ms = int(result.per_node_s[name] * 1000)
-            typer.echo(f"• {name:<30} {ms:>6} ms")
-        typer.echo(f"\nTotal runtime: {result.total_s:.3f}s")
+            echo(f"• {name:<30} {ms:>6} ms")
+        echo(f"\nTotal runtime: {result.total_s:.3f}s")
 
 
 def _pretty_exc(e: BaseException) -> str:
@@ -213,7 +242,7 @@ def _error_block(title: str, body: str, hint: str | None = None) -> str:
     border = "─" * 70
     lines = [f"✖ {title}", "", textwrap.dedent(body).rstrip()]
     if hint:
-        lines = ["", "Hints:", textwrap.dedent(hint).rstrip()]
+        lines += ["", "Hints:", textwrap.dedent(hint).rstrip()]
     text = "│ \n│ ".join("\n".join(lines).splitlines())
     return f"\n┌{border}\n{text}\n└{border}\n"
 
@@ -224,8 +253,170 @@ def _normalize_node_names_or_warn(names: list[str] | None) -> set[str]:
         try:
             out.add(REGISTRY.get_node(tok).name)
         except KeyError:
-            LOG.warning(f"Unknown model in --rebuild: {tok}")
+            warn(f"Unknown model in --rebuild: {tok}")
     return out
+
+
+def _abbr(e: str) -> str:
+    mapping = {
+        "duckdb": "DUCK",
+        "postgres": "PG",
+        "bigquery": "BQ",
+        "databricks_spark": "SPK",
+        "snowflake_snowpark": "SNOW",
+    }
+    return mapping.get(e, e.upper()[:4])
+
+
+# ----------------- helpers (run function) -----------------
+
+
+def _build_engine_ctx(project, env_name, engine, vars, cache, no_cache):
+    ctx = _prepare_context(project, env_name, engine, vars)
+    cache_mode = CacheMode.OFF if no_cache else cache
+    engine_ = _RunEngine(
+        ctx=ctx, pred=None, env_name=env_name, cache_mode=cache_mode, force_rebuild=set()
+    )
+    return ctx, engine_
+
+
+def _select_predicate_and_raw(
+    executor_engine: _RunEngine, ctx: CLIContext, select: SelectOpt
+) -> tuple[list[str], Callable[[Any], bool], list[str]]:
+    select_tokens = _parse_select(select or [])
+    base_tokens = [t for t in select_tokens if not t.startswith("state:modified")]
+    _, base_pred = _compile_selector(base_tokens)
+
+    select_pred = base_pred
+    if select_tokens and any(t.startswith("state:modified") for t in select_tokens):
+        executor = executor_engine.shared[0]
+        modified_set = executor_engine.cache.modified_set(ctx.jinja_env, executor)
+        select_pred = augment_with_state_modified(select_tokens, base_pred, modified_set)
+
+    raw_selected = [k for k, v in REGISTRY.nodes.items() if select_pred(v)]
+    return select_tokens, select_pred, raw_selected
+
+
+def _wanted_names(
+    select_tokens: list[str], exclude: ExcludeOpt, raw_selected: list[str]
+) -> set[str]:
+    return _selected_subgraph_names(
+        REGISTRY.nodes,
+        select_tokens=select_tokens,
+        exclude_tokens=exclude,
+        seed_names=set(raw_selected),
+    )
+
+
+def _explicit_targets(
+    rebuild_only: RebuildOnlyOpt, rebuild: bool, select: SelectOpt, raw_selected: list[str]
+) -> list[str]:
+    rebuild_only_names = _normalize_node_names_or_warn(rebuild_only)
+    if rebuild_only_names:
+        return [n for n in (rebuild_only or []) if n in REGISTRY.nodes]
+    if rebuild and select:
+        return raw_selected
+    return []
+
+
+def _maybe_exit_if_empty(wanted: set[str], explicit_targets: list[str]) -> None:
+    if not wanted and not explicit_targets:
+        typer.secho(
+            "Nothing to run (empty selection after applying --select/--exclude).", fg="yellow"
+        )
+        raise typer.Exit(0)
+
+
+def _compute_force_rebuild(
+    explicit_targets: list[str], rebuild: bool, wanted: set[str]
+) -> set[str]:
+    if explicit_targets:
+        return set(explicit_targets)
+    if rebuild:
+        return set(wanted)
+    return set()
+
+
+def _levels_for_run(explicit_targets: list[str], wanted: set[str]) -> list[list[str]]:
+    if explicit_targets:
+        return [explicit_targets]
+    sub_nodes = {k: v for k, v in REGISTRY.nodes.items() if k in wanted}
+    return dag_levels(sub_nodes)
+
+
+def _run_schedule(engine_, lvls, jobs, keep_going, ctx):
+    logq = LogQueue()
+    started_at = datetime.now(UTC).isoformat(timespec="seconds")
+
+    bind_context(run_id=started_at)
+
+    def _run_node_with_ctx(name: str) -> None:
+        with bound_context(node=name):
+            engine_.run_node(name)
+
+    result = schedule(
+        lvls,
+        jobs=jobs,
+        fail_policy="keep_going" if keep_going else "fail_fast",
+        run_node=_run_node_with_ctx,
+        before=engine_.before,
+        on_error=None,
+        logger=logq,
+        engine_abbr=_abbr(ctx.profile.engine),
+        name_width=28,
+    )
+
+    finished_at = datetime.now(UTC).isoformat(timespec="seconds")
+    return result, logq, started_at, finished_at
+
+
+def _write_artifacts(
+    ctx: CLIContext, result: ScheduleResult, started_at: str, finished_at: str, engine_: _RunEngine
+) -> None:
+    write_manifest(ctx.project)
+
+    node_results: list[RunNodeResult] = []
+    failed = result.failed or {}
+    all_names = set(result.per_node_s.keys()) | set(failed.keys())
+
+    for name in sorted(all_names):
+        dur_s = float(result.per_node_s.get(name, 0.0))
+        status = "error" if name in failed else "success"
+        msg = str(failed.get(name)) if name in failed else None
+        node_results.append(
+            RunNodeResult(
+                name=name,
+                status=status,
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_ms=int(dur_s * 1000),
+                message=msg,
+                http=engine_.http_snaps.get(name),
+            )
+        )
+
+    write_run_results(
+        ctx.project, started_at=started_at, finished_at=finished_at, node_results=node_results
+    )
+
+
+def _attempt_catalog(ctx: CLIContext) -> None:
+    try:
+        execu, _, _ = ctx.make_executor()
+        write_catalog(ctx.project, execu)
+    except Exception:
+        pass
+
+
+def _emit_logs_and_errors(logq: LogQueue, result: ScheduleResult, engine_: _RunEngine) -> None:
+    for line in logq.drain():
+        echo(line)
+    if result.failed:
+        for name, err in result.failed.items():
+            engine_.on_error(name, err)
+
+
+# ----------------- run function -----------------
 
 
 def run(
@@ -241,88 +432,43 @@ def run(
     no_cache: NoCacheOpt = False,
     rebuild: RebuildAllOpt = False,
     rebuild_only: RebuildOnlyOpt = None,
+    offline: OfflineOpt = False,
+    http_cache: HttpCacheOpt = None,
 ) -> None:
-    ctx = _prepare_context(project, env_name, engine, vars)
-    cache_mode = CacheMode.OFF if no_cache else cache
-
-    _, raw_pred = _compile_selector(select)
-    raw_selected: list[str] = [k for k, v in REGISTRY.nodes.items() if raw_pred(v)]
-
-    wanted: set[str] = _selected_subgraph_names(
-        REGISTRY.nodes,
-        select_tokens=select,
-        exclude_tokens=exclude,
-    )
-
-    rebuild_only_names = _normalize_node_names_or_warn(rebuild_only)
-
-    explicit_targets: list[str] = []
-    if rebuild_only_names:
-        explicit_targets = [n for n in (rebuild_only or []) if n in REGISTRY.nodes]
-    elif rebuild and select:
-        explicit_targets = raw_selected
-
-    if not wanted and not explicit_targets:
-        typer.secho(
-            "Nothing to run (empty selection after applying --select/--exclude).",
-            fg="yellow",
+    # _ensure_logging()
+    # HTTP/API-Flags → ENV, damit fastflowtransform.api.http sie liest
+    if offline:
+        os.environ["FF_HTTP_OFFLINE"] = "1"
+    if http_cache:
+        os.environ["FF_HTTP_CACHE_MODE"] = str(
+            http_cache.value if hasattr(http_cache, "value") else http_cache
         )
-        raise typer.Exit(0)
 
-    if explicit_targets:
-        force_rebuild = set(explicit_targets)
-    elif rebuild:
-        force_rebuild = set(wanted)
-    else:
-        force_rebuild = set()
+    ctx, engine_ = _build_engine_ctx(project, env_name, engine, vars, cache, no_cache)
+    bind_context(engine=ctx.profile.engine, env=env_name)
 
-    if explicit_targets:
-        lvls = [explicit_targets]
-    else:
-        sub_nodes = {k: v for k, v in REGISTRY.nodes.items() if k in wanted}
-        lvls = dag_levels(sub_nodes)
+    select_tokens, _, raw_selected = _select_predicate_and_raw(engine_, ctx, select)
+    wanted = _wanted_names(select_tokens=select_tokens, exclude=exclude, raw_selected=raw_selected)
 
-    engine_ = _RunEngine(
-        ctx=ctx,
-        pred=None,
-        env_name=env_name,
-        cache_mode=cache_mode,
-        force_rebuild=force_rebuild,
-    )
+    explicit_targets = _explicit_targets(rebuild_only, rebuild, select, raw_selected)
+    _maybe_exit_if_empty(wanted, explicit_targets)
 
-    logq = LogQueue()
+    engine_.force_rebuild = _compute_force_rebuild(explicit_targets, rebuild, wanted)
+    lvls = _levels_for_run(explicit_targets, wanted)
 
-    def _abbr(e: str) -> str:
-        mapping = {
-            "duckdb": "DUCK",
-            "postgres": "PG",
-            "bigquery": "BQ",
-            "databricks_spark": "SPK",
-            "snowflake_snowpark": "SNOW",
-        }
-        return mapping.get(e, e.upper()[:4])
+    result, logq, started_at, finished_at = _run_schedule(engine_, lvls, jobs, keep_going, ctx)
 
-    result: ScheduleResult = schedule(
-        lvls,
-        jobs=jobs,
-        fail_policy="keep_going" if keep_going else "fail_fast",
-        run_node=engine_.run_node,
-        before=engine_.before,
-        on_error=None,
-        logger=logq,
-        engine_abbr=_abbr(ctx.profile.engine),
-        name_width=28,
-    )
-    for line in logq.drain():
-        typer.echo(line)
-    if result.failed:
-        for name, err in result.failed.items():
-            engine_.on_error(name, err)
+    _write_artifacts(ctx, result, started_at, finished_at, engine_)
+    _attempt_catalog(ctx)
+    _emit_logs_and_errors(logq, result, engine_)
+
     if result.failed:
         raise typer.Exit(1)
+
     engine_.persist_on_success(result)
     engine_.print_timings(result)
-    typer.echo("✓ Done")
+    echo("✓ Done")
+    clear_context()
 
 
 def register(app: typer.Typer) -> None:

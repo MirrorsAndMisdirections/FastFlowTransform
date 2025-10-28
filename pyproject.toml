@@ -36,6 +36,7 @@ dependencies = [
   "snowflake>=1.8.0",
   "snowflake-snowpark-python>=1.40.0",
   "bigframes>=2.24.0",
+  "httpx>=0.28.1",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +47,9 @@ dev = [
   "pre-commit==3.*",
   "pandas-stubs>=2.1",
   "types-PyYAML>=6.0.12",
+  "mkdocs>=1.6",
+  "mkdocs-material>=9.5",
+  "pymdown-extensions>=10.0",
 ]
 
 [project.urls]
@@ -95,7 +99,7 @@ known-third-party = ["duckdb", "pandas"]
 combine-as-imports = true
 
 [tool.ruff.lint.pylint]
-max-args = 12
+max-args = 15
 max-returns = 8
 max-branches = 20
 max-statements = 60

@@ -25,9 +25,9 @@ dag:
 # Opens the generated DAG HTML on macOS/Linux; Windows users open it manually.
 demo-open:
 	@if [ -f "$(FF_PROJECT)/site/dag/index.html" ]; then \
-		$(OPENER) "$(FF_PROJECT)/site/dag/index.html" 2>/dev/null || echo "Öffne manuell: $(FF_PROJECT)/site/dag/index.html"; \
+		$(OPENER) "$(FF_PROJECT)/site/dag/index.html" 2>/dev/null || echo "Oopen at: $(FF_PROJECT)/site/dag/index.html"; \
 	else \
-		echo "Keine HTML-Datei gefunden: $(FF_PROJECT)/site/dag/index.html"; \
+		echo "No HTML found: $(FF_PROJECT)/site/dag/index.html"; \
 	fi
 
 test:
@@ -35,7 +35,7 @@ test:
 
 # End-to-end showcase: Seed → Run → DAG → Open → Tests
 demo: seed run dag demo-open test
-	@echo "\n✓ Demo fertig: Tabellen gebaut, DAG generiert, Tests gelaufen."
+	@echo "\n✓ Demo done."
 
 clean:
 	rm -rf .local "$(FF_PROJECT)/docs" dist build *.egg-info

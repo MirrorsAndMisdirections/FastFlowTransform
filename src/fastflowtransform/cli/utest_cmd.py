@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import typer
 
-from fastflowtransform.utest import discover_unit_specs, run_unit_specs
-
-from .bootstrap import _prepare_context
-from .options import (
+from fastflowtransform.cli.bootstrap import _prepare_context
+from fastflowtransform.cli.options import (
     CaseOpt,
     EngineOpt,
     EnvOpt,
@@ -17,6 +15,8 @@ from .options import (
     UTestCacheOpt,
     VarsOpt,
 )
+from fastflowtransform.logging import echo
+from fastflowtransform.utest import discover_unit_specs, run_unit_specs
 
 
 def utest(
@@ -35,7 +35,7 @@ def utest(
 
     specs = discover_unit_specs(ctx.project, path=path, only_model=model)
     if not specs:
-        typer.echo("ℹ️  No unit tests found (tests/unit/*.yml).")  # noqa: RUF001
+        echo("ℹ️  No unit tests found (tests/unit/*.yml).")  # noqa: RUF001
         raise typer.Exit(0)
 
     failures = run_unit_specs(

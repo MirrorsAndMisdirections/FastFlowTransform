@@ -1,0 +1,7 @@
+targets:
+  raw/seed_users:
+    schema: raw
+    table: seed_users          # optional Rename
+    schema_by_engine:     # optional
+      postgres: main
+      duckdb: raw

@@ -5,7 +5,7 @@ import ast
 import importlib.util
 import re
 import types
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +16,247 @@ import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from .errors import DependencyNotFoundError, ModuleLoadError
+
+_SOURCE_CFG_FIELDS = {
+    "identifier",
+    "schema",
+    "database",
+    "catalog",
+    "project",
+    "dataset",
+    "location",
+    "format",
+    "options",
+}
+
+
+def _compact_cfg(cfg: Mapping[str, Any]) -> dict[str, Any]:
+    cleaned: dict[str, Any] = {}
+    for key, value in cfg.items():
+        if key == "options":
+            if value:
+                cleaned[key] = dict(value)
+            continue
+        if value is not None:
+            cleaned[key] = value
+    return cleaned
+
+
+def _normalize_options(value: Any, *, field_path: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        return {str(k): v for k, v in value.items()}
+    raise ValueError(f"sources.yml → {field_path}: expected mapping, got {type(value).__name__}")
+
+
+def _pick_source_fields(
+    data: Mapping[str, Any] | None,
+    base: Mapping[str, Any] | None,
+    *,
+    field_path: str,
+) -> dict[str, Any]:
+    """Return a dict limited to the supported source configuration fields."""
+
+    data = data or {}
+    base = base or {}
+    out: dict[str, Any] = {k: base.get(k) for k in _SOURCE_CFG_FIELDS}
+    for key, value in data.items():
+        if key not in _SOURCE_CFG_FIELDS:
+            continue
+        if key == "options":
+            base_opts = out.get("options") or {}
+            incoming = _normalize_options(value, field_path=f"{field_path}.options")
+            merged = dict(base_opts)
+            merged.update(incoming)
+            out["options"] = merged
+        else:
+            out[key] = value
+
+    if "options" not in out or out["options"] is None:
+        out["options"] = {}
+    return out
+
+
+def _normalize_engine_overrides(
+    overrides: Mapping[str, Any] | None,
+    *,
+    field_path: str,
+) -> dict[str, dict[str, Any]]:
+    if overrides is None:
+        return {}
+    if not isinstance(overrides, Mapping):
+        raise ValueError(
+            f"sources.yml → {field_path}: overrides must be a mapping of engine -> config"
+        )
+
+    normalized: dict[str, dict[str, Any]] = {}
+    for engine, cfg in overrides.items():
+        if cfg is None:
+            normalized[str(engine)] = {}
+            continue
+        if not isinstance(cfg, Mapping):
+            raise ValueError(
+                f"sources.yml → {field_path}[{engine!r}]: "
+                "expected mapping, got {type(cfg).__name__}"
+            )
+        picked = _pick_source_fields(cfg, None, field_path=f"{field_path}[{engine!r}]")
+        normalized[str(engine)] = _compact_cfg(picked)
+    return normalized
+
+
+def _merge_source_configs(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if key == "options":
+            opts = dict(merged.get("options") or {})
+            opts.update(value or {})
+            merged["options"] = opts
+        else:
+            merged[key] = value
+    if "options" not in merged or merged["options"] is None:
+        merged["options"] = {}
+    return merged
+
+
+def _combine_engine_overrides(
+    source_overrides: Mapping[str, dict[str, Any]],
+    table_overrides: Mapping[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    engines = set(source_overrides) | set(table_overrides)
+    combined: dict[str, dict[str, Any]] = {}
+    for engine in engines:
+        combined[engine] = _merge_source_configs(
+            source_overrides.get(engine, {}),
+            table_overrides.get(engine, {}),
+        )
+    return combined
+
+
+def resolve_source_entry(
+    entry: Mapping[str, Any], engine: str | None, *, default_identifier: str | None = None
+) -> dict[str, Any]:
+    base = entry.get("base") if isinstance(entry, Mapping) else None
+    if not isinstance(base, Mapping):
+        base = {}
+
+    cfg = dict(base)
+    cfg.setdefault("identifier", None)
+    cfg.setdefault("schema", None)
+    cfg.setdefault("database", None)
+    cfg.setdefault("catalog", None)
+    cfg.setdefault("project", None)
+    cfg.setdefault("dataset", None)
+    cfg.setdefault("location", None)
+    cfg.setdefault("format", None)
+    cfg.setdefault("options", {})
+
+    overrides = entry.get("overrides") if isinstance(entry, Mapping) else None
+    if isinstance(overrides, Mapping):
+        for wildcard_key in ("*", "default", "any"):
+            if wildcard_key in overrides:
+                cfg = _merge_source_configs(cfg, overrides[wildcard_key])
+        if engine and engine in overrides:
+            cfg = _merge_source_configs(cfg, overrides[engine])
+
+    ident = cfg.get("identifier")
+    if (ident is None or ident == "") and not cfg.get("location"):
+        if default_identifier:
+            cfg["identifier"] = default_identifier
+        else:
+            raise KeyError("Source configuration missing identifier or location")
+
+    return cfg
+
+
+def _parse_sources_yaml(raw: Any) -> dict[str, dict[str, dict[str, Any]]]:
+    if not raw:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise ValueError("sources.yml must be a mapping with keys 'version' and 'sources'.")
+
+    version = raw.get("version")
+    version_no = 2
+    if version != version_no:
+        raise ValueError("sources.yml → version: Only '2' is supported.")
+
+    entries = raw.get("sources")
+    if entries is None:
+        return {}
+    if not isinstance(entries, Iterable):
+        raise ValueError("sources.yml → sources: expected a list of source declarations.")
+
+    normalized: dict[str, dict[str, dict[str, Any]]] = {}
+    for idx, entry in enumerate(entries):
+        if not isinstance(entry, Mapping):
+            raise ValueError(
+                f"sources.yml → sources[{idx}]: expected mapping, got {type(entry).__name__}."
+            )
+
+        src_name = entry.get("name")
+        if not src_name or not isinstance(src_name, str):
+            raise ValueError(f"sources.yml → sources[{idx}]: missing 'name'.")
+
+        if src_name in normalized:
+            raise ValueError(f"sources.yml: duplicate source '{src_name}'.")
+
+        src_defaults = _pick_source_fields(entry, None, field_path=f"sources[{idx}]")
+        src_overrides = _normalize_engine_overrides(
+            entry.get("overrides"), field_path=f"sources[{idx}].overrides"
+        )
+
+        tables = entry.get("tables")
+        if tables is None:
+            raise ValueError(f"sources.yml → sources[{idx}]: missing 'tables' list.")
+        if not isinstance(tables, Iterable):
+            raise ValueError(
+                f"sources.yml → sources[{idx}].tables: expected list, got {type(tables).__name__}."
+            )
+
+        group: dict[str, dict[str, Any]] = {}
+        for t_idx, table in enumerate(tables):
+            if not isinstance(table, Mapping):
+                raise ValueError(
+                    f"sources.yml → sources[{idx}].tables[{t_idx}]: "
+                    f"expected mapping, got {type(table).__name__}."
+                )
+
+            tbl_name = table.get("name")
+            if not tbl_name or not isinstance(tbl_name, str):
+                raise ValueError(f"sources.yml → sources[{idx}].tables[{t_idx}]: missing 'name'.")
+
+            if tbl_name in group:
+                raise ValueError(
+                    f"sources.yml → source '{src_name}': duplicate table '{tbl_name}'."
+                )
+
+            base_cfg = _pick_source_fields(
+                table, src_defaults, field_path=f"sources[{idx}].tables[{t_idx}]"
+            )
+            if not base_cfg.get("identifier") and not base_cfg.get("location"):
+                base_cfg["identifier"] = tbl_name
+
+            table_overrides = _normalize_engine_overrides(
+                table.get("overrides"),
+                field_path=f"sources[{idx}].tables[{t_idx}].overrides",
+            )
+            overrides = _combine_engine_overrides(src_overrides, table_overrides)
+
+            entry_meta = {
+                "description": table.get("description"),
+                "columns": table.get("columns"),
+                "meta": table.get("meta"),
+            }
+
+            group[tbl_name] = {
+                "base": base_cfg,
+                "overrides": overrides,
+                **{k: v for k, v in entry_meta.items() if v is not None},
+            }
+
+        normalized[src_name] = group
+
+    return normalized
 
 
 @dataclass
@@ -92,12 +333,16 @@ class Registry:
         self._load_macros(models_dir)
         self._load_py_macros(models_dir)
 
-        # load sources
+        # load sources (version 2 schema)
         src_path = project_dir / "sources.yml"
-        self.sources = (
-            yaml.safe_load(src_path.read_text(encoding="utf-8")) if src_path.exists() else {}
-        )
-        self.sources = self.sources or {}
+        if src_path.exists():
+            raw_sources = yaml.safe_load(src_path.read_text(encoding="utf-8"))
+            try:
+                self.sources = _parse_sources_yaml(raw_sources)
+            except ValueError as exc:
+                raise ValueError(f"Failed to parse sources.yml: {exc}") from exc
+        else:
+            self.sources = {}
 
         # load project.yml (vars)
         proj_path = project_dir / "project.yml"

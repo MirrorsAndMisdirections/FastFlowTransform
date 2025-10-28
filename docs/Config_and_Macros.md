@@ -97,12 +97,34 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
 
 ```yaml
 # sources.yml
-crm:
-  users:
-    identifier: seed_users
-erp:
-  orders:
-    identifier: seed_orders
+version: 2
+
+sources:
+  - name: crm
+    tables:
+      - name: users
+        identifier: seed_users
+  - name: erp
+    tables:
+      - name: orders
+        identifier: seed_orders
+```
+
+Each source can declare defaults such as `schema`, `database`, or `catalog`. Tables may
+override those defaults, add per-engine overrides, or point at files:
+
+```yaml
+  - name: raw
+    schema: staging
+    tables:
+      - name: seed_users
+        identifier: seed_users
+        overrides:
+          postgres:
+            schema: raw
+          databricks_spark:
+            format: delta
+            location: "/mnt/delta/raw/seed_users"
 ```
 
 ---

@@ -1,0 +1,11 @@
+{
+  "metadata": {
+    "generated_at": "2025-10-28T19:05:15+00:00",
+    "tool": "fastflowtransform"
+  },
+  "relations": {
+    "failing": {
+      "columns": []
+    }
+  }
+}

@@ -1,12 +1,39 @@
+# tests/common/fixtures.py
 import os
 from contextlib import suppress
 from pathlib import Path
 
 import psycopg
 import pytest
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from psycopg import sql
 
+from fastflowtransform.core import REGISTRY
 from tests.common.utils import ROOT, run
+
+
+# ---- Jinja Env ----
+@pytest.fixture(scope="session")
+def jinja_env():
+    """
+    Minimal Jinja2 rnvironment for rendering-tests.
+    """
+    env = Environment(
+        loader=FileSystemLoader(["."]),
+        autoescape=select_autoescape([]),
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+
+    env.globals.setdefault("is_incremental", lambda: False)
+    env.globals.setdefault("this", None)
+    env.globals.setdefault(
+        "var",
+        lambda k, default=None: (
+            (getattr(REGISTRY, "vars", {}) or {}).get(k, default) if REGISTRY else default
+        ),
+    )
+    return env
 
 
 # ---- DuckDB ----

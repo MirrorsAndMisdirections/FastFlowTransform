@@ -1,35 +1,36 @@
-from __future__ import annotations
+# fastflowtransform/cli/logging_utils.py
+# from __future__ import annotations
 
-import logging
-import os
+# import logging
+# import os
 
-LOG = logging.getLogger("fastflowtransform")
-SQL_LOG = logging.getLogger("fastflowtransform.sql")
+# from fastflowtransform.logging import get_logger, setup_logging as _setup_pkg_logging
 
+# # retained names so other code keeps working
+# LOG = get_logger("cli")
+# SQL_LOG = get_logger("sql")
 
-def _setup_logging(verbose: int, quiet: int) -> None:
-    """
-    Map verbosity to levels:
-      -q        → ERROR
-       (default)→ WARNING
-      -v        → INFO
-      -vv       → DEBUG
-    Also wires the SQL channel and keeps FFT_SQL_DEBUG compatibility.
-    """
-    eff_level_threshold = 2
-    eff = max(min(verbose - quiet, 2), -1)
-    lvl = {-1: logging.ERROR, 0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}[eff]
+# def _setup_logging(verbose: int, quiet: int) -> None:
+#     """
+#     CLI entrypoint config. Verbosity/quiet map to stdlib levels.
+#     """
+#     # base: WARNING; -v INFO; -vv DEBUG; -q ERROR
+#     verbose_debug_level = 2
+#     level = logging.WARNING
+#     if quiet >= 1:
+#         level = logging.ERROR
+#     elif verbose == 1:
+#         level = logging.INFO
+#     elif verbose >= verbose_debug_level:
+#         level = logging.DEBUG
 
-    logging.basicConfig(level=lvl, format="%(levelname)s %(message)s")
-    LOG.setLevel(lvl)
+#     # Env-controlled toggles
+#     sql_debug_env = os.getenv("FFT_SQL_DEBUG", "").lower() in ("1", "true", "yes", "on")
+#     json_env = os.getenv("FFT_LOG_JSON", "").lower() in ("1", "true", "yes", "on")
 
-    sql_debug_env = os.getenv("FFT_SQL_DEBUG") == "1"
-    SQL_LOG.setLevel(
-        logging.DEBUG if (eff >= eff_level_threshold or sql_debug_env) else logging.WARNING
-    )
-
-    if eff >= eff_level_threshold and not sql_debug_env:
-        os.environ.setdefault("FFT_SQL_DEBUG", "1")
-
-
-__all__ = ["LOG", "SQL_LOG", "_setup_logging"]
+#     # Use package-wide setup (human console by default)
+#     _setup_pkg_logging(
+#         level=level,
+#         json=json_env,
+#         propagate_sql=(verbose >= verbose_debug_level) or sql_debug_env,
+#     )

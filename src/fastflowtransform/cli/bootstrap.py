@@ -1,16 +1,19 @@
+# fastflowtransform/cli/bootstrap.py
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
 import typer
 import yaml
+from dotenv import load_dotenv
 from jinja2 import Environment
 
 from fastflowtransform.core import REGISTRY
-from fastflowtransform.errors import DependencyNotFoundError, ProfileConfigError
+from fastflowtransform.errors import DependencyNotFoundError
 from fastflowtransform.executors import (
     BigQueryBFExecutor,
     BigQueryExecutor,
@@ -21,6 +24,8 @@ from fastflowtransform.executors import (
 )
 from fastflowtransform.executors._shims import BigQueryConnShim, SAConnShim
 from fastflowtransform.executors.base import BaseExecutor
+from fastflowtransform.incremental import run_or_dispatch
+from fastflowtransform.logging import echo
 from fastflowtransform.settings import (
     EngineType,
     EnvSettings,
@@ -69,7 +74,7 @@ def _resolve_project_path(project_arg: str) -> Path:
 
 
 def _die(msg: str, code: int = 1) -> NoReturn:
-    typer.echo(f"\n❌ {msg}")
+    echo(f"\n❌ {msg}")
     raise typer.Exit(code)
 
 
@@ -78,13 +83,39 @@ def _load_project_and_env(project_arg: str) -> tuple[Path, Environment]:
     try:
         REGISTRY.load_project(proj)
     except DependencyNotFoundError as e:
-        typer.echo(str(e))
+        echo(str(e))
         raise typer.Exit(1) from e
 
     jenv = REGISTRY.env
     if jenv is None:
         _die("Internal error: Jinja Environment not initialized after load_project()", code=99)
     return proj, cast(Environment, jenv)
+
+
+def _load_dotenv_layered(project_dir: Path, env_name: str) -> None:
+    """
+    Load .env in layers (lowest to highest precedence):
+      1) <repo>/.env
+      2) <project>/.env
+      3) <project>/.env.local
+      4) <project>/.env.<env_name>
+      5) <project>/.env.<env_name>.local
+    """
+
+    def _safe_load(p: Path, override: bool) -> None:
+        with suppress(Exception):
+            load_dotenv(dotenv_path=p, override=override)
+
+    # 1) Repo root defaults
+    _safe_load(Path.cwd() / ".env", override=False)
+    # 2) Project defaults
+    _safe_load(project_dir / ".env", override=True)
+    # 3) Project local (gitignored)
+    _safe_load(project_dir / ".env.local", override=True)
+    # 4) Env-specific
+    _safe_load(project_dir / f".env.{env_name}", override=True)
+    # 5) Env-specific local (gitignored)
+    _safe_load(project_dir / f".env.{env_name}.local", override=True)
 
 
 def _resolve_profile(
@@ -95,10 +126,83 @@ def _resolve_profile(
         env = env.model_copy(update={"ENGINE": engine})
     try:
         prof = _resolve_profile_impl(proj, env_name, env)
-        return env, prof
-    except ProfileConfigError as e:
-        typer.echo(f"❌ {e}")
-        raise typer.Exit(1) from e
+    except Exception as exc:
+        raise typer.BadParameter(f"Failed to resolve profile '{env_name}': {exc}") from exc
+
+    engine_name = getattr(prof, "engine", None)
+    if not engine_name:
+        raise typer.BadParameter(
+            f"Profile '{env_name}' does not define an engine. "
+            "Add one to profiles.yml or pass --engine."
+        )
+
+    return env, prof
+
+
+def _validate_profile_params(env_name: str, prof: Profile) -> None:
+    def _fail(msg: str) -> None:
+        raise typer.BadParameter(f"Profile '{env_name}' invalid for engine '{prof.engine}': {msg}")
+
+    if prof.engine == "duckdb":
+        path = getattr(prof.duckdb, "path", None)
+        if not isinstance(path, str) or not path.strip():
+            _fail("duckdb.path must be set (profiles.yml → duckdb.path or env FF_DUCKDB_PATH).")
+        return
+
+    if prof.engine == "postgres":
+        dsn = getattr(prof.postgres, "dsn", None)
+        schema = getattr(prof.postgres, "db_schema", None)
+        if not dsn or not isinstance(dsn, str) or not dsn.strip():
+            _fail("postgres.dsn must be set (profiles.yml → postgres.dsn or env FF_PG_DSN).")
+        if schema is None or (isinstance(schema, str) and not schema.strip()):
+            _fail(
+                "postgres.db_schema must be set (profiles.yml "
+                "→ postgres.db_schema or env FF_PG_SCHEMA)."
+            )
+        return
+
+    if prof.engine == "bigquery":
+        dataset = getattr(prof.bigquery, "dataset", None)
+        if not dataset or not isinstance(dataset, str) or not dataset.strip():
+            _fail(
+                "bigquery.dataset must be set (profiles.yml "
+                "→ bigquery.dataset or env FF_BQ_DATASET)."
+            )
+        return
+
+    if prof.engine == "databricks_spark":
+        master = getattr(prof.databricks_spark, "master", None)
+        app_name = getattr(prof.databricks_spark, "app_name", None)
+        if not isinstance(master, str) or not master.strip():
+            _fail(
+                "databricks_spark.master must be set (profiles.yml "
+                "→ databricks_spark.master or env FF_DBR_MASTER)."
+            )
+        if not isinstance(app_name, str) or not app_name.strip():
+            _fail(
+                "databricks_spark.app_name must be set (profiles.yml "
+                "→ databricks_spark.app_name or env FF_DBR_APPNAME)."
+            )
+        return
+
+    if prof.engine == "snowflake_snowpark":
+        sf = prof.snowflake_snowpark
+        required = {
+            "account": "snowflake_snowpark.account",
+            "user": "snowflake_snowpark.user",
+            "password": "snowflake_snowpark.password",
+            "warehouse": "snowflake_snowpark.warehouse",
+            "database": "snowflake_snowpark.database",
+            "db_schema": "snowflake_snowpark.db_schema",
+        }
+        missing = [label for attr, label in required.items() if not getattr(sf, attr, None)]
+        if missing:
+            joined = ", ".join(missing)
+            _fail(f"{joined} must be set (profiles.yml → snowflake_snowpark.* or env FF_SF_*).")
+        return
+
+    if prof.engine is None:
+        _fail("engine not specified.")
 
 
 def _prepare_context(
@@ -107,9 +211,12 @@ def _prepare_context(
     engine: EngineType | None,
     vars_opt: list[str] | None,
 ) -> CLIContext:
-    proj, jenv = _load_project_and_env(project_arg)
+    proj_raw, jenv = _load_project_and_env(project_arg)
+    proj = Path(proj_raw)
+    _load_dotenv_layered(proj, env_name)
     REGISTRY.set_cli_vars(_parse_cli_vars(vars_opt or []))
     env_settings, prof = _resolve_profile(env_name, engine, proj)
+    _validate_profile_params(env_name, prof)
     return CLIContext(project=proj, jinja_env=jenv, env_settings=env_settings, profile=prof)
 
 
@@ -157,14 +264,14 @@ def _make_executor(prof: Profile, jenv: Environment) -> tuple[Any, Callable, Cal
     ex: BaseExecutor
     if prof.engine == "duckdb":
         ex = DuckExecutor(db_path=prof.duckdb.path)
-        return ex, (lambda n: ex.run_sql(n, jenv)), ex.run_python
+        return ex, (lambda n: run_or_dispatch(ex, n, jenv)), ex.run_python
 
     if prof.engine == "postgres":
         if prof.postgres.dsn is None:
             raise RuntimeError("Postgres DSN must be set")
 
         ex = PostgresExecutor(dsn=prof.postgres.dsn, schema=prof.postgres.db_schema)
-        return ex, (lambda n: ex.run_sql(n, jenv)), ex.run_python
+        return ex, (lambda n: run_or_dispatch(ex, n, jenv)), ex.run_python
 
     if prof.engine == "bigquery":
         if prof.bigquery.dataset is None:
@@ -182,14 +289,14 @@ def _make_executor(prof: Profile, jenv: Environment) -> tuple[Any, Callable, Cal
                 dataset=prof.bigquery.dataset,
                 location=prof.bigquery.location,
             )
-        return ex, (lambda n: ex.run_sql(n, jenv)), ex.run_python
+        return ex, (lambda n: run_or_dispatch(ex, n, jenv)), ex.run_python
 
     if prof.engine == "databricks_spark":
         ex = DatabricksSparkExecutor(
             master=prof.databricks_spark.master,
             app_name=prof.databricks_spark.app_name,
         )
-        return ex, (lambda n: ex.run_sql(n, jenv)), ex.run_python
+        return ex, (lambda n: run_or_dispatch(ex, n, jenv)), ex.run_python
 
     if prof.engine == "snowflake_snowpark":
         cfg = {
@@ -203,7 +310,7 @@ def _make_executor(prof: Profile, jenv: Environment) -> tuple[Any, Callable, Cal
         if prof.snowflake_snowpark.role:
             cfg["role"] = prof.snowflake_snowpark.role
         ex = SnowflakeSnowparkExecutor(cfg)
-        return ex, (lambda n: ex.run_sql(n, jenv)), ex.run_python
+        return ex, (lambda n: run_or_dispatch(ex, n, jenv)), ex.run_python
 
     _die(f"Unbekannter Engine-Typ: {getattr(prof, 'engine', None)}", code=1)
     raise AssertionError("unreachable")

@@ -94,6 +94,31 @@ WithSchemaOpt = Annotated[
 ]
 
 
+# ────────────── HTTP / API Flags ──────────────
+class HttpCacheMode(str, Enum):
+    OFF = "off"  # keine Cache-Nutzung
+    RO = "ro"  # read-only: nur lesen, keine Writes
+    RW = "rw"  # read-write (Default-Verhalten)
+
+
+OfflineOpt = Annotated[
+    bool,
+    typer.Option(
+        "--offline",
+        help="HTTP offline mode: verbietet Netz-Zugriffe in API-Modellen (nur Cache-Hits erlaubt).",
+    ),
+]
+
+HttpCacheOpt = Annotated[
+    HttpCacheMode | None,
+    typer.Option(
+        "--http-cache",
+        help="HTTP-Cache-Modus für API-Modelle: off | ro | rw.",
+        case_sensitive=False,
+    ),
+]
+
+
 class CacheMode(str, Enum):
     RW = "rw"  # read-write: skip on hit, write on build
     RO = "ro"  # read-only: skip on hit, build on miss (no writes)

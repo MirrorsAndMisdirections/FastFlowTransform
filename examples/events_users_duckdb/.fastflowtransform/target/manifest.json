@@ -1,0 +1,45 @@
+{
+  "macros": {},
+  "metadata": {
+    "generated_at": "2025-10-27T16:43:12+00:00",
+    "tool": "fastflowtransform"
+  },
+  "nodes": {
+    "fct_events_inc.ff": {
+      "deps": [],
+      "kind": "sql",
+      "materialized": "incremental",
+      "name": "fct_events_inc.ff",
+      "path": "models/fct_events_inc.ff.sql",
+      "relation": "fct_events_inc"
+    },
+    "users.ff": {
+      "deps": [],
+      "kind": "sql",
+      "materialized": "table",
+      "name": "users.ff",
+      "path": "models/users.ff.sql",
+      "relation": "users"
+    },
+    "users_enriched": {
+      "deps": [
+        "users.ff"
+      ],
+      "kind": "python",
+      "materialized": "table",
+      "name": "users_enriched",
+      "path": "models/users_enriched.ff.py",
+      "relation": "users_enriched"
+    }
+  },
+  "sources": {
+    "app": {
+      "events": {
+        "identifier": "seed_events_initial"
+      },
+      "users": {
+        "identifier": "seed_users"
+      }
+    }
+  }
+}

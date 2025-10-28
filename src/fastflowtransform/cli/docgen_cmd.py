@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import webbrowser
 from contextlib import suppress
 from pathlib import Path
@@ -9,19 +8,18 @@ from typing import Annotated
 
 import typer
 
-from fastflowtransform.core import REGISTRY
-from fastflowtransform.docs import render_site
-
-from .bootstrap import _prepare_context
-from .docs_utils import _build_docs_manifest, _resolve_dag_out_dir
-from .logging_utils import LOG
-from .options import (
+from fastflowtransform.cli.bootstrap import _prepare_context
+from fastflowtransform.cli.docs_utils import _build_docs_manifest, _resolve_dag_out_dir
+from fastflowtransform.cli.options import (
     EngineOpt,
     EnvOpt,
     OutOpt,
     ProjectArg,
     VarsOpt,
 )
+from fastflowtransform.core import REGISTRY
+from fastflowtransform.docs import render_site
+from fastflowtransform.logging import echo, echo_debug
 
 
 def docgen(
@@ -47,7 +45,7 @@ def docgen(
     dag_out.mkdir(parents=True, exist_ok=True)
 
     render_site(dag_out, REGISTRY.nodes, executor=ex)
-    typer.echo(f"HTML docs written to {dag_out / 'index.html'}")
+    echo(f"HTML docs written to {dag_out / 'index.html'}")
 
     if emit_json is not None:
         manifest = _build_docs_manifest(
@@ -59,15 +57,14 @@ def docgen(
         emit_json = emit_json.resolve()
         emit_json.parent.mkdir(parents=True, exist_ok=True)
         emit_json.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        typer.echo(f"Docs manifest JSON written to {emit_json}")
+        echo(f"Docs manifest JSON written to {emit_json}")
 
     if open_source:
         index_path = (dag_out / "index.html").as_uri()
         with suppress(Exception):
             webbrowser.open(index_path, new=2)
 
-    if LOG.isEnabledFor(logging.INFO):
-        typer.echo(f"Profile: {env_name} | Engine: {ctx.profile.engine}")
+    echo_debug(f"Profile: {env_name} | Engine: {ctx.profile.engine}")
 
 
 def register(app: typer.Typer) -> None:

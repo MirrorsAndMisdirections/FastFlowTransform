@@ -1,0 +1,3 @@
+event_id,user_id,event_type,ingested_at,meta_json
+100,1,signup,2025-01-01T00:00:00Z,"{}"
+101,2,purchase,2025-01-01T00:05:00Z,"{}"

@@ -1,0 +1,15 @@
+default:
+  dev:
+    engine: "{{ env('FF_ENGINE') }}"
+    duckdb:
+      path: "{{ env('FF_DUCKDB_PATH') }}"
+
+  stg:
+    engine: "{{ env('FF_ENGINE') }}"
+    duckdb:
+      path: "{{ env('FF_DUCKDB_PATH') }}"
+
+  prod:
+    engine: "{{ env('FF_ENGINE') }}"
+    duckdb:
+      path: "{{ env('FF_DUCKDB_PATH') }}"

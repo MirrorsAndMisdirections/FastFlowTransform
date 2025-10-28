@@ -1,17 +1,10 @@
 from __future__ import annotations
 
-import logging
-
 import typer
 
-from fastflowtransform.core import REGISTRY
-from fastflowtransform.dag import mermaid
-from fastflowtransform.docs import render_site
-
-from .bootstrap import _prepare_context
-from .docs_utils import _resolve_dag_out_dir
-from .logging_utils import LOG
-from .options import (
+from fastflowtransform.cli.bootstrap import _prepare_context
+from fastflowtransform.cli.docs_utils import _resolve_dag_out_dir
+from fastflowtransform.cli.options import (
     EngineOpt,
     EnvOpt,
     HtmlOpt,
@@ -21,7 +14,11 @@ from .options import (
     VarsOpt,
     WithSchemaOpt,
 )
-from .selectors import _compile_selector
+from fastflowtransform.cli.selectors import _compile_selector
+from fastflowtransform.core import REGISTRY
+from fastflowtransform.dag import mermaid
+from fastflowtransform.docs import render_site
+from fastflowtransform.logging import echo, echo_debug
 
 
 def dag(
@@ -51,15 +48,14 @@ def dag(
             render_site(dag_out, filtered_nodes, executor=ex, with_schema=with_schema)
         except TypeError:
             render_site(dag_out, filtered_nodes, executor=ex)
-        typer.echo(f"HTML-DAG written to {dag_out / 'index.html'}")
+        echo(f"HTML-DAG written to {dag_out / 'index.html'}")
     else:
         mm = mermaid(filtered_nodes)
         mmd = dag_out / "dag.mmd"
         mmd.write_text(mm, encoding="utf-8")
-        typer.echo(f"Mermaid DAG written to {dag_out}")
+        echo(f"Mermaid DAG written to {dag_out}")
 
-    if LOG.isEnabledFor(logging.INFO):
-        typer.echo(f"Profile: {env_name} | Engine: {ctx.profile.engine}")
+    echo_debug(f"Profile: {env_name} | Engine: {ctx.profile.engine}")
 
 
 def register(app: typer.Typer) -> None:
