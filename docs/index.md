@@ -9,7 +9,7 @@ Welcome! This page is your starting point for FastFlowTransform docs. Pick the t
 - [User Guide](./Technical_Overview.md#part-i--operational-guide)
 - [Modeling Reference](./Config_and_Macros.md)
 - [Parallelism & Cache](./Cache_and_Parallelism.md)
-- [API calls in Python models](./API_Models.md)
+- [API calls in Python models](./Api_Models.md)
 - [Incremental Models](./Incremental.md)
 - [YAML Tests (Schema-bound)](./YAML_Tests.md)
 - [Data Quality Tests Reference](./Data_Quality_Tests.md)
@@ -41,7 +41,7 @@ Welcome! This page is your starting point for FastFlowTransform docs. Pick the t
 
 - **Dive into architecture & core modules:** start with [Architecture Overview](Technical_Overview.md#architecture-overview) and [Core Modules](Technical_Overview.md#core-modules) for registry, DAG, executors, validation, and more.
 - **Add tests & seeds:** see [Sample Models](Technical_Overview.md#sample-models), [Seeds & Example Data](Technical_Overview.md#seeds--example-data), and the unit test guide in [Model Unit Tests](Technical_Overview.md#model-unit-tests-fastflowtransform-utest).
-- **Contribute code:** follow the workflow described in [`../Contributing.md`](../Contributing.md) and consult the module-level docs for internal APIs.
+- **Contribute code:** follow the workflow described in [`./Contributing.md`](./Contributing.md) and consult the module-level docs for internal APIs.
 - **Plan ahead:** check the roadmap snapshot in the [Technical Overview](Technical_Overview.md#roadmap-snapshot) to understand upcoming work.
 
 ---
@@ -58,6 +58,6 @@ Welcome! This page is your starting point for FastFlowTransform docs. Pick the t
 
 ## Need Help?
 
-- Open an issue or PR — see [`../Contributing.md`](../Contributing.md) for guidelines.
+- Open an issue or PR — see [`./Contributing.md`](./Contributing.md) for guidelines.
 - Join the discussion (planning doc / roadmap highlights) — see the roadmap section in the [Technical Overview](Technical_Overview.md#roadmap-snapshot).
 - If you spot gaps in the docs, file an issue with the context and links to the relevant section.

@@ -169,5 +169,4 @@ Failures include the generated SQL (where available) to simplify debugging. Use 
 ## Further Reading
 
 - [`docs/YAML_Tests.md`](YAML_Tests.md) – schema for YAML-defined tests and advanced scenarios.
-- [`fastflowtransform/testing.py`](../src/fastflowtransform/testing.py) – implementation details and helper functions.
 - [`fft test --help`] — command-line switches, selectors, and cache options.
