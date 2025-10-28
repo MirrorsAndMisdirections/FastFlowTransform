@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fastflowtransform"
-version = "0.4.0"
+version = "0.5.1"
 description = "FastFlowTransform PoC: SQL+Python Models, DAG, DuckDB executor"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -47,6 +47,9 @@ dev = [
   "pre-commit==3.*",
   "pandas-stubs>=2.1",
   "types-PyYAML>=6.0.12",
+]
+
+docs = [
   "mkdocs>=1.6",
   "mkdocs-material>=9.5",
   "pymdown-extensions>=10.0",
