@@ -720,7 +720,7 @@ wheels = [
 
 [[package]]
 name = "fastflowtransform"
-version = "0.4.0"
+version = "0.5.1"
 source = { editable = "." }
 dependencies = [
     { name = "bigframes" },
@@ -744,15 +744,17 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
-    { name = "mkdocs" },
-    { name = "mkdocs-material" },
     { name = "mypy" },
     { name = "pandas-stubs" },
     { name = "pre-commit" },
-    { name = "pymdown-extensions" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "types-pyyaml" },
+]
+docs = [
+    { name = "mkdocs" },
+    { name = "mkdocs-material" },
+    { name = "pymdown-extensions" },
 ]
 
 [package.dev-dependencies]
@@ -768,8 +770,8 @@ requires-dist = [
     { name = "google-cloud-bigquery", specifier = ">=3.25" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "jinja2", specifier = ">=3.1" },
-    { name = "mkdocs", marker = "extra == 'dev'", specifier = ">=1.6" },
-    { name = "mkdocs-material", marker = "extra == 'dev'", specifier = ">=9.5" },
+    { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6" },
+    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
     { name = "mypy", marker = "extra == 'dev'", specifier = "==1.18.*" },
     { name = "pandas", specifier = ">=2.0" },
     { name = "pandas-stubs", marker = "extra == 'dev'", specifier = ">=2.1" },
@@ -778,7 +780,7 @@ requires-dist = [
     { name = "psycopg2-binary", specifier = ">=2.9" },
     { name = "pydantic", specifier = ">=2.8" },
     { name = "pydantic-settings", specifier = ">=2.4" },
-    { name = "pymdown-extensions", marker = "extra == 'dev'", specifier = ">=10.0" },
+    { name = "pymdown-extensions", marker = "extra == 'docs'", specifier = ">=10.0" },
     { name = "pyspark", specifier = ">=4.0.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==8.4.*" },
     { name = "python-dotenv", specifier = ">=1.0" },
@@ -790,7 +792,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "docs"]
 
 [package.metadata.requires-dev]
 dev = [

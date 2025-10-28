@@ -1,4 +1,4 @@
-# FastFlowTransform (PoC 0.3)
+# FastFlowTransform (PoC 0.5.1)
 
 [![CI](https://github.com/<org>/<repo>/actions/workflows/ci.yml/badge.svg)](https://github.com/<org>/<repo>/actions/workflows/ci.yml)
 [![PyPI version](https://img.shields.io/pypi/v/fastflowtransform.svg)](https://pypi.org/project/fastflowtransform/)
