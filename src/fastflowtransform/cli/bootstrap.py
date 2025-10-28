@@ -1,12 +1,10 @@
 # fastflowtransform/cli/bootstrap.py
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, NoReturn, cast
 
 import typer
@@ -126,25 +124,85 @@ def _resolve_profile(
     env = EnvSettings()
     if engine is not None:
         env = env.model_copy(update={"ENGINE": engine})
-    # Prefer the safe resolver (it may already default to duckdb). On any failure,
-    # fall back to a minimal DuckDB ':memory:' profile instead of exiting.
     try:
         prof = _resolve_profile_impl(proj, env_name, env)
-        return env, prof
-    except Exception:
-        # Defensive fallback for tmp projects without profiles.yml (or misconfig).
-        db_path = os.environ.get("FF_DUCKDB_PATH", ":memory:")
-        # Return a SimpleNamespace with the attributes _make_executor expects.
-        # This avoids any pydantic validation issues entirely.
-        prof_ns = SimpleNamespace(
-            engine="duckdb",
-            duckdb=SimpleNamespace(path=db_path),
+    except Exception as exc:
+        raise typer.BadParameter(f"Failed to resolve profile '{env_name}': {exc}") from exc
+
+    engine_name = getattr(prof, "engine", None)
+    if not engine_name:
+        raise typer.BadParameter(
+            f"Profile '{env_name}' does not define an engine. "
+            "Add one to profiles.yml or pass --engine."
         )
-        # Optional: concise note for visibility in tests (stderr), no exit.
-        with suppress(Exception):
-            echo("ℹ︎ Falling back to DuckDB (:memory:) profile.", err=True)  # Noqa RUF001
-        # Type hint says Profile, aber alles was _make_executor braucht ist .engine und .duckdb.path
-        return env, cast(Profile, prof_ns)
+
+    return env, prof
+
+
+def _validate_profile_params(env_name: str, prof: Profile) -> None:
+    def _fail(msg: str) -> None:
+        raise typer.BadParameter(f"Profile '{env_name}' invalid for engine '{prof.engine}': {msg}")
+
+    if prof.engine == "duckdb":
+        path = getattr(prof.duckdb, "path", None)
+        if not isinstance(path, str) or not path.strip():
+            _fail("duckdb.path must be set (profiles.yml → duckdb.path or env FF_DUCKDB_PATH).")
+        return
+
+    if prof.engine == "postgres":
+        dsn = getattr(prof.postgres, "dsn", None)
+        schema = getattr(prof.postgres, "db_schema", None)
+        if not dsn or not isinstance(dsn, str) or not dsn.strip():
+            _fail("postgres.dsn must be set (profiles.yml → postgres.dsn or env FF_PG_DSN).")
+        if schema is None or (isinstance(schema, str) and not schema.strip()):
+            _fail(
+                "postgres.db_schema must be set (profiles.yml "
+                "→ postgres.db_schema or env FF_PG_SCHEMA)."
+            )
+        return
+
+    if prof.engine == "bigquery":
+        dataset = getattr(prof.bigquery, "dataset", None)
+        if not dataset or not isinstance(dataset, str) or not dataset.strip():
+            _fail(
+                "bigquery.dataset must be set (profiles.yml "
+                "→ bigquery.dataset or env FF_BQ_DATASET)."
+            )
+        return
+
+    if prof.engine == "databricks_spark":
+        master = getattr(prof.databricks_spark, "master", None)
+        app_name = getattr(prof.databricks_spark, "app_name", None)
+        if not isinstance(master, str) or not master.strip():
+            _fail(
+                "databricks_spark.master must be set (profiles.yml "
+                "→ databricks_spark.master or env FF_DBR_MASTER)."
+            )
+        if not isinstance(app_name, str) or not app_name.strip():
+            _fail(
+                "databricks_spark.app_name must be set (profiles.yml "
+                "→ databricks_spark.app_name or env FF_DBR_APPNAME)."
+            )
+        return
+
+    if prof.engine == "snowflake_snowpark":
+        sf = prof.snowflake_snowpark
+        required = {
+            "account": "snowflake_snowpark.account",
+            "user": "snowflake_snowpark.user",
+            "password": "snowflake_snowpark.password",
+            "warehouse": "snowflake_snowpark.warehouse",
+            "database": "snowflake_snowpark.database",
+            "db_schema": "snowflake_snowpark.db_schema",
+        }
+        missing = [label for attr, label in required.items() if not getattr(sf, attr, None)]
+        if missing:
+            joined = ", ".join(missing)
+            _fail(f"{joined} must be set (profiles.yml → snowflake_snowpark.* or env FF_SF_*).")
+        return
+
+    if prof.engine is None:
+        _fail("engine not specified.")
 
 
 def _prepare_context(
@@ -158,6 +216,7 @@ def _prepare_context(
     _load_dotenv_layered(proj, env_name)
     REGISTRY.set_cli_vars(_parse_cli_vars(vars_opt or []))
     env_settings, prof = _resolve_profile(env_name, engine, proj)
+    _validate_profile_params(env_name, prof)
     return CLIContext(project=proj, jinja_env=jenv, env_settings=env_settings, profile=prof)
 
 
