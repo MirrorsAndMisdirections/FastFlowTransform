@@ -352,6 +352,4 @@ See the [Technical Overview](./Technical_Overview.md#model-unit-tests-fastflowtr
 
 ---
 
-Need something not covered here? Open an issue or start a discussion as described in [`../Contributing.md`](../Contributing.md). Continuous feedback keeps this reference sharp.
-
 Return to the [Docs Hub](./index.md) or switch to the [User/Developer Guide](./Technical_Overview.md).

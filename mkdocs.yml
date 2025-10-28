@@ -17,16 +17,9 @@ theme:
     - search.highlight
   icon:
     repo: fontawesome/brands/github
-  # Optional Branding (aktiviere bei Bedarf):
-  # logo: assets/logo.png
-  # favicon: assets/favicon.png
-  # palette:
-  #   - scheme: default
-  #     primary: indigo
-  #     accent: indigo
-
 nav:
   - Home: index.md
+  - Quickstart: Quickstart.md
   - Technical Overview: Technical_Overview.md
   - API & Models: Api_Models.md
   - Configuration & Macros: Config_and_Macros.md
@@ -34,8 +27,11 @@ nav:
   - Incremental Processing: Incremental.md
   - State Selection: State_Selection.md
   - YAML Tests: YAML_Tests.md
+  - Data Quality Tests: Data_Quality_Tests.md
   - Examples:
       - Environment Matrix: examples/Environment_Matrix.md
+  - Contributing: Contributing.md
+  - License: license.md
 
 markdown_extensions:
   - admonition
@@ -46,7 +42,11 @@ markdown_extensions:
   - pymdownx.details
   - pymdownx.highlight
   - pymdownx.inlinehilite
-  - pymdownx.snippets
+  - pymdownx.snippets:
+      base_path:
+        - .
+        - docs
+      check_paths: true
   - pymdownx.magiclink
 
 plugins:
