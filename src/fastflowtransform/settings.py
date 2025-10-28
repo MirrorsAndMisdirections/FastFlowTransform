@@ -122,6 +122,15 @@ class EnvSettings(BaseSettings):
     SF_DATABASE: str | None = None
     SF_SCHEMA: str | None = None
 
+    # --- HTTP / API (optional) ---
+    HTTP_CACHE_DIR: str | None = None  # maps to FF_HTTP_CACHE_DIR
+    HTTP_TTL: int | None = None  # FF_HTTP_TTL
+    HTTP_TIMEOUT: int | None = None  # FF_HTTP_TIMEOUT
+    HTTP_MAX_RETRIES: int | None = None  # FF_HTTP_MAX_RETRIES
+    HTTP_RATE_LIMIT_RPS: float | None = None  # FF_HTTP_RATE_LIMIT_RPS
+    HTTP_OFFLINE: int | None = None  # FF_HTTP_OFFLINE (1/0)
+    HTTP_ALLOWED_DOMAINS: str | None = None  # FF_HTTP_ALLOWED_DOMAINS (csv)
+
 
 def load_project_config(project_dir: Path) -> ProjectConfig:
     cfg_path = project_dir / "project.yml"

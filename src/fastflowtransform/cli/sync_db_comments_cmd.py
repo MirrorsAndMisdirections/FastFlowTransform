@@ -6,12 +6,11 @@ from typing import Annotated, Any
 import typer
 from sqlalchemy import text as sa_text
 
+from fastflowtransform.cli.bootstrap import _prepare_context
+from fastflowtransform.cli.options import EngineOpt, EnvOpt, ProjectArg, VarsOpt
 from fastflowtransform.core import REGISTRY, relation_for
 from fastflowtransform.docs import _collect_columns, read_docs_metadata
-
-from .bootstrap import _prepare_context
-from .logging_utils import LOG
-from .options import EngineOpt, EnvOpt, ProjectArg, VarsOpt
+from fastflowtransform.logging import echo, error
 
 
 def _strip_html_for_comment(s: str | None) -> str:
@@ -53,9 +52,9 @@ def _sync_comments_postgres(
             statements.append(f"COMMENT ON COLUMN {fqtn}.{col} IS {_sql_literal(txt)};")
 
     if dry_run:
-        typer.echo("\n-- DRY RUN: Planned Postgres COMMENT statements --")
+        echo("\n-- DRY RUN: Planned Postgres COMMENT statements --")
         for s in statements:
-            typer.echo(s)
+            echo(s)
         return
 
     if not hasattr(execu, "engine"):
@@ -70,9 +69,9 @@ def _sync_comments_postgres(
                 applied += 1
             except Exception as e:
                 failed += 1
-                LOG.error("Failed to apply comment: %s  (%s: %s)", s, type(e).__name__, e)
+                error("Failed to apply comment: %s  (%s: %s)", s, type(e).__name__, e)
 
-    typer.echo(f"✓ Postgres comments applied: {applied} (failed: {failed})")
+    echo(f"✓ Postgres comments applied: {applied} (failed: {failed})")
 
 
 def _sf_fq_table(schema: str | None, relation: str) -> str:
@@ -98,9 +97,9 @@ def _sync_comments_snowflake(
             statements.append(f"COMMENT ON COLUMN {fqtn}.{col} IS {lit}")
 
     if dry_run:
-        typer.echo("\n-- DRY RUN: Planned Snowflake COMMENT statements --")
+        echo("\n-- DRY RUN: Planned Snowflake COMMENT statements --")
         for s in statements:
-            typer.echo(s + ";")
+            echo(s + ";")
         return
 
     applied, failed = 0, 0
@@ -117,12 +116,12 @@ def _sync_comments_snowflake(
             applied += 1
         except Exception as e:
             failed += 1
-            LOG.error("Failed to apply comment: %s  (%s: %s)", stmt, type(e).__name__, e)
+            error("Failed to apply comment: %s  (%s: %s)", stmt, type(e).__name__, e)
 
     for s in statements:
         _run_sql(s)
 
-    typer.echo(f"✓ Snowflake comments applied: {applied} (failed: {failed})")
+    echo(f"✓ Snowflake comments applied: {applied} (failed: {failed})")
 
 
 def sync_db_comments(

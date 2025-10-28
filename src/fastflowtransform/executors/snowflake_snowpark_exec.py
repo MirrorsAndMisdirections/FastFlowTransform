@@ -12,6 +12,7 @@ from fastflowtransform.meta import ensure_meta_table, upsert_meta
 
 
 class SnowflakeSnowparkExecutor(BaseExecutor[SNDF]):
+    ENGINE_NAME = "snowflake_snowpark"
     """Snowflake executor operating on Snowpark DataFrames (no pandas)."""
 
     def __init__(self, cfg: dict):
@@ -95,9 +96,19 @@ class SnowflakeSnowparkExecutor(BaseExecutor[SNDF]):
     def _format_source_reference(
         self, cfg: dict[str, Any], source_name: str, table_name: str
     ) -> str:
-        ident = cfg["identifier"]
-        db = cfg.get("database", self.database)
-        sch = cfg.get("schema", self.schema)
+        if cfg.get("location"):
+            raise NotImplementedError("Snowflake executor does not support path-based sources.")
+
+        ident = cfg.get("identifier")
+        if not ident:
+            raise KeyError(f"Source {source_name}.{table_name} missing identifier")
+
+        db = cfg.get("database") or cfg.get("catalog") or self.database
+        sch = cfg.get("schema") or self.schema
+        if not db or not sch:
+            raise KeyError(
+                f"Source {source_name}.{table_name} missing database/schema for Snowflake"
+            )
         return f"{self._q(db)}.{self._q(sch)}.{self._q(ident)}"
 
     def _create_or_replace_view(self, target_sql: str, select_body: str, node: Node) -> None:

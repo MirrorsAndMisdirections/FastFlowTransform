@@ -20,6 +20,8 @@ def _q(ident: str) -> str:
 
 
 class DuckExecutor(BaseExecutor[pd.DataFrame]):
+    ENGINE_NAME = "duckdb"
+
     def __init__(self, db_path: str = ":memory:"):
         if db_path and db_path != ":memory:" and "://" not in db_path:
             with suppress(Exception):
@@ -77,7 +79,27 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
     def _format_source_reference(
         self, cfg: dict[str, Any], source_name: str, table_name: str
     ) -> str:
-        return _q(cfg["identifier"])
+        location = cfg.get("location")
+        if location:
+            raise NotImplementedError("DuckDB executor does not support path-based sources yet.")
+
+        identifier = cfg.get("identifier")
+        if not identifier:
+            raise KeyError(f"Source {source_name}.{table_name} missing identifier")
+
+        parts = [
+            p
+            for p in (
+                cfg.get("catalog") or cfg.get("database"),
+                cfg.get("schema"),
+                identifier,
+            )
+            if p
+        ]
+        if not parts:
+            parts = [identifier]
+
+        return ".".join(_q(str(part)) for part in parts)
 
     def _create_or_replace_view(self, target_sql: str, select_body: str, node: Node) -> None:
         self.con.execute(f"create or replace view {target_sql} as {select_body}")

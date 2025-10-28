@@ -13,12 +13,14 @@ from fastflowtransform.meta import ensure_meta_table, upsert_meta
 
 
 class DatabricksSparkExecutor(BaseExecutor[SDF]):
+    ENGINE_NAME = "databricks_spark"
     """Spark/Databricks executor without pandas: Python models operate on Spark DataFrames."""
 
     def __init__(self, master: str = "local[*]", app_name: str = "fastflowtransform"):
         self.spark = SparkSession.builder.master(master).appName(app_name).getOrCreate()
         # Lightweight testing shim so tests can call executor.con.execute("SQL")
         self.con = _SparkConnShim(self.spark)
+        self._registered_path_sources: dict[str, dict[str, Any]] = {}
 
     # ---------- Frame hooks (required) ----------
     def _read_relation(self, relation: str, node: Node, deps: Iterable[str]) -> SDF:
@@ -91,9 +93,42 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
     def _format_source_reference(
         self, cfg: dict[str, Any], source_name: str, table_name: str
     ) -> str:
-        ident = cfg["identifier"]
-        db = cfg.get("database")
-        return f"{self._q_ident(db)}.{self._q_ident(ident)}" if db else self._q_ident(ident)
+        location = cfg.get("location")
+        identifier = cfg.get("identifier")
+
+        if location:
+            alias = identifier or f"__ff_src_{source_name}_{table_name}"
+            fmt = cfg.get("format")
+            if not fmt:
+                raise KeyError(
+                    f"Source {source_name}.{table_name} requires 'format' when using a location"
+                )
+
+            options = dict(cfg.get("options") or {})
+            descriptor = {
+                "location": location,
+                "format": fmt,
+                "options": options,
+            }
+            existing = self._registered_path_sources.get(alias)
+            if existing != descriptor:
+                reader = self.spark.read.format(fmt)
+                if options:
+                    reader = reader.options(**options)
+                df = reader.load(location)
+                df.createOrReplaceTempView(alias)
+                self._registered_path_sources[alias] = descriptor
+            return self._q_ident(alias)
+
+        if not identifier:
+            raise KeyError(f"Source {source_name}.{table_name} missing identifier")
+
+        catalog = cfg.get("catalog") or cfg.get("database")
+        schema = cfg.get("schema")
+        parts = [p for p in (catalog, schema, identifier) if p]
+        if not parts:
+            parts = [identifier]
+        return ".".join(self._q_ident(str(part)) for part in parts)
 
     def _create_or_replace_view(self, target_sql: str, select_body: str, node: Node) -> None:
         self.spark.sql(f"CREATE OR REPLACE VIEW {target_sql} AS {select_body}")

@@ -1,0 +1,11 @@
+name: duckdb_api_demo
+version: "0.1"
+
+vars: {}
+
+tests:
+  # Batch‑Tabellen
+  - type: not_null
+    table: mart_users_join
+    column: user_id
+    tags: [batch]

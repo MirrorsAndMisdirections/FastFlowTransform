@@ -1,8 +1,7 @@
+# fastflowtransform/cli/bootstrap.py
 from __future__ import annotations
 
-import logging
 import os
-import sys
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -12,9 +11,9 @@ from typing import Any, NoReturn, cast
 
 import typer
 import yaml
+from dotenv import load_dotenv
 from jinja2 import Environment
 
-from fastflowtransform.cli.logging_utils import LOG, _setup_logging
 from fastflowtransform.core import REGISTRY
 from fastflowtransform.errors import DependencyNotFoundError
 from fastflowtransform.executors import (
@@ -28,6 +27,7 @@ from fastflowtransform.executors import (
 from fastflowtransform.executors._shims import BigQueryConnShim, SAConnShim
 from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.incremental import run_or_dispatch
+from fastflowtransform.logging import echo
 from fastflowtransform.settings import (
     EngineType,
     EnvSettings,
@@ -76,7 +76,7 @@ def _resolve_project_path(project_arg: str) -> Path:
 
 
 def _die(msg: str, code: int = 1) -> NoReturn:
-    typer.echo(f"\n❌ {msg}")
+    echo(f"\n❌ {msg}")
     raise typer.Exit(code)
 
 
@@ -85,13 +85,39 @@ def _load_project_and_env(project_arg: str) -> tuple[Path, Environment]:
     try:
         REGISTRY.load_project(proj)
     except DependencyNotFoundError as e:
-        typer.echo(str(e))
+        echo(str(e))
         raise typer.Exit(1) from e
 
     jenv = REGISTRY.env
     if jenv is None:
         _die("Internal error: Jinja Environment not initialized after load_project()", code=99)
     return proj, cast(Environment, jenv)
+
+
+def _load_dotenv_layered(project_dir: Path, env_name: str) -> None:
+    """
+    Load .env in layers (lowest to highest precedence):
+      1) <repo>/.env
+      2) <project>/.env
+      3) <project>/.env.local
+      4) <project>/.env.<env_name>
+      5) <project>/.env.<env_name>.local
+    """
+
+    def _safe_load(p: Path, override: bool) -> None:
+        with suppress(Exception):
+            load_dotenv(dotenv_path=p, override=override)
+
+    # 1) Repo root defaults
+    _safe_load(Path.cwd() / ".env", override=False)
+    # 2) Project defaults
+    _safe_load(project_dir / ".env", override=True)
+    # 3) Project local (gitignored)
+    _safe_load(project_dir / ".env.local", override=True)
+    # 4) Env-specific
+    _safe_load(project_dir / f".env.{env_name}", override=True)
+    # 5) Env-specific local (gitignored)
+    _safe_load(project_dir / f".env.{env_name}.local", override=True)
 
 
 def _resolve_profile(
@@ -116,7 +142,7 @@ def _resolve_profile(
         )
         # Optional: concise note for visibility in tests (stderr), no exit.
         with suppress(Exception):
-            typer.echo("ℹ︎ Falling back to DuckDB (:memory:) profile.", err=True)  # Noqa RUF001
+            echo("ℹ︎ Falling back to DuckDB (:memory:) profile.", err=True)  # Noqa RUF001
         # Type hint says Profile, aber alles was _make_executor braucht ist .engine und .duckdb.path
         return env, cast(Profile, prof_ns)
 
@@ -127,7 +153,9 @@ def _prepare_context(
     engine: EngineType | None,
     vars_opt: list[str] | None,
 ) -> CLIContext:
-    proj, jenv = _load_project_and_env(project_arg)
+    proj_raw, jenv = _load_project_and_env(project_arg)
+    proj = Path(proj_raw)
+    _load_dotenv_layered(proj, env_name)
     REGISTRY.set_cli_vars(_parse_cli_vars(vars_opt or []))
     env_settings, prof = _resolve_profile(env_name, engine, proj)
     return CLIContext(project=proj, jinja_env=jenv, env_settings=env_settings, profile=prof)
@@ -227,41 +255,3 @@ def _make_executor(prof: Profile, jenv: Environment) -> tuple[Any, Callable, Cal
 
     _die(f"Unbekannter Engine-Typ: {getattr(prof, 'engine', None)}", code=1)
     raise AssertionError("unreachable")
-
-
-def _ensure_logging() -> None:
-    """Ensure console logging to STDOUT for tests calling commands directly.
-    Configures root and fastflowtransform.* loggers if they lack handlers.
-    """
-    # If the CLI callback ran, handlers may already exist — then leave them.
-    root = logging.getLogger()
-    if not root.handlers:
-        h = logging.StreamHandler(sys.stdout)
-        fmt = logging.Formatter("%(message)s")
-        h.setFormatter(fmt)
-        root.addHandler(h)
-        root.setLevel(logging.INFO)
-    # Ensure our package logger has a StreamHandler to stdout as well
-    pkg = logging.getLogger("fastflowtransform")
-    if not pkg.handlers:
-        h2 = logging.StreamHandler(sys.stdout)
-        h2.setFormatter(logging.Formatter("%(message)s"))
-        pkg.addHandler(h2)
-        pkg.setLevel(logging.INFO)
-        pkg.propagate = False  # write once to stdout, avoid double prints
-    # Make sure our canonical LOG uses stdout too
-    if not LOG.handlers:
-        _setup_logging(verbose=0, quiet=0)
-    for handler in list(LOG.handlers):
-        # Narrow via isinstance: handler is StreamHandler inside this block
-        if (
-            isinstance(handler, logging.StreamHandler)
-            # Prefer typed API instead of direct attribute assignment
-            and getattr(handler, "stream", None) is not sys.stdout
-        ):
-            try:
-                handler.setStream(sys.stdout)
-            except Exception:
-                # Fallback if setStream is missing/unexpected
-                with suppress(Exception):
-                    handler.stream = sys.stdout

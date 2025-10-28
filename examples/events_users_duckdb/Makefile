@@ -84,35 +84,3 @@ demo: clean
 	@echo
 	@echo "✅ Demo done. Open DAG here: $(PROJECT)/site/dag/index.html"
 	+$(MAKE) demo-open
-
-demo-old:
-	@set -euo pipefail; \
-	echo "== 🚀 Demo Events Users (DuckDB) =="; \
-	echo "DB=$(DB)  PROJECT=$(PROJECT)"; \
-	echo "Remove old demo data..."; \
-	rm -rf .local "$(FF_PROJECT)/docs" dist build *.egg-info .fastflowtransform; \
-	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" $(UV) run fft seed "$(PROJECT)" --env dev; \
-	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" $(UV) run fft run  "$(PROJECT)" --env dev; \
-	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" $(UV) run fft dag  "$(PROJECT)" --env dev --html; \
-	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" $(UV) run fft test "$(PROJECT)" --env dev || true; \
-	echo; \
-	echo "== 📦 Artifacts =="; \
-	echo "  $(PROJECT)/.fastflowtransform/target/{manifest.json,run_results.json,catalog.json)"; \
-	echo "  DAG HTML: $(PROJECT)/site/dag/index.html"; \
-	echo; \
-	echo "== 🔁 Incremental Model =="; \
-	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" $(UV) run fft run "$(PROJECT)" --env dev --select fct_events_inc.ff --cache rw || true; \
-	echo; \
-	echo "== 🧠 State Selection (changed only) =="; \
-	if [ -f "$(PROJECT)/models/users.ff.sql" ]; then \
-	  touch "$(PROJECT)/models/users.ff.sql"; \
-	fi; \
-	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" $(UV) run fft run "$(PROJECT)" --env dev --cache rw --select state:modified; \
-	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" $(UV) run fft run "$(PROJECT)" --env dev --cache rw --select state:modified+; \
-	echo; \
-	echo "== 🧪 Result Selection (from last run_results.json) =="; \
-	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" $(UV) run fft run "$(PROJECT)" --env dev --select result:error || true; \
-	FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" $(UV) run fft run "$(PROJECT)" --env dev --select result:warn  || true; \
-	echo; \
-	echo "✅ Demo done. Open DAG here: $(PROJECT)/site/dag/index.html"
-

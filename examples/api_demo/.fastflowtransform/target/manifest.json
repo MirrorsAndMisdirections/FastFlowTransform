@@ -1,0 +1,56 @@
+{
+  "macros": {},
+  "metadata": {
+    "generated_at": "2025-10-28T14:48:33+00:00",
+    "tool": "fastflowtransform"
+  },
+  "nodes": {
+    "api_users_http": {
+      "deps": [
+        "users.ff"
+      ],
+      "kind": "python",
+      "materialized": "table",
+      "name": "api_users_http",
+      "path": "models/api_users_http.ff.py",
+      "relation": "api_users_http"
+    },
+    "api_users_requests": {
+      "deps": [
+        "users.ff"
+      ],
+      "kind": "python",
+      "materialized": "table",
+      "name": "api_users_requests",
+      "path": "models/api_users_requests.ff.py",
+      "relation": "api_users_requests"
+    },
+    "mart_users_join.ff": {
+      "deps": [
+        "api_users_http",
+        "api_users_requests",
+        "users.ff"
+      ],
+      "kind": "sql",
+      "materialized": "table",
+      "name": "mart_users_join.ff",
+      "path": "models/mart_users_join.ff.sql",
+      "relation": "mart_users_join"
+    },
+    "users.ff": {
+      "deps": [],
+      "kind": "sql",
+      "materialized": "table",
+      "name": "users.ff",
+      "path": "models/users.ff.sql",
+      "relation": "users"
+    }
+  },
+  "sources": {
+    "crm": {
+      "users": {
+        "identifier": "seed_users"
+      }
+    }
+  }
+}

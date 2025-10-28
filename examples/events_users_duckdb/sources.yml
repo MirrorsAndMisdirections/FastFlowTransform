@@ -1,5 +1,9 @@
-app:
-  users:
-    identifier: seed_users
-  events:
-    identifier: seed_events_initial
+version: 2
+
+sources:
+  - name: app
+    tables:
+      - name: users
+        identifier: seed_users
+      - name: events
+        identifier: seed_events_initial

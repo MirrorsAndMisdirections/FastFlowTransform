@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastflowtransform.core import Node
+import yaml
+
+from fastflowtransform.core import Node, _parse_sources_yaml
 from fastflowtransform.fingerprint import (
     EnvCtx,
     build_env_ctx,
@@ -16,9 +18,19 @@ from fastflowtransform.fingerprint import (
 
 
 def test_sources_normalization_stable():
-    a = {"crm": {"users": {"identifier": "seed_users"}, "orders": {"identifier": "seed_orders"}}}
-    b = {"crm": {"orders": {"identifier": "seed_orders"}, "users": {"identifier": "seed_users"}}}
-    assert normalized_sources_blob(a) == normalized_sources_blob(b)
+    doc = """version: 2
+
+sources:
+  - name: crm
+    tables:
+      - name: users
+        identifier: seed_users
+      - name: orders
+        identifier: seed_orders
+"""
+    parsed = _parse_sources_yaml(yaml.safe_load(doc))
+    reordered = {"crm": {"orders": parsed["crm"]["orders"], "users": parsed["crm"]["users"]}}
+    assert normalized_sources_blob(parsed) == normalized_sources_blob(reordered)
 
 
 def test_env_ctx_respects_selected_env_keys(monkeypatch):

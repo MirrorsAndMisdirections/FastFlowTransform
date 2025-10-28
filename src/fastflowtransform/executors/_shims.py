@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -43,10 +44,33 @@ class BigQueryConnShim:
         raise TypeError(f"Unsupported sql argument type for BigQuery shim: {type(sql_or_stmts)}")
 
 
+_RE_PG_COR_TABLE = re.compile(
+    r"""^\s*create\s+or\s+replace\s+table\s+
+        (?P<ident>(?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)   # optional schema + ident
+        \s+as\s+(?P<body>.*)$
+    """,
+    re.IGNORECASE | re.DOTALL | re.VERBOSE,
+)
+
+
+def _rewrite_pg_create_or_replace_table(sql: str) -> str:
+    """
+    Rewrite 'CREATE OR REPLACE TABLE t AS <body>' into
+    'DROP TABLE IF EXISTS t CASCADE; CREATE TABLE t AS <body>' for Postgres.
+    Leave all other SQL untouched.
+    """
+    m = _RE_PG_COR_TABLE.match(sql or "")
+    if not m:
+        return sql
+    ident = m.group("ident").strip()
+    body = m.group("body").strip().rstrip(";\n\t ")
+    return f"DROP TABLE IF EXISTS {ident} CASCADE; CREATE TABLE {ident} AS {body}"
+
+
 class SAConnShim:
     """
     Compatibility layer so fastflowtransform.testing can call executor.con.execute(...)
-    against SQLAlchemy engines (Postgres, etc.).
+    against SQLAlchemy engines (Postgres, etc.). Adds PG-safe DDL rewrites.
     """
 
     marker = "PG_SHIM"
@@ -55,41 +79,42 @@ class SAConnShim:
         self._engine = engine
         self._schema = schema
 
-    def _exec_one(self, conn: Any, stmt: Any) -> Any:
-        statement_tuple_len = 2
+    def _exec_one(self, conn: Any, stmt: Any, params: dict | None = None) -> Any:
+        # tuple (sql, params)
+        statement_len = 2
         if (
             isinstance(stmt, tuple)
-            and len(stmt) == statement_tuple_len
+            and len(stmt) == statement_len
             and isinstance(stmt[0], str)
             and isinstance(stmt[1], dict)
         ):
-            return conn.execute(text(stmt[0]), stmt[1])
+            return self._exec_one(conn, stmt[0], stmt[1])
+
+        # sqlalchemy expression
         if isinstance(stmt, ClauseElement):
             return conn.execute(stmt)
+
+        # plain string (apply rewrite, then possibly split into multiple statements)
         if isinstance(stmt, str):
-            return conn.execute(text(stmt))
+            rewritten = _rewrite_pg_create_or_replace_table(stmt)
+            parts = [p.strip() for p in rewritten.split(";") if p.strip()]
+            res = None
+            for i, part in enumerate(parts):
+                res = conn.execute(text(part), params if (i == len(parts) - 1) else None)
+            return res
+
+        # iterable of statements -> sequential execution
         if isinstance(stmt, Iterable) and not isinstance(stmt, (bytes, bytearray, str)):
             res = None
             for s in stmt:
                 res = self._exec_one(conn, s)
             return res
-        raise TypeError(f"Unsupported statement type in shim: {type(stmt)} → {stmt!r}")
+
+        # fallback
+        return self._exec_one(conn, str(stmt))
 
     def execute(self, sql: Any) -> Any:
         with self._engine.begin() as conn:
-            sql_tuple_len = 2
             if self._schema:
                 conn.execute(text(f'SET LOCAL search_path = "{self._schema}"'))
-            if isinstance(sql, (str, ClauseElement)) or (
-                isinstance(sql, tuple)
-                and len(sql) == sql_tuple_len
-                and isinstance(sql[0], str)
-                and isinstance(sql[1], dict)
-            ):
-                return self._exec_one(conn, sql)
-            if isinstance(sql, Iterable) and not isinstance(sql, (bytes, bytearray, str)):
-                res = None
-                for item in sql:
-                    res = self._exec_one(conn, item)
-                return res
-            raise TypeError(f"Unsupported sql argument type: {type(sql)} → {sql!r}")
+            return self._exec_one(conn, sql)

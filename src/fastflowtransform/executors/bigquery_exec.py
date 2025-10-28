@@ -18,6 +18,7 @@ from fastflowtransform.meta import ensure_meta_table, upsert_meta
 
 # ---- Executor --------------------------------------------------------------
 class BigQueryExecutor(BigQueryIdentifierMixin, BaseExecutor[pd.DataFrame]):
+    ENGINE_NAME = "bigquery"
     """
     BigQuery executor (pandas DataFrames).
     ENV/Profiles typically use:
@@ -94,9 +95,15 @@ class BigQueryExecutor(BigQueryIdentifierMixin, BaseExecutor[pd.DataFrame]):
     def _format_source_reference(
         self, cfg: dict[str, Any], source_name: str, table_name: str
     ) -> str:
-        ident = cfg["identifier"]
-        proj = cfg.get("project", self.project)
-        dset = cfg.get("dataset", self.dataset)
+        if cfg.get("location"):
+            raise NotImplementedError("BigQuery executor does not support path-based sources.")
+
+        ident = cfg.get("identifier")
+        if not ident:
+            raise KeyError(f"Source {source_name}.{table_name} missing identifier")
+
+        proj = cfg.get("project") or cfg.get("database") or cfg.get("catalog") or self.project
+        dset = cfg.get("dataset") or cfg.get("schema") or self.dataset
         return self._qualified_identifier(ident, project=proj, dataset=dset)
 
     def _apply_sql_materialization(

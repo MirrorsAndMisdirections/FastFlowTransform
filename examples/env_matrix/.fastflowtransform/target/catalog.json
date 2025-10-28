@@ -1,0 +1,51 @@
+{
+  "metadata": {
+    "generated_at": "2025-10-28T18:36:20+00:00",
+    "tool": "fastflowtransform"
+  },
+  "relations": {
+    "env_vars": {
+      "columns": [
+        {
+          "dtype": "VARCHAR",
+          "name": "active_env_hint",
+          "nullable": true
+        },
+        {
+          "dtype": "VARCHAR",
+          "name": "ff_engine",
+          "nullable": true
+        },
+        {
+          "dtype": "VARCHAR",
+          "name": "duckdb_path",
+          "nullable": true
+        },
+        {
+          "dtype": "BOOLEAN",
+          "name": "duckdb_exists",
+          "nullable": true
+        },
+        {
+          "dtype": "BIGINT",
+          "name": "duckdb_size_bytes",
+          "nullable": true
+        }
+      ]
+    },
+    "users": {
+      "columns": [
+        {
+          "dtype": "BIGINT",
+          "name": "id",
+          "nullable": true
+        },
+        {
+          "dtype": "VARCHAR",
+          "name": "email",
+          "nullable": true
+        }
+      ]
+    }
+  }
+}

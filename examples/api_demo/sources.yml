@@ -1,0 +1,7 @@
+version: 2
+
+sources:
+  - name: crm
+    tables:
+      - name: users
+        identifier: seed_users     # will be materialized via `fft seed`

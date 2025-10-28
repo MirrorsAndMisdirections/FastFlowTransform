@@ -30,7 +30,18 @@ def test_ephemeral_inlining_end_to_end(tmp_path: Path):
     # sources.yml
     _w(
         proj / "sources.yml",
-        "crm:\n  users:\n    identifier: seed_users\ncore:\n  base:\n    identifier: base\n",
+        """version: 2
+
+sources:
+  - name: crm
+    tables:
+      - name: users
+        identifier: seed_users
+  - name: core
+    tables:
+      - name: base
+        identifier: base
+""",
     )
 
     # models

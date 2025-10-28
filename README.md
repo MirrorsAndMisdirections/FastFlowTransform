@@ -68,7 +68,7 @@ make install      # upgrades pip + installs FastFlowTransform in editable mode
 ## Quickstart
 
 > 📚 **Mehr lesen … CLI-Details**
-> Für Flag-Referenzen, Automatisierung und Hintergründe siehe [`docs/Technical_Overview.md`](docs/Technical_Overview.md#cli-flows).
+> For flag referencees, automatization and backgrounds see [`docs/Technical_Overview.md`](docs/Technical_Overview.md#cli-flows).
 
 Run the end-to-end DuckDB demo (seed → run → docs → tests) in under a minute:
 
@@ -190,8 +190,9 @@ Examples:
 - **User & operator guide:** project layout, CLI usage, troubleshooting tips — see [`docs/Technical_Overview.md`](docs/Technical_Overview.md).
 - **Docgen shortcut:** append `--open-source` to `fft docgen ...` to launch the freshly rendered `index.html` immediately; use `--no-schema` when column introspection should be skipped.
 - **Modeling reference:** configuration, Jinja helpers, macros — see [`docs/Config_and_Macros.md`](docs/Config_and_Macros.md).
+- **API calls in Python models:** [`docs/API_Models.md`](docs/API_Models.md)
 - **Database comments sync:** preview database comment updates with `fft sync-db-comments . --env dev --dry-run` before applying them to Postgres or Snowflake.
-- **Examples:** runnable demo projects live under `examples/`; each README covers engine-specific setup.
+- **Examples:** runnable demo projects live under `examples/`;
 
 ---
 

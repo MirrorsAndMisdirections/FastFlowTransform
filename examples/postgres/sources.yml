@@ -1,5 +1,9 @@
-crm:
-  users:
-    identifier: seed_users
-  orders:
-    identifier: seed_orders
+version: 2
+
+sources:
+  - name: crm
+    tables:
+      - name: users
+        identifier: seed_users
+      - name: orders
+        identifier: seed_orders

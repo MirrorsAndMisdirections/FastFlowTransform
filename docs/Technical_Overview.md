@@ -177,6 +177,11 @@ Targets wrap the CLI commands showcased below. Feel free to copy the pattern int
 - CLI flags and internals are documented under [CLI Implementation](#cli-implementation).
 - Automation examples appear in the [Makefile Targets](#makefile-targets).
 
+
+#### HTTP/API in Python models
+See [API calls in Python models](./API_Models.md) for `get_json`/`get_df`, pagination, cache/offline flags.
+
+
 #### DAG & Documentation
 
 - Narrow the graph with `fft dag ... --select <pattern>` (for example `state:modified` or `tag:finance`). Combined with `--html` this produces a focused mini site.

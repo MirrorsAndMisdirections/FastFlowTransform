@@ -1,0 +1,46 @@
+{
+  "metadata": {
+    "generated_at": "2025-10-28T14:48:33+00:00",
+    "tool": "fastflowtransform"
+  },
+  "results": [
+    {
+      "duration_ms": 0,
+      "finished_at": "2025-10-28T14:48:33+00:00",
+      "http": null,
+      "message": null,
+      "name": "api_users_http",
+      "started_at": "2025-10-28T14:48:33+00:00",
+      "status": "success"
+    },
+    {
+      "duration_ms": 0,
+      "finished_at": "2025-10-28T14:48:33+00:00",
+      "http": null,
+      "message": null,
+      "name": "api_users_requests",
+      "started_at": "2025-10-28T14:48:33+00:00",
+      "status": "success"
+    },
+    {
+      "duration_ms": 1,
+      "finished_at": "2025-10-28T14:48:33+00:00",
+      "http": null,
+      "message": null,
+      "name": "mart_users_join.ff",
+      "started_at": "2025-10-28T14:48:33+00:00",
+      "status": "success"
+    },
+    {
+      "duration_ms": 4,
+      "finished_at": "2025-10-28T14:48:33+00:00",
+      "http": null,
+      "message": null,
+      "name": "users.ff",
+      "started_at": "2025-10-28T14:48:33+00:00",
+      "status": "success"
+    }
+  ],
+  "run_finished_at": "2025-10-28T14:48:33+00:00",
+  "run_started_at": "2025-10-28T14:48:33+00:00"
+}

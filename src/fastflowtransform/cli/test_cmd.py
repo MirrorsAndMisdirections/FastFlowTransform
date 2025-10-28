@@ -11,7 +11,7 @@ import typer
 import yaml
 
 from fastflowtransform import testing
-from fastflowtransform.cli.bootstrap import _ensure_logging, _get_test_con, _prepare_context
+from fastflowtransform.cli.bootstrap import _get_test_con, _prepare_context
 from fastflowtransform.cli.options import (
     EngineOpt,
     EnvOpt,
@@ -23,6 +23,7 @@ from fastflowtransform.cli.selectors import _compile_selector
 from fastflowtransform.core import REGISTRY
 from fastflowtransform.dag import topo_sort
 from fastflowtransform.errors import ModelExecutionError
+from fastflowtransform.logging import echo
 from fastflowtransform.schema_loader import Severity, TestSpec, load_schema_tests
 from fastflowtransform.test_registry import TESTS
 
@@ -43,14 +44,14 @@ class DQResult:
 def _print_model_error_block(node_name: str, relation: str, message: str, sql: str | None) -> None:
     header = "┌" + "─" * 70
     footer = "└" + "─" * 70
-    typer.echo(header)
-    typer.echo(f"│ Model: {node_name}  (relation: {relation})")
-    typer.echo(f"│ Error: {message}")
+    echo(header)
+    echo(f"│ Model: {node_name}  (relation: {relation})")
+    echo(f"│ Error: {message}")
     if sql:
-        typer.echo("│ SQL (tail):")
+        echo("│ SQL (tail):")
         for line in sql.splitlines():
-            typer.echo("│   " + line)
-    typer.echo(footer)
+            echo("│   " + line)
+    echo(footer)
 
 
 def _execute_models(
@@ -79,7 +80,7 @@ def _execute_models(
 
 def _maybe_print_marker(con: Any) -> None:
     if os.getenv("FFT_SQL_DEBUG") == "1":
-        typer.echo(getattr(con, "marker", "NO_SHIM"))
+        echo(getattr(con, "marker", "NO_SHIM"))
 
 
 def _run_models(
@@ -257,26 +258,26 @@ def _print_summary(results: list[DQResult]) -> None:
     failed = sum((not r.ok) and (r.severity != "warn") for r in results)
     warned = sum((not r.ok) and (r.severity == "warn") for r in results)
 
-    typer.echo("\nData Quality Summary")
-    typer.echo("────────────────────")
+    echo("\nData Quality Summary")
+    echo("────────────────────")
     for r in results:
         mark = "✅" if r.ok else "❕" if r.severity == "warn" else "❌"
         scope = f"{r.table}" + (f".{r.column}" if r.column else "")
         kind_with_params = f"{r.kind}"
         if r.param_str:
             kind_with_params += f" {r.param_str}"
-        typer.echo(f"{mark} {kind_with_params:<28} {scope:<40} ({r.ms}ms)")
+        echo(f"{mark} {kind_with_params:<28} {scope:<40} ({r.ms}ms)")
         if not r.ok and r.msg:
-            typer.echo(f"   ↳ {r.msg}")
+            echo(f"   ↳ {r.msg}")
         if not r.ok and r.example_sql:
-            typer.echo(f"   ↳ e.g. SQL: {r.example_sql}")
+            echo(f"   ↳ e.g. SQL: {r.example_sql}")
 
-    typer.echo("\nTotals")
-    typer.echo("──────")
-    typer.echo(f"✓ passed: {passed}")
+    echo("\nTotals")
+    echo("──────")
+    echo(f"✓ passed: {passed}")
     if warned:
-        typer.echo(f"! warned: {warned}")
-    typer.echo(f"✗ failed: {failed}")
+        echo(f"! warned: {warned}")
+    echo(f"✗ failed: {failed}")
 
 
 def _format_params_for_summary(kind: str, params: dict[str, Any]) -> str:
@@ -314,7 +315,7 @@ def test(
     vars: VarsOpt = None,
     select: SelectOpt = None,
 ) -> None:
-    _ensure_logging()
+    # _ensure_logging()
     ctx = _prepare_context(project, env_name, engine, vars)
     tokens, pred = _compile_selector(select)
     has_model_matches = any(pred(node) for node in REGISTRY.nodes.values())

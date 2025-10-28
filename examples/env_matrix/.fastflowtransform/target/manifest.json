@@ -1,0 +1,53 @@
+{
+  "macros": {},
+  "metadata": {
+    "generated_at": "2025-10-28T18:36:20+00:00",
+    "tool": "fastflowtransform"
+  },
+  "nodes": {
+    "env_vars.ff": {
+      "deps": [],
+      "kind": "python",
+      "materialized": "table",
+      "name": "env_vars.ff",
+      "path": "models/env_vars.ff.py",
+      "relation": "env_vars"
+    },
+    "users.ff": {
+      "deps": [],
+      "kind": "sql",
+      "materialized": "table",
+      "name": "users.ff",
+      "path": "models/users.ff.sql",
+      "relation": "users"
+    }
+  },
+  "sources": {
+    "raw": {
+      "seed_users": {
+        "base": {
+          "catalog": null,
+          "database": null,
+          "dataset": null,
+          "format": null,
+          "identifier": "seed_users",
+          "location": null,
+          "options": {},
+          "project": null,
+          "schema": "raw"
+        },
+        "overrides": {
+          "databricks_spark": {
+            "format": "delta",
+            "location": "/mnt/delta/raw/seed_users",
+            "options": {}
+          },
+          "postgres": {
+            "options": {},
+            "schema": "main"
+          }
+        }
+      }
+    }
+  }
+}

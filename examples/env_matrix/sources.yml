@@ -1,0 +1,14 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    tables:
+      - name: seed_users
+        identifier: seed_users
+        overrides:
+          postgres:
+            schema: main
+          databricks_spark:
+            format: delta
+            location: "/mnt/delta/raw/seed_users"

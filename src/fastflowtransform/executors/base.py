@@ -2,18 +2,20 @@
 from __future__ import annotations
 
 import contextvars
-import logging
-import os
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, TypeVar
 
 from jinja2 import Environment
 from pandas import DataFrame as _PDDataFrame
 
-from fastflowtransform.core import REGISTRY, Node, relation_for
+from fastflowtransform.api import context as _http_ctx
+from fastflowtransform.core import REGISTRY, Node, relation_for, resolve_source_entry
+from fastflowtransform.errors import ModelExecutionError
+from fastflowtransform.logging import echo_debug
 from fastflowtransform.validation import validate_required_columns
 
 # Frame type (pandas.DataFrame, pyspark.sql.DataFrame, snowflake.snowpark.DataFrame, ...)
@@ -119,9 +121,18 @@ class BaseExecutor[TFrame](ABC):
             return relation_for(name)
 
         def _default_source(source_name: str, table_name: str) -> str:
-            cfg = REGISTRY.sources.get(source_name, {}).get(table_name)
-            if not cfg:
+            group = REGISTRY.sources.get(source_name)
+            if not group:
                 raise KeyError(f"Unknown source {source_name}.{table_name}")
+            entry = group.get(table_name)
+            if not entry:
+                raise KeyError(f"Unknown source {source_name}.{table_name}")
+            cfg = resolve_source_entry(entry, self.engine_name, default_identifier=table_name)
+            if cfg.get("location"):
+                raise KeyError(
+                    "Path-based sources require executor context; "
+                    "default resolver cannot handle them."
+                )
             identifier = cfg.get("identifier")
             if not identifier:
                 raise KeyError(f"Source {source_name}.{table_name} missing identifier")
@@ -151,46 +162,79 @@ class BaseExecutor[TFrame](ABC):
 
     def run_sql(self, node: Node, env: Environment) -> None:
         """
-        Shared orchestration for SQL models. Subclasses implement quoting and DDL via hooks.
-
-        Flow:
-          1. Set up ref()/source() resolvers (with ephemeral inlining)
-          2. Render the SQL template
-          3. Strip leading config blocks
-          4. Skip materialisation for ephemeral models
-          5. Extract the SELECT body and let the executor materialise it
+        Orchestrate SQL models:
+          1) Render Jinja (ref/source/this) and strip leading {{ config(...) }}.
+          2) If the SQL is full DDL (CREATE …), execute it verbatim (passthrough).
+          3) Otherwise, normalize to CREATE OR REPLACE {TABLE|VIEW} AS <body>.
+             The body is CTE-aware (keeps WITH … SELECT … intact).
+        On failure, raise ModelExecutionError with a helpful snippet.
         """
-
-        sql = self.render_sql(
+        sql_rendered = self.render_sql(
             node,
             env,
             ref_resolver=lambda name: self._resolve_ref(name, env),
             source_resolver=self._resolve_source,
         )
-        sql = self._strip_leading_config(sql).strip()
+        sql = self._strip_leading_config(sql_rendered).strip()
 
         materialization = (node.meta or {}).get("materialized", "table")
         if materialization == "ephemeral":
             return
 
-        select_body = self._first_select_body(sql).rstrip(" ;\n\t")
+        # 1) Direct DDL passthrough (CREATE [OR REPLACE] {TABLE|VIEW} …)
+        if self._looks_like_direct_ddl(sql):
+            try:
+                self._execute_sql_direct(sql, node)
+                return
+            except NotImplementedError:
+                # Engine doesn't implement direct DDL → fall back to normalized materialization.
+                pass
+            except Exception as e:
+                raise ModelExecutionError(
+                    node_name=node.name,
+                    relation=relation_for(node.name),
+                    message=str(e),
+                    sql_snippet=sql,
+                ) from e
+
+        # 2) Normalized materialization path (CTE-safe body)
+        body = self._selectable_body(sql).rstrip(" ;\n\t")
         target_sql = self._format_relation_for_ref(node.name)
-        self._apply_sql_materialization(node, target_sql, select_body, materialization)
+
+        # Centralized SQL preview logging (applies to ALL engines)
+        preview = (
+            f"=== MATERIALIZE ===\n"
+            f"-- model: {node.name}\n"
+            f"-- materialized: {materialization}\n"
+            f"-- target: {target_sql}\n"
+            f"{body}\n"
+        )
+        echo_debug(preview)
+
+        try:
+            self._apply_sql_materialization(node, target_sql, body, materialization)
+        except Exception as e:
+            preview = f"-- materialized={materialization}\n-- target={target_sql}\n{body}"
+            raise ModelExecutionError(
+                node_name=node.name,
+                relation=relation_for(node.name),
+                message=str(e),
+                sql_snippet=preview,
+            ) from e
 
     # --- Helpers for materialization & ephemeral inlining (instance methods) ---
     def _first_select_body(self, sql: str) -> str:
         """
-        Extrahiert den 'SELECT …' Teil aus einem SQL-String, damit wir ihn in
-        CREATE VIEW/TABLE … AS <body> einfügen können. Falls kein SELECT gefunden
-        wird, geben wir den Original-String zurück.
+        Fallback: extract the substring starting at the first SELECT token.
+        If no SELECT is found, return the original string unchanged.
+        Prefer using _selectable_body() which is CTE-aware.
         """
         m = re.search(r"\bselect\b", sql, flags=re.I | re.S)
         return sql[m.start() :] if m else sql
 
     def _strip_leading_config(self, sql: str) -> str:
         """
-        Entfernt eine führende Jinja-Zeile/Block {{ config(...) }} vom SQL,
-        damit der Executor saubere DDL/DML bekommt.
+        Remove a leading Jinja {{ config(...) }} so the engine receives clean SQL.
         """
         return re.sub(
             r"^\s*\{\{\s*config\s*\(.*?\)\s*\}\}\s*",
@@ -199,19 +243,89 @@ class BaseExecutor[TFrame](ABC):
             flags=re.I | re.S,
         )
 
+    def _strip_leading_sql_comments(self, sql: str) -> tuple[str, int]:
+        """
+        Remove *only* leading SQL comments and blank lines, return (trimmed_sql, start_idx).
+
+        Supports:
+          -- single line comments
+          /* block comments */
+        """
+        # Match chain of: whitespace, comment, whitespace, comment, ...
+        # Using DOTALL so block comments spanning lines are handled.
+        pat = re.compile(
+            r"""^\s*(?:
+                                --[^\n]*\n        # line comment
+                              | /\*.*?\*/\s*      # block comment
+                             )*""",
+            re.VERBOSE | re.DOTALL,
+        )
+        m = pat.match(sql)
+        start = m.end() if m else 0
+        return sql[start:], start
+
+    def _selectable_body(self, sql: str) -> str:
+        """
+        Return a valid SELECT-able body for CREATE … AS:
+
+          - If the statement starts (after comments/blank lines) with a CTE (WITH …),
+            return from the WITH onward.
+          - If it starts with SELECT, return from SELECT onward.
+          - Otherwise, fall back to the first SELECT heuristic.
+        """
+        # Keep original for fallback, but check after stripping comments
+        s0 = sql
+        s, offset = self._strip_leading_sql_comments(sql)
+        s_ws = s.lstrip()  # in case comments left some spaces
+        head = s_ws[:6].lower()
+
+        if s_ws.startswith(("with ", "with\n", "with\t")):
+            # Return from the start of this WITH (preserve exactly s_ws form)
+            # Compute index into original string to retain original casing beyond comments
+            idx = s.find(s_ws)
+            return sql[offset + (idx if idx >= 0 else 0) :].lstrip()
+
+        if head.startswith("select"):
+            idx = s.find(s_ws)
+            return sql[offset + (idx if idx >= 0 else 0) :].lstrip()
+
+        # Fallback: first SELECT anywhere in the statement
+        return self._first_select_body(s0)
+
+    def _looks_like_direct_ddl(self, sql: str) -> bool:
+        """
+        True if the rendered SQL starts with CREATE (TABLE|VIEW) so it should be
+        executed verbatim as a user-provided DDL statement.
+        """
+        head = sql.lstrip().lower()
+        return (
+            head.startswith("create table")
+            or head.startswith("create view")
+            or head.startswith("create or replace")
+        )
+
+    def _execute_sql_direct(self, sql: str, node: Node) -> None:
+        """
+        Execute a full CREATE … statement as-is. Default: use `self.con.execute(sql)`.
+        Engines can override this for custom dispatch. If not available, raise
+        NotImplementedError so the caller can fall back to normalized materialization.
+        """
+        con = getattr(self, "con", None)
+        if con is None or not hasattr(con, "execute"):
+            raise NotImplementedError("Direct DDL execution is not implemented for this executor.")
+        con.execute(sql)
+
     def _render_ephemeral_sql(self, name: str, env: Environment) -> str:
         """
-        Rendert das SQL für ein 'ephemeral' Modell und gibt eine Subquery
-        als String '( ... )' zurück. Diese Methode respektiert rekursiv
-        weitere 'ephemeral'-Refs.
+        Render the SQL for an 'ephemeral' model and return it as a parenthesized
+        subquery. This is CTE-safe: we keep the full WITH…SELECT… statement and
+        only strip the leading {{ config(...) }} and trailing semicolons.
         """
-        # Node lookup (unterstützt optional REGISTRY.get_node aliasing)
         node = REGISTRY.get_node(name) if hasattr(REGISTRY, "get_node") else REGISTRY.nodes[name]
 
         raw = Path(node.path).read_text(encoding="utf-8")
         tmpl = env.from_string(raw)
 
-        # ref() → bei 'ephemeral' rekursiv inline, sonst physischer Relationsname
         sql = tmpl.render(
             ref=lambda n: self._resolve_ref(n, env),
             source=self._resolve_source,
@@ -222,35 +336,39 @@ class BaseExecutor[TFrame](ABC):
                 getattr(self, "database", None) or getattr(self, "project", None),
             ),
         )
+        # Remove a leading config block and keep the full, CTE-capable statement
         sql = self._strip_leading_config(sql).strip()
-        body = self._first_select_body(sql).rstrip(" ;\n\t")
+        body = self._selectable_body(sql).rstrip(" ;\n\t")
         return f"(\n{body}\n)"
 
     # ---------- Python models ----------
     def run_python(self, node: Node) -> None:
         func = REGISTRY.py_funcs[node.name]
         deps = REGISTRY.nodes[node.name].deps or []
-        if not deps:
-            raise ValueError(f"Python-Modell '{node.name}' hat keine Dependencies (erwarte ≥1).")
+        if _http_ctx is not None:
+            with suppress(Exception):
+                _http_ctx.reset_for_node(node.name)
 
         # Load inputs
-        if len(deps) == 1:
+        arg: Any
+        if len(deps) == 0:
+            arg = None
+        elif len(deps) == 1:
             rel = relation_for(deps[0])
             df_in: TFrame = self._read_relation(rel, node, deps)
-            self._log_dep(node.name, rel, df_in)
-            arg: Any = df_in  # TFrame
+            arg = df_in  # TFrame
         else:
             frames: dict[str, TFrame] = {}
             for dep in deps:
                 rel = relation_for(dep)
                 f = self._read_relation(rel, node, deps)
-                self._log_dep(node.name, rel, f)
                 frames[rel] = f
             arg = frames  # dict[str, TFrame]
 
         # Validate required columns / structure (frame specific)
         requires = REGISTRY.py_requires.get(node.name, {})
-        self._validate_required(node.name, arg, requires)
+        if deps:
+            self._validate_required(node.name, arg, requires)
 
         # Execute the model
         out = func(arg)
@@ -268,6 +386,13 @@ class BaseExecutor[TFrame](ABC):
             self._create_or_replace_view_from_table(target, backing, node)
         else:
             self._materialize_relation(target, out, node)
+
+        if _http_ctx is not None:
+            try:
+                snap = _http_ctx.snapshot()
+                (node.meta or {}).update({"_http_snapshot": snap})
+            except Exception:
+                pass
 
     # -------- Python model view helpers (shared) --------
     def _py_view_backing_name(self, relation: str) -> str:
@@ -338,17 +463,30 @@ class BaseExecutor[TFrame](ABC):
         return self._format_relation_for_ref(name)
 
     def _resolve_source(self, source_name: str, table_name: str) -> str:
-        cfg = REGISTRY.sources.get(source_name, {}).get(table_name)
-        if not cfg or "identifier" not in cfg:
-            raise KeyError(f"Unknown source {source_name}.{table_name}")
-        return self._format_source_reference(cfg, source_name, table_name)
+        group = REGISTRY.sources.get(source_name)
+        if not group:
+            known = ", ".join(sorted(REGISTRY.sources.keys())) or "<none>"
+            raise KeyError(f"Unknown source '{source_name}'. Known sources: {known}")
 
-    # ---------- Logging ----------
-    def _log_dep(self, node_name: str, rel: str, frame: TFrame) -> None:
-        sql_log = logging.getLogger("fastflowtransform.sql")
-        if sql_log.isEnabledFor(logging.DEBUG) or (os.getenv("FFT_SQL_DEBUG") == "1"):
-            cols = ", ".join(self._columns_of(frame))
-            sql_log.debug(f"py:{node_name} dep {rel} cols=[{cols}]")
+        entry = group.get(table_name)
+        if not entry:
+            known_tables = ", ".join(sorted(group.keys())) or "<none>"
+            raise KeyError(
+                f"Unknown source table '{source_name}.{table_name}'. Known tables: {known_tables}"
+            )
+
+        engine_key = self.engine_name
+        try:
+            cfg = resolve_source_entry(entry, engine_key, default_identifier=table_name)
+        except KeyError as exc:
+            raise KeyError(
+                f"Source {source_name}.{table_name} missing "
+                f"identifier/location for engine '{engine_key}'"
+            ) from exc
+
+        cfg = dict(cfg)
+        cfg.setdefault("options", {})
+        return self._format_source_reference(cfg, source_name, table_name)
 
     # ---------- Abstrakte Frame-Hooks ----------
     @abstractmethod
@@ -394,7 +532,7 @@ class BaseExecutor[TFrame](ABC):
         """
         return
 
-    # ── Incremental API (MVP) ───────────────────────────────────────────────
+    # ── Incremental API ───────────────────────────────────────────────
     def exists_relation(self, relation: str) -> bool:  # pragma: no cover - abstract
         """Returns True if physical relation exists (table/view)."""
         raise NotImplementedError
@@ -421,3 +559,9 @@ class BaseExecutor[TFrame](ABC):
         Default implementation: No-Op.
         """
         return None
+
+    ENGINE_NAME: str = "generic"
+
+    @property
+    def engine_name(self) -> str:
+        return getattr(self, "ENGINE_NAME", "generic")

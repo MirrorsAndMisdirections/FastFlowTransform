@@ -18,6 +18,9 @@ class HasFFMeta(Protocol[P, R_co]):
     __ff_deps__: list[str]
     __ff_require__: Any
     __ff_path__: Path
+    __ff_tags__: list[str]
+    __ff_kind__: str
+    __ff_meta__: dict[str, Any]
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R_co: ...
 
@@ -50,7 +53,11 @@ def _normalize_require(deps: list[str], require: Any | None) -> dict[str, set[st
 def model(
     name: str | None = None,
     deps: Sequence[str] | None = None,
-    require: Any | None = None,  # <-- NEW: required columns
+    require: Any | None = None,
+    *,
+    tags: Sequence[str] | None = None,
+    kind: str = "python",
+    meta: Mapping[str, Any] | None = None,
 ) -> Callable[[Callable[P, R_co]], HasFFMeta[P, R_co]]:
     """
     Decorator to register a Python model.
@@ -62,10 +69,14 @@ def model(
             - Single dependency: Iterable[str] of required columns from that dependency.
             - Multiple dependencies: Mapping[dep_name, Iterable[str]]
               (dep_name = logical name or physical relation).
+        tags: Optional tags for selection (e.g. ['demo','env']).
+        kind: Logical kind; defaults to 'python' (useful for selectors kind:python).
+        meta: Arbitrary metadata, e.g. {'materialized': 'table'|'view'|'incremental'}.
     """
 
     def deco(func: Callable[P, R_co]) -> HasFFMeta[P, R_co]:
         f_any = cast(Any, func)
+
         fname = name or f_any.__name__
         fdeps = list(deps) if deps is not None else []
 
@@ -77,6 +88,10 @@ def model(
         req_norm = _normalize_require(fdeps, require)
         f_any.__ff_require__ = req_norm  # useful for tooling/loaders
         REGISTRY.py_requires[fname] = req_norm  # executors read this directly
+
+        f_any.__ff_tags__ = list(tags) if tags else []
+        f_any.__ff_kind__ = kind or "python"
+        f_any.__ff_meta__ = dict(meta) if meta else {}
 
         # Determine the source path (better error message if it fails)
         src: str | None = inspect.getsourcefile(func)

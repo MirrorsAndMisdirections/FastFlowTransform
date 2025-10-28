@@ -1,0 +1,9 @@
+{
+  "engine": "duckdb",
+  "entries": {
+    "env_vars.ff": "f7ef95030b8fe43c52bd748deb4fb8061c41d9f384b5b34a49ff69203cde4d82",
+    "users.ff": "11705124b10bc738b123f525e164f81d909972b29651b4b86153c8edba18bde1"
+  },
+  "profile": "prod",
+  "version": 1
+}

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 import textwrap
 import threading
@@ -20,17 +19,18 @@ from fastflowtransform.artifacts import (
     write_run_results,
 )
 from fastflowtransform.cache import FingerprintCache, can_skip_node
-from fastflowtransform.cli.bootstrap import CLIContext, _ensure_logging, _prepare_context
-from fastflowtransform.cli.logging_utils import LOG
+from fastflowtransform.cli.bootstrap import CLIContext, _prepare_context
 from fastflowtransform.cli.options import (
     CacheMode,
     CacheOpt,
     EngineOpt,
     EnvOpt,
     ExcludeOpt,
+    HttpCacheOpt,
     JobsOpt,
     KeepOpt,
     NoCacheOpt,
+    OfflineOpt,
     ProjectArg,
     RebuildAllOpt,
     RebuildOnlyOpt,
@@ -48,6 +48,7 @@ from fastflowtransform.fingerprint import (
 )
 from fastflowtransform.incremental import run_or_dispatch as run_sql_with_incremental
 from fastflowtransform.log_queue import LogQueue
+from fastflowtransform.logging import bind_context, bound_context, clear_context, echo, warn
 from fastflowtransform.meta import ensure_meta_table
 from fastflowtransform.run_executor import ScheduleResult, schedule
 
@@ -72,10 +73,10 @@ class _RunEngine:
     env_ctx: EnvCtx = field(init=False)
     computed_fps: dict[str, str] = field(default_factory=dict, init=False)
     fps_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    http_snaps: dict[str, dict] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
-        if LOG.isEnabledFor(logging.INFO):
-            typer.echo(f"Profile: {self.env_name} | Engine: {self.ctx.profile.engine}")
+        echo(f"Profile: {self.env_name} | Engine: {self.ctx.profile.engine}")
         self.shared = self.ctx.make_executor()
         with suppress(Exception):
             ensure_meta_table(self.shared[0])
@@ -156,6 +157,11 @@ class _RunEngine:
                     self.computed_fps[name] = cand_fp
                 with suppress(Exception):
                     ex.on_node_built(node, relation_for(name), cand_fp)
+            # HTTP snapshot (stored in node.meta by the executor)
+            with suppress(Exception):
+                snap = (getattr(node, "meta", {}) or {}).get("_http_snapshot")
+                if snap:
+                    self.http_snaps[name] = snap
             return
 
         cand_fp = self._maybe_fingerprint(node, ex)
@@ -180,6 +186,11 @@ class _RunEngine:
                 self.computed_fps[name] = cand_fp
             with suppress(Exception):
                 ex.on_node_built(node, relation_for(name), cand_fp)
+        # HTTP snapshot (stored in node.meta by the executor)
+        with suppress(Exception):
+            snap = (getattr(node, "meta", {}) or {}).get("_http_snapshot")
+            if snap:
+                self.http_snaps[name] = snap
 
     @staticmethod
     def before(_name: str, lvl_idx: int | None = None) -> None:
@@ -189,7 +200,7 @@ class _RunEngine:
     def on_error(name: str, err: BaseException) -> None:
         _node = REGISTRY.get_node(name)
         if isinstance(err, KeyError):
-            typer.echo(
+            echo(
                 _error_block(
                     f"Model failed: {name} (KeyError)",
                     _pretty_exc(err),
@@ -203,7 +214,7 @@ class _RunEngine:
         body = _pretty_exc(err)
         if os.getenv("FFT_TRACE") == "1":
             body += "\n\n" + traceback.format_exc()
-        typer.echo(_error_block(f"Model failed: {name}", body, "• See cause above."))
+        echo(_error_block(f"Model failed: {name}", body, "• See cause above."))
         raise typer.Exit(1) from err
 
     def persist_on_success(self, result: ScheduleResult) -> None:
@@ -215,12 +226,12 @@ class _RunEngine:
     def print_timings(result: ScheduleResult) -> None:
         if not result.per_node_s:
             return
-        typer.echo("\nRuntime per model")
-        typer.echo("─────────────────")
+        echo("\nRuntime per model")
+        echo("─────────────────")
         for name in sorted(result.per_node_s, key=lambda k: k):
             ms = int(result.per_node_s[name] * 1000)
-            typer.echo(f"• {name:<30} {ms:>6} ms")
-        typer.echo(f"\nTotal runtime: {result.total_s:.3f}s")
+            echo(f"• {name:<30} {ms:>6} ms")
+        echo(f"\nTotal runtime: {result.total_s:.3f}s")
 
 
 def _pretty_exc(e: BaseException) -> str:
@@ -231,7 +242,7 @@ def _error_block(title: str, body: str, hint: str | None = None) -> str:
     border = "─" * 70
     lines = [f"✖ {title}", "", textwrap.dedent(body).rstrip()]
     if hint:
-        lines = ["", "Hints:", textwrap.dedent(hint).rstrip()]
+        lines += ["", "Hints:", textwrap.dedent(hint).rstrip()]
     text = "│ \n│ ".join("\n".join(lines).splitlines())
     return f"\n┌{border}\n{text}\n└{border}\n"
 
@@ -242,7 +253,7 @@ def _normalize_node_names_or_warn(names: list[str] | None) -> set[str]:
         try:
             out.add(REGISTRY.get_node(tok).name)
         except KeyError:
-            LOG.warning(f"Unknown model in --rebuild: {tok}")
+            warn(f"Unknown model in --rebuild: {tok}")
     return out
 
 
@@ -336,23 +347,31 @@ def _levels_for_run(explicit_targets: list[str], wanted: set[str]) -> list[list[
 def _run_schedule(engine_, lvls, jobs, keep_going, ctx):
     logq = LogQueue()
     started_at = datetime.now(UTC).isoformat(timespec="seconds")
+
+    bind_context(run_id=started_at)
+
+    def _run_node_with_ctx(name: str) -> None:
+        with bound_context(node=name):
+            engine_.run_node(name)
+
     result = schedule(
         lvls,
         jobs=jobs,
         fail_policy="keep_going" if keep_going else "fail_fast",
-        run_node=engine_.run_node,
+        run_node=_run_node_with_ctx,
         before=engine_.before,
         on_error=None,
         logger=logq,
         engine_abbr=_abbr(ctx.profile.engine),
         name_width=28,
     )
+
     finished_at = datetime.now(UTC).isoformat(timespec="seconds")
     return result, logq, started_at, finished_at
 
 
 def _write_artifacts(
-    ctx: CLIContext, result: ScheduleResult, started_at: str, finished_at: str
+    ctx: CLIContext, result: ScheduleResult, started_at: str, finished_at: str, engine_: _RunEngine
 ) -> None:
     write_manifest(ctx.project)
 
@@ -372,6 +391,7 @@ def _write_artifacts(
                 finished_at=finished_at,
                 duration_ms=int(dur_s * 1000),
                 message=msg,
+                http=engine_.http_snaps.get(name),
             )
         )
 
@@ -390,7 +410,7 @@ def _attempt_catalog(ctx: CLIContext) -> None:
 
 def _emit_logs_and_errors(logq: LogQueue, result: ScheduleResult, engine_: _RunEngine) -> None:
     for line in logq.drain():
-        typer.echo(line)
+        echo(line)
     if result.failed:
         for name, err in result.failed.items():
             engine_.on_error(name, err)
@@ -412,9 +432,20 @@ def run(
     no_cache: NoCacheOpt = False,
     rebuild: RebuildAllOpt = False,
     rebuild_only: RebuildOnlyOpt = None,
+    offline: OfflineOpt = False,
+    http_cache: HttpCacheOpt = None,
 ) -> None:
-    _ensure_logging()
+    # _ensure_logging()
+    # HTTP/API-Flags → ENV, damit fastflowtransform.api.http sie liest
+    if offline:
+        os.environ["FF_HTTP_OFFLINE"] = "1"
+    if http_cache:
+        os.environ["FF_HTTP_CACHE_MODE"] = str(
+            http_cache.value if hasattr(http_cache, "value") else http_cache
+        )
+
     ctx, engine_ = _build_engine_ctx(project, env_name, engine, vars, cache, no_cache)
+    bind_context(engine=ctx.profile.engine, env=env_name)
 
     select_tokens, _, raw_selected = _select_predicate_and_raw(engine_, ctx, select)
     wanted = _wanted_names(select_tokens=select_tokens, exclude=exclude, raw_selected=raw_selected)
@@ -427,7 +458,7 @@ def run(
 
     result, logq, started_at, finished_at = _run_schedule(engine_, lvls, jobs, keep_going, ctx)
 
-    _write_artifacts(ctx, result, started_at, finished_at)
+    _write_artifacts(ctx, result, started_at, finished_at, engine_)
     _attempt_catalog(ctx)
     _emit_logs_and_errors(logq, result, engine_)
 
@@ -436,7 +467,8 @@ def run(
 
     engine_.persist_on_success(result)
     engine_.print_timings(result)
-    typer.echo("✓ Done")
+    echo("✓ Done")
+    clear_context()
 
 
 def register(app: typer.Typer) -> None:

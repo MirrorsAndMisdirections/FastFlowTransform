@@ -1,8 +1,6 @@
 # src/fastflowtransform/testing.py
 from __future__ import annotations
 
-import logging
-import os
 from collections.abc import Iterable, Sequence
 from typing import Any, cast
 
@@ -10,15 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection as _SAConn
 from sqlalchemy.sql.elements import ClauseElement
 
-# ===== Debug toggle =====================================================
-
-
-def _dprint(*a):
-    if logging.getLogger("fastflowtransform.sql").isEnabledFor(logging.DEBUG) or (
-        os.getenv("FFT_SQL_DEBUG") == "1"
-    ):
-        print("[DQ]", *a)
-
+from fastflowtransform.logging import dprint
 
 # ===== Execution helpers (consistent for DuckDB / Postgres / BigQuery) ==
 
@@ -36,7 +26,7 @@ def _exec(con: Any, sql: Any) -> Any:
     """
     # 1) Direct delegation to existing con.execute (e.g. DuckDB, our PG/BQ shims)
     if hasattr(con, "execute"):
-        _dprint("con.execute <-", _pretty_sql(sql))
+        dprint("con.execute <-", _pretty_sql(sql))
         try:
             if isinstance(con, _SAConn) or "sqlalchemy" in type(con).__module__:
                 sql_tuple_len = 2
@@ -65,13 +55,13 @@ def _exec(con: Any, sql: Any) -> Any:
             and isinstance(stmt[0], str)
             and isinstance(stmt[1], dict)
         ):
-            _dprint("run (sql, params):", stmt[0], stmt[1])
+            dprint("run (sql, params):", stmt[0], stmt[1])
             return c.execute(text(stmt[0]), stmt[1])
         if isinstance(stmt, ClauseElement):
-            _dprint("run ClauseElement")
+            dprint("run ClauseElement")
             return c.execute(stmt)
         if isinstance(stmt, str):
-            _dprint("run sql:", stmt)
+            dprint("run sql:", stmt)
             return c.execute(text(stmt))
         # Sequences (recursive)
         if isinstance(stmt, Iterable) and not isinstance(stmt, (bytes, bytearray, str)):
@@ -197,7 +187,7 @@ def not_null(con: Any, table: str, column: str, where: str | None = None) -> Non
     except Exception as e:
         raise _wrap_db_error("not_null", table, column, sql, e) from e
     c = _scalar(con, sql)
-    _dprint("not_null:", sql, "=>", c)
+    dprint("not_null:", sql, "=>", c)
     if c and c != 0:
         _fail("not_null", table, column, sql, f"has {c} NULL-values")
 
@@ -214,7 +204,7 @@ def unique(con: Any, table: str, column: str, where: str | None = None) -> None:
         c = _scalar(con, sql)
     except Exception as e:
         raise _wrap_db_error("unique", table, column, sql, e) from e
-    _dprint("unique:", sql, "=>", c)
+    dprint("unique:", sql, "=>", c)
     if c and c != 0:
         _fail("unique", table, column, sql, f"contains {c} duplicates")
 
@@ -222,7 +212,7 @@ def unique(con: Any, table: str, column: str, where: str | None = None) -> None:
 def greater_equal(con: Any, table: str, column: str, threshold: float = 0.0) -> None:
     sql = f"select count(*) from {table} where {column} < {threshold}"
     c = _scalar(con, sql)
-    _dprint("greater_equal:", sql, "=>", c)
+    dprint("greater_equal:", sql, "=>", c)
     if c and c != 0:
         raise TestFailure(f"{table}.{column} has {c} values < {threshold}")
 
@@ -230,7 +220,7 @@ def greater_equal(con: Any, table: str, column: str, threshold: float = 0.0) -> 
 def non_negative_sum(con: Any, table: str, column: str) -> None:
     sql = f"select coalesce(sum({column}),0) from {table}"
     s = _scalar(con, sql)
-    _dprint("non_negative_sum:", sql, "=>", s)
+    dprint("non_negative_sum:", sql, "=>", s)
     if s is not None and s < 0:
         raise TestFailure(f"sum({table}.{column}) is negative: {s}")
 
@@ -238,7 +228,7 @@ def non_negative_sum(con: Any, table: str, column: str) -> None:
 def row_count_between(con: Any, table: str, min_rows: int = 1, max_rows: int | None = None) -> None:
     sql = f"select count(*) from {table}"
     c = _scalar(con, sql)
-    _dprint("row_count_between:", sql, "=>", c)
+    dprint("row_count_between:", sql, "=>", c)
     if c is None or c < min_rows:
         raise TestFailure(f"{table} has too few rows: {c} < {min_rows}")
     if max_rows is not None and c > max_rows:
@@ -252,7 +242,7 @@ def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None
     # sql_duckdb =
     # f\"\"\"select date_diff('minute', max({ts_col}), now()) as delay_min from {table}\"\"\"
     delay = _scalar(con, sql)
-    _dprint("freshness:", sql, "=>", delay)
+    dprint("freshness:", sql, "=>", delay)
     if delay is None or delay > max_delay_minutes:
         raise TestFailure(
             f"freshness of {table}.{ts_col} too old: {delay} min > {max_delay_minutes} min"
@@ -265,7 +255,7 @@ def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None
 def _scalar_where(con: Any, table: str, expr: str, where: str | None = None) -> Any:
     """Return the first scalar from `SELECT {expr} FROM {table} [WHERE ...]`."""
     sql = f"select {expr} from {table}" + (f" where {where}" if where else "")
-    _dprint("reconcile:", sql)
+    dprint("reconcile:", sql)
     return _scalar(con, sql)
 
 
@@ -355,6 +345,6 @@ def reconcile_coverage(
       where t.k is null
     """
     missing = _scalar(con, sql)
-    _dprint("reconcile_coverage:", sql, "=>", missing)
+    dprint("reconcile_coverage:", sql, "=>", missing)
     if missing and missing != 0:
         raise TestFailure(f"Coverage failed: {missing} source keys missing in target")

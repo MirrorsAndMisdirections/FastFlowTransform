@@ -6,7 +6,7 @@
     "upper_col": "models/macros/util.sql"
   },
   "metadata": {
-    "generated_at": "2025-10-27T16:30:48+00:00",
+    "generated_at": "2025-10-28T17:59:56+00:00",
     "tool": "fastflowtransform"
   },
   "nodes": {
@@ -92,12 +92,34 @@
   "sources": {
     "crm": {
       "users": {
-        "identifier": "seed_users"
+        "base": {
+          "catalog": null,
+          "database": null,
+          "dataset": null,
+          "format": null,
+          "identifier": "seed_users",
+          "location": null,
+          "options": {},
+          "project": null,
+          "schema": null
+        },
+        "overrides": {}
       }
     },
     "erp": {
       "orders": {
-        "identifier": "seed_orders"
+        "base": {
+          "catalog": null,
+          "database": null,
+          "dataset": null,
+          "format": null,
+          "identifier": "seed_orders",
+          "location": null,
+          "options": {},
+          "project": null,
+          "schema": null
+        },
+        "overrides": {}
       }
     }
   }

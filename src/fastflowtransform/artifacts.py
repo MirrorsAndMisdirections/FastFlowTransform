@@ -1,3 +1,4 @@
+# fastflowtransform/artifacts.py
 from __future__ import annotations
 
 import json
@@ -120,6 +121,7 @@ class RunNodeResult:
     finished_at: str
     duration_ms: int
     message: str | None = None
+    http: dict | None = None
 
 
 def write_run_results(

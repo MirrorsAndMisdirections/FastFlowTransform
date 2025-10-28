@@ -9,8 +9,10 @@ Welcome! This page is your starting point for FastFlowTransform docs. Pick the t
 - [User Guide](./Technical_Overview.md#part-i--operational-guide)
 - [Modeling Reference](./Config_and_Macros.md)
 - [Parallelism & Cache](./Cache_and_Parallelism.md)
+- [API calls in Python models](./API_Models.md)
 - [Incremental Models](./Incremental.md)
 - [YAML Tests (Schema-bound)](./YAML_Tests.md)
+- [Data Quality Tests Reference](./Data_Quality_Tests.md)
 - [State Selection (changed & results)](./State_Selection.md)
 - [Cross-Table Reconciliations](./Technical_Overview.md#cross-table-reconciliations)
 - [Auto-Docs & Lineage](./Technical_Overview.md#auto-docs--lineage)
@@ -29,7 +31,7 @@ Welcome! This page is your starting point for FastFlowTransform docs. Pick the t
 
 ### 1. Build & Operate Projects (Data Practitioners)
 
-- **Get set up quickly:** run the DuckDB demo or install locally via the [Quickstart](../README.md#quickstart).
+- **Get set up quickly:** follow the dedicated [Quickstart](Quickstart.md) guide for installation, seeding, and a first run.
 - **Understand the project layout & CLI workflow:** see *Project Layout*, *Makefile Targets*, and *CLI Flows* in the [Technical Overview](Technical_Overview.md#project-layout).
 - **Configure runtimes & profiles:** review executor profiles, environment overrides, and logging options in the [Technical Overview](Technical_Overview.md#profiles--environment-overrides).
 - **Model data quality & troubleshoot runs:** the [Technical Overview](Technical_Overview.md#model-unit-tests-fastflowtransform-utest) covers unit tests, troubleshooting tips, and exit codes.

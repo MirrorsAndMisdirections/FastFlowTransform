@@ -1,0 +1,17 @@
+name: duckdb_api_demo
+version: "0.1"
+
+vars: {}
+
+tests:
+  # Batch‑Tabellen
+  - type: accepted_values
+    table: env_vars
+    column: ff_engine
+    values: [duckdb]
+    tags: [batch]
+
+  - type: row_count_between
+    table: users
+    min: 1
+    tags: [batch]

@@ -1,0 +1,11 @@
+{
+  "engine": "duckdb",
+  "entries": {
+    "api_users_http": "ca8d46280eb1b0fec83838ddc3239451c20d222dc0db3b2bc5793fb5991e5610",
+    "api_users_requests": "be6fc96ca93699f4011534c94210bdecd235ee272e30c801a6fae514d1ca8c34",
+    "mart_users_join.ff": "2c1259b1eeaa8af76e0cee4928709b965cd9264f502c1eb03a3becde3484be59",
+    "users.ff": "7ecd21097a3a344dc6f3f3d7042531809e38c231fcdd018255a6aca9dbf0e31b"
+  },
+  "profile": "dev",
+  "version": 1
+}

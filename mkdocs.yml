@@ -1,0 +1,58 @@
+site_name: FastFlowTransform
+site_description: Documentation for the FastFlowTransform project
+site_url: https://MirrorsAndMisdirections.github.io/FastFlowTransform/
+repo_url: https://github.com/MirrorsAndMisdirections/FastFlowTransform
+repo_name: MirrorsAndMisdirections/FastFlowTransform
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+  icon:
+    repo: fontawesome/brands/github
+  # Optional Branding (aktiviere bei Bedarf):
+  # logo: assets/logo.png
+  # favicon: assets/favicon.png
+  # palette:
+  #   - scheme: default
+  #     primary: indigo
+  #     accent: indigo
+
+nav:
+  - Home: index.md
+  - Technical Overview: Technical_Overview.md
+  - API & Models: Api_Models.md
+  - Configuration & Macros: Config_and_Macros.md
+  - Cache & Parallelism: Cache_and_Parallelism.md
+  - Incremental Processing: Incremental.md
+  - State Selection: State_Selection.md
+  - YAML Tests: YAML_Tests.md
+  - Examples:
+      - Environment Matrix: examples/Environment_Matrix.md
+
+markdown_extensions:
+  - admonition
+  - codehilite
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.magiclink
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/MirrorsAndMisdirections

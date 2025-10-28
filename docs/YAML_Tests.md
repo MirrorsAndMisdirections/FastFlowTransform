@@ -1,4 +1,4 @@
-# YAML Tests (Schema-bound) — R1
+# YAML Tests (Schema-bound)
 
 Schema-bound tests live in `models/*.yml` or `models/**/schema.yml` and complement (or replace) `project.yml`-based tests.
 
@@ -27,12 +27,6 @@ models:
 
 * `error` → contributes to failures (exit code 2).
 * `warn` → surfaced in summary as ❕, does not affect exit code.
-
-### Migration from `project.yml`
-
-* Keep existing tests in `project.yml` working.
-* Prefer per-model YAML files for portability & discoverability.
-* Both sources are merged at runtime; where duplicate scopes occur, YAML files win on model/column-level.
 
 ### Run
 
