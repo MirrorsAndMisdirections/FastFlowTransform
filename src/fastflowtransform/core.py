@@ -363,7 +363,22 @@ class Registry:
                 if func_path == p.resolve():
                     name = getattr(func, "__ff_name__", func.__name__)
                     deps = getattr(func, "__ff_deps__", [])
-                    self._add_node_or_fail(name, "python", p, deps, meta={})
+                    kind = getattr(func, "__ff_kind__", "python") or "python"
+
+                    meta = dict(getattr(func, "__ff_meta__", {}) or {})
+                    tags = list(getattr(func, "__ff_tags__", []) or [])
+                    if tags:
+                        existing_tags = meta.get("tags")
+                        if isinstance(existing_tags, list):
+                            merged = existing_tags + [t for t in tags if t not in existing_tags]
+                            meta["tags"] = merged
+                        elif existing_tags is None:
+                            meta["tags"] = tags
+                        else:
+                            # Normalize non-list tags into a list while preserving the value
+                            meta["tags"] = [existing_tags, *tags]
+
+                    self._add_node_or_fail(name, kind, p, deps, meta=meta)
 
                     req = getattr(func, "__ff_require__", None)
                     if req:

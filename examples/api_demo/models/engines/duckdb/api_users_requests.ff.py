@@ -11,6 +11,7 @@ except Exception as _e:  # pragma: no cover
 @model(
     name="api_users_requests",
     deps=["users.ff"],  # keep a dependency for executor contract
+    tags=["example:api_demo", "scope:engine", "engine:duckdb"],
 )
 def fetch(_: pd.DataFrame) -> pd.DataFrame:
     """

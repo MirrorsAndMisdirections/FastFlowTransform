@@ -1,13 +1,19 @@
 # src/fastflowtransform/executors/databricks_spark_exec.py
 from __future__ import annotations
 
+import shutil
 from collections.abc import Iterable
+from contextlib import suppress
+from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
+from pyspark.errors.exceptions.base import AnalysisException
 from pyspark.sql import DataFrame as SDF, SparkSession
 from pyspark.sql.types import DataType
 
 from fastflowtransform.core import Node, relation_for
+from fastflowtransform.errors import ModelExecutionError
 from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
 
@@ -16,11 +22,60 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
     ENGINE_NAME = "databricks_spark"
     """Spark/Databricks executor without pandas: Python models operate on Spark DataFrames."""
 
-    def __init__(self, master: str = "local[*]", app_name: str = "fastflowtransform"):
-        self.spark = SparkSession.builder.master(master).appName(app_name).getOrCreate()
+    def __init__(
+        self,
+        master: str = "local[*]",
+        app_name: str = "fastflowtransform",
+        *,
+        extra_conf: dict[str, Any] | None = None,
+        warehouse_dir: str | None = None,
+        use_hive_metastore: bool = False,
+        catalog: str | None = None,
+        database: str | None = None,
+        table_format: str | None = "parquet",
+        table_options: dict[str, Any] | None = None,
+    ):
+        builder = SparkSession.builder.master(master).appName(app_name)
+
+        warehouse_path: Path | None = None
+        if warehouse_dir:
+            warehouse_path = Path(warehouse_dir).expanduser()
+            if not warehouse_path.is_absolute():
+                warehouse_path = Path.cwd() / warehouse_path
+            warehouse_path.mkdir(parents=True, exist_ok=True)
+            builder = builder.config("spark.sql.warehouse.dir", str(warehouse_path))
+
+        if catalog:
+            builder = builder.config("spark.sql.catalog.spark_catalog", catalog)
+
+        if extra_conf:
+            for key, value in extra_conf.items():
+                if value is not None:
+                    builder = builder.config(str(key), str(value))
+
+        if use_hive_metastore:
+            builder = builder.config("spark.sql.catalogImplementation", "hive")
+            builder = builder.enableHiveSupport()
+
+        self.spark = builder.getOrCreate()
         # Lightweight testing shim so tests can call executor.con.execute("SQL")
         self.con = _SparkConnShim(self.spark)
         self._registered_path_sources: dict[str, dict[str, Any]] = {}
+        self.warehouse_dir = warehouse_path
+        self.catalog = catalog
+        self.database = database
+        self.schema = database
+        if database:
+            self.spark.sql(f"CREATE DATABASE IF NOT EXISTS `{database}`")
+            with suppress(Exception):
+                self.spark.catalog.setCurrentDatabase(database)
+
+        fmt = (table_format or "").strip().lower()
+        self.spark_table_format: str | None = fmt or None
+        if table_options:
+            self.spark_table_options = {str(k): str(v) for k, v in table_options.items()}
+        else:
+            self.spark_table_options = {}
 
     # ---------- Frame hooks (required) ----------
     def _read_relation(self, relation: str, node: Node, deps: Iterable[str]) -> SDF:
@@ -31,7 +86,7 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         if not self._is_frame(df):
             raise TypeError("Spark model must return a Spark DataFrame")
         # write as a table in Hive/Unity/Delta environments
-        df.write.mode("overwrite").saveAsTable(relation)
+        self._save_df_as_table(relation, df)
 
     def _create_view_over_table(self, view_name: str, backing_table: str, node: Node) -> None:
         self.spark.sql(f"CREATE OR REPLACE VIEW `{view_name}` AS SELECT * FROM `{backing_table}`")
@@ -130,11 +185,109 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
             parts = [identifier]
         return ".".join(self._q_ident(str(part)) for part in parts)
 
+    # ---- Spark table helpers ----
+    @staticmethod
+    def _strip_quotes(identifier: str) -> str:
+        return identifier.replace("`", "").replace('"', "")
+
+    def _identifier_parts(self, identifier: str) -> list[str]:
+        cleaned = self._strip_quotes(identifier)
+        return [part for part in cleaned.split(".") if part]
+
+    def _warehouse_base(self) -> Path | None:
+        try:
+            conf_val = self.spark.conf.get("spark.sql.warehouse.dir", "spark-warehouse")
+        except Exception:
+            conf_val = "spark-warehouse"
+
+        if not isinstance(conf_val, str):
+            conf_val = str(conf_val)
+        parsed = urlparse(conf_val)
+        scheme = (parsed.scheme or "").lower()
+
+        if scheme and scheme != "file":
+            return None
+
+        if scheme == "file":
+            if parsed.netloc and parsed.netloc not in {"", "localhost"}:
+                return None
+            raw_path = unquote(parsed.path or "")
+            if not raw_path:
+                return None
+            base = Path(raw_path)
+        else:
+            base = Path(conf_val)
+
+        if not base.is_absolute():
+            base = Path.cwd() / base
+        return base
+
+    def _table_location(self, parts: list[str]) -> Path | None:
+        base = self._warehouse_base()
+        if base is None or not parts:
+            return None
+
+        filtered = [p for p in parts if p]
+        if not filtered:
+            return None
+
+        catalog_cutoff = 3
+        if len(filtered) >= catalog_cutoff and filtered[0].lower() in {"spark_catalog", "spark"}:
+            filtered = filtered[1:]
+
+        table = filtered[-1]
+        schema_cutoff = 2
+        schema = filtered[-2] if len(filtered) >= schema_cutoff else None
+
+        location = base
+        if schema:
+            location = location / f"{schema}.db"
+        return location / table
+
+    def _save_df_as_table(self, identifier: str, df: SDF) -> None:
+        parts = self._identifier_parts(identifier)
+        if not parts:
+            raise ValueError(f"Invalid Spark table identifier: {identifier}")
+
+        table_name = ".".join(parts)
+        target_location = self._table_location(parts)
+
+        def _write() -> None:
+            writer = df.write.mode("overwrite")
+            if self.spark_table_format:
+                writer = writer.format(self.spark_table_format)
+            if self.spark_table_options:
+                writer = writer.options(**self.spark_table_options)
+            writer.saveAsTable(table_name)
+
+        target_sql = ".".join(self._q_ident(p) for p in parts)
+        with suppress(Exception):
+            self.spark.sql(f"DROP TABLE IF EXISTS {target_sql}")
+        if target_location and target_location.exists():
+            with suppress(Exception):
+                shutil.rmtree(target_location, ignore_errors=True)
+
+        try:
+            _write()
+        except AnalysisException as exc:
+            message = str(exc)
+            if target_location and "LOCATION_ALREADY_EXISTS" in message.upper():
+                with suppress(Exception):
+                    shutil.rmtree(target_location, ignore_errors=True)
+                _write()
+            else:
+                raise
+
     def _create_or_replace_view(self, target_sql: str, select_body: str, node: Node) -> None:
         self.spark.sql(f"CREATE OR REPLACE VIEW {target_sql} AS {select_body}")
 
     def _create_or_replace_table(self, target_sql: str, select_body: str, node: Node) -> None:
-        self.spark.sql(f"CREATE OR REPLACE TABLE {target_sql} AS {select_body}")
+        preview = f"-- target={target_sql}\n{select_body}"
+        try:
+            df = self.spark.sql(select_body)
+            self._save_df_as_table(target_sql, df)
+        except Exception as exc:
+            raise ModelExecutionError(node.name, target_sql, str(exc), sql_snippet=preview) from exc
 
     def _create_or_replace_view_from_table(
         self, view_name: str, backing_table: str, node: Node
@@ -161,7 +314,8 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
     def create_table_as(self, relation: str, select_sql: str) -> None:
         """CREATE TABLE AS with cleaned SELECT body."""
         body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
-        self.spark.sql(f"CREATE TABLE {relation} AS {body}")
+        df = self.spark.sql(body)
+        self._save_df_as_table(relation, df)
 
     def incremental_insert(self, relation: str, select_sql: str) -> None:
         """INSERT INTO with cleaned SELECT body."""
@@ -187,7 +341,8 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
             )
         except Exception:
             # Fallback: Full replace is safer across lake formats
-            self.spark.sql(f"CREATE OR REPLACE TABLE {relation} AS {body}")
+            df = self.spark.sql(body)
+            self._save_df_as_table(relation, df)
 
     def alter_table_sync_schema(
         self, relation: str, select_sql: str, *, mode: str = "append_new_columns"

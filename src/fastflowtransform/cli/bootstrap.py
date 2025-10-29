@@ -1,15 +1,15 @@
 # fastflowtransform/cli/bootstrap.py
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
 import typer
 import yaml
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 from jinja2 import Environment
 
 from fastflowtransform.core import REGISTRY
@@ -102,20 +102,34 @@ def _load_dotenv_layered(project_dir: Path, env_name: str) -> None:
       5) <project>/.env.<env_name>.local
     """
 
-    def _safe_load(p: Path, override: bool) -> None:
-        with suppress(Exception):
-            load_dotenv(dotenv_path=p, override=override)
+    original_env = dict(os.environ)
+    merged: dict[str, str] = {}
+
+    def _merge(p: Path) -> None:
+        try:
+            if not p.exists():
+                return
+            data = dotenv_values(p)
+            for key, value in (data or {}).items():
+                if value is not None:
+                    merged[key] = value
+        except Exception:
+            pass
 
     # 1) Repo root defaults
-    _safe_load(Path.cwd() / ".env", override=False)
+    _merge(Path.cwd() / ".env")
     # 2) Project defaults
-    _safe_load(project_dir / ".env", override=True)
+    _merge(project_dir / ".env")
     # 3) Project local (gitignored)
-    _safe_load(project_dir / ".env.local", override=True)
+    _merge(project_dir / ".env.local")
     # 4) Env-specific
-    _safe_load(project_dir / f".env.{env_name}", override=True)
+    _merge(project_dir / f".env.{env_name}")
     # 5) Env-specific local (gitignored)
-    _safe_load(project_dir / f".env.{env_name}.local", override=True)
+    _merge(project_dir / f".env.{env_name}.local")
+
+    for key, value in merged.items():
+        if key not in original_env and value is not None:
+            os.environ.setdefault(key, value)
 
 
 def _resolve_profile(
@@ -295,6 +309,13 @@ def _make_executor(prof: Profile, jenv: Environment) -> tuple[Any, Callable, Cal
         ex = DatabricksSparkExecutor(
             master=prof.databricks_spark.master,
             app_name=prof.databricks_spark.app_name,
+            extra_conf=prof.databricks_spark.extra_conf,
+            warehouse_dir=prof.databricks_spark.warehouse_dir,
+            use_hive_metastore=prof.databricks_spark.use_hive_metastore,
+            catalog=prof.databricks_spark.catalog,
+            database=prof.databricks_spark.database,
+            table_format=prof.databricks_spark.table_format,
+            table_options=prof.databricks_spark.table_options,
         )
         return ex, (lambda n: run_or_dispatch(ex, n, jenv)), ex.run_python
 

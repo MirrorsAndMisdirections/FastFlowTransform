@@ -13,6 +13,9 @@ Welcome! This page is your starting point for FastFlowTransform docs. Pick the t
 - [Incremental Models](./Incremental.md)
 - [YAML Tests (Schema-bound)](./YAML_Tests.md)
 - [Data Quality Tests Reference](./Data_Quality_Tests.md)
+- [Profiles & Environments](./Profiles.md)
+- [Sources Declaration](./Sources.md)
+- [Project Configuration](./Project_Config.md)
 - [State Selection (changed & results)](./State_Selection.md)
 - [Cross-Table Reconciliations](./Technical_Overview.md#cross-table-reconciliations)
 - [Auto-Docs & Lineage](./Technical_Overview.md#auto-docs--lineage)
@@ -32,6 +35,7 @@ Welcome! This page is your starting point for FastFlowTransform docs. Pick the t
 ### 1. Build & Operate Projects (Data Practitioners)
 
 - **Get set up quickly:** follow the dedicated [Quickstart](Quickstart.md) guide for installation, seeding, and a first run.
+- **Need local runtimes?** The [API demo local engine setup](examples/API_Demo.md#local-engine-setup) walks through DuckDB, Postgres, and Databricks Spark.
 - **Understand the project layout & CLI workflow:** see *Project Layout*, *Makefile Targets*, and *CLI Flows* in the [Technical Overview](Technical_Overview.md#project-layout).
 - **Configure runtimes & profiles:** review executor profiles, environment overrides, and logging options in the [Technical Overview](Technical_Overview.md#profiles--environment-overrides).
 - **Model data quality & troubleshoot runs:** the [Technical Overview](Technical_Overview.md#model-unit-tests-fastflowtransform-utest) covers unit tests, troubleshooting tips, and exit codes.

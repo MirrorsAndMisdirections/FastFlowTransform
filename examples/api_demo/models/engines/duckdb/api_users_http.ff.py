@@ -6,6 +6,7 @@ import pandas as pd
 @model(
     name="api_users_http",
     deps=["users.ff"],  # at least one dependency is required by the executor contract
+    tags=["example:api_demo", "scope:engine", "engine:duckdb"],
 )
 def fetch(_: pd.DataFrame) -> pd.DataFrame:
     """

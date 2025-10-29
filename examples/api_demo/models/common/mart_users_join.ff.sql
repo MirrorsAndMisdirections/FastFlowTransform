@@ -1,4 +1,13 @@
-{{ config(materialized='table', tags=['example:api_demo','scope:common']) }}
+{{ config(
+    materialized='table',
+    tags=[
+        'example:api_demo',
+        'scope:common',
+        'engine:duckdb',
+        'engine:postgres',
+        'engine:databricks_spark'
+    ],
+) }}
 
 {# Choose the producing model by variable. Default is the pandas HTTP version. #}
 {% set api_users_model = var('api_users_model', 'api_users_http') %}
@@ -9,9 +18,7 @@ with a as (
   from {{ ref('users.ff') }} u
 ),
 b as (
-  -- Choose one of the API models:
-  -- select * from {{ ref('api_users_http') }}
-  select * from {{ ref('api_users_requests') }}
+  select * from {{ ref(api_users_model) }}
 )
 select
   a.user_id,

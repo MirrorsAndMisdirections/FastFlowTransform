@@ -17,6 +17,7 @@ theme:
     - search.highlight
   icon:
     repo: fontawesome/brands/github
+
 nav:
   - Home: index.md
   - Quickstart: Quickstart.md
@@ -25,22 +26,27 @@ nav:
   - Configuration & Macros: Config_and_Macros.md
   - Cache & Parallelism: Cache_and_Parallelism.md
   - Incremental Processing: Incremental.md
+  - Profiles & Environments: Profiles.md
+  - Sources Declaration: Sources.md
+  - Project Configuration: Project_Config.md
   - State Selection: State_Selection.md
   - YAML Tests: YAML_Tests.md
   - Data Quality Tests: Data_Quality_Tests.md
+  - API Reference: reference/index.md
   - Examples:
       - Environment Matrix: examples/Environment_Matrix.md
+      - API Demo Overview: examples/API_Demo.md
+      - API Demo Local Setup: examples/Local_Engine_Setup.md
   - Contributing: Contributing.md
-  - License: license.md
+  - License: License.md
 
 markdown_extensions:
   - admonition
-  - codehilite
   - toc:
       permalink: true
   - pymdownx.superfences
   - pymdownx.details
-  - pymdownx.highlight
+  - pymdownx.highlight          # <— ersetzt codehilite
   - pymdownx.inlinehilite
   - pymdownx.snippets:
       base_path:
@@ -51,6 +57,25 @@ markdown_extensions:
 
 plugins:
   - search
+  - autorefs
+  - gen-files:
+      scripts:
+        - docs/_scripts/gen_api.py
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ["src"]
+          options:
+            docstring_style: google
+            show_source: true
+            separate_signature: true
+            members_order: source
+            inherited_members: true
+            show_bases: true
+            show_if_no_docstring: false
+            filters: ["!^_"]
+  - section-index
+
 
 extra:
   social:
