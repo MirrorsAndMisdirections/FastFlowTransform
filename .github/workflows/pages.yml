@@ -31,7 +31,7 @@ jobs:
 
       - name: Install docs (and dev) dependencies
         run: |
-          uv sync --extra docs --extra dev
+          uv sync --extra docs
       
       - name: Build site
         run: uv run mkdocs build --strict
@@ -44,8 +44,19 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    permissions:
+      pages: write
+      id-token: write
+
     steps:
       - name: Configure Pages
         uses: actions/configure-pages@v5
-      - name: Deploy to Pages
+
+      - name: Deploy to GitHub Pages
+        id: deployment
         uses: actions/deploy-pages@v4
