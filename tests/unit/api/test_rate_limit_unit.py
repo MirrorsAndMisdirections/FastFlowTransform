@@ -37,6 +37,7 @@ def test_tokenbucket_try_consume_not_enough_tokens(monkeypatch):
 
     ok = tb.try_consume(1.0)
     assert ok is False
+    # token count should stay the same
     assert tb._tokens == pytest.approx(0.5)
 
 
@@ -46,21 +47,25 @@ def test_tokenbucket_refills_on_try_consume(monkeypatch):
     tb = rl_mod.TokenBucket(capacity=5.0, refill_per_sec=2.0)
     tb._tokens = 0.0
     tb._last_refill = 10.0
+    # now - last_refill = 1s -> +2 tokens
     monkeypatch.setattr(rl_mod, "monotonic", lambda: 11.0)
 
     ok = tb.try_consume(1.0)
     assert ok is True
+    # 2 - 1 = 1
     assert tb._tokens == pytest.approx(1.0)
 
 
 @pytest.mark.unit
 def test_tokenbucket_wait_does_not_block_when_enough(monkeypatch):
     """wait() should return immediately if enough tokens are present."""
-    # freeze time *first* so bucket gets consistent _last_refill
+    # freeze time first so both _last_refill and later calls are the same
     monkeypatch.setattr(rl_mod, "monotonic", lambda: 200.0)
 
     tb = rl_mod.TokenBucket(capacity=5.0, refill_per_sec=1.0)
     tb._tokens = 4.0
+    # make sure no extra refill happens inside wait()
+    tb._last_refill = 200.0
 
     called: dict[str, bool] = {"sleep": False}
 
@@ -71,7 +76,9 @@ def test_tokenbucket_wait_does_not_block_when_enough(monkeypatch):
 
     tb.wait(2.0)
 
+    # should not have slept
     assert called["sleep"] is False
+    # consumed exactly 2
     assert tb._tokens == pytest.approx(2.0)
 
 
@@ -82,8 +89,8 @@ def test_tokenbucket_wait_blocks_once_and_consumes(monkeypatch):
     tb._tokens = 0.0
     tb._last_refill = 10.0
 
-    # first call inside loop -> 10.0 (not enough -> sleep 1s)
-    # second call after sleep -> 11.0 (refill 1 token -> consume)
+    # 1st call -> 10.0 → not enough → sleep(1.0)
+    # 2nd call after sleep -> 11.0 → +1 token → consume
     times = [10.0, 11.0]
 
     def fake_monotonic() -> float:
@@ -101,6 +108,7 @@ def test_tokenbucket_wait_blocks_once_and_consumes(monkeypatch):
 
     assert len(slept_for) == 1
     assert slept_for[0] == pytest.approx(1.0)
+    # after consuming the freshly refilled token
     assert tb._tokens == pytest.approx(0.0)
 
 
@@ -109,9 +117,14 @@ def test_tokenbucket_wait_disabled_does_nothing(monkeypatch):
     """If capacity/rps <= 0, wait() should be a no-op."""
     tb = rl_mod.TokenBucket(capacity=0.0, refill_per_sec=1.0)
     called = {"sleep": False}
-    monkeypatch.setattr(rl_mod.time, "sleep", lambda *_: called.__setitem__("sleep", True))
+
+    def fake_sleep(*_: float) -> None:
+        called["sleep"] = True
+
+    monkeypatch.setattr(rl_mod.time, "sleep", fake_sleep)
 
     tb.wait(10.0)
+
     assert called["sleep"] is False
 
 
