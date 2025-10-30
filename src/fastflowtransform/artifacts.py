@@ -193,10 +193,72 @@ def _postgres_columns(con: Any, table: str, schema: str | None = None) -> list[d
     return [{"name": r[0], "dtype": r[1], "nullable": (r[2] == "YES")} for r in rows]
 
 
+def _spark_columns(spark: Any, table: str) -> list[dict[str, Any]]:
+    """
+    Retrieve column metadata for Spark/Databricks tables.
+    Supports names with optional schema/catalog.
+    """
+    db = None
+    tbl = table
+    cat = None
+    parts = table.split(".")
+
+    if len(parts) == 2:  # noqa PLR2004
+        db, tbl = parts
+    elif len(parts) >= 3:  # noqa PLR2004
+        cat, db, tbl = parts[-3], parts[-2], parts[-1]
+
+    def _list_cols(target_tbl: str, target_db: str | None) -> list[dict[str, Any]]:
+        ident = target_tbl if not target_db else f"{target_db}.{target_tbl}"
+        try:
+            cols = spark.catalog.listColumns(ident)
+        except TypeError:
+            cols = spark.catalog.listColumns(target_tbl, target_db)
+        except Exception:
+            return []
+        out: list[dict[str, Any]] = []
+        for c in cols:
+            name = getattr(c, "name", None)
+            if not name:
+                continue
+            dtype = str(getattr(c, "dataType", ""))
+            nullable = bool(getattr(c, "nullable", False))
+            out.append({"name": name, "dtype": dtype, "nullable": nullable})
+        return out
+
+    cols = _list_cols(tbl, db)
+    if cols:
+        return cols
+    # Fallback: try fully qualified view via Spark SQL
+    ident = tbl
+    if db:
+        ident = f"`{db}`.`{tbl}`"
+    if cat and db:
+        ident = f"`{cat}`.`{db}`.`{tbl}`"
+    try:
+        df = spark.table(ident)
+    except Exception:
+        return []
+    out: list[dict[str, Any]] = []
+    for field in df.schema.fields:
+        dtype = (
+            field.dataType.simpleString()
+            if hasattr(field.dataType, "simpleString")
+            else str(field.dataType)
+        )
+        out.append({"name": field.name, "dtype": dtype, "nullable": field.nullable})
+    return out
+
+
 def _try_columns_for(executor: Any, table: str) -> list[dict[str, Any]]:
     """
     Best-effort column introspection for known engines. Returns [] if unsupported.
     """
+    spark = getattr(executor, "spark", None)
+    if spark is not None:
+        cols = _spark_columns(spark, table)
+        if cols:
+            return cols
     con = getattr(executor, "con", None)
     # DuckDB detection (robust): class/module name contains 'duckdb'
     try:

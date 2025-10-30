@@ -476,167 +476,6 @@ def validate_inputs_cover_deps(node: Node, inputs: dict[str, dict]) -> tuple[lis
     return expected, missing
 
 
-# def run_unit_specs(
-#     specs,
-#     executor,
-#     jenv,
-#     only_case=None,
-#     *,
-#     cache_mode: str = "off",
-#     reuse_meta: bool = False,
-# ):
-#     """
-#     Execute discovered unit-test specs. Returns the number of failed cases.
-
-#     Args:
-#         cache_mode: 'off' | 'ro' | 'rw'. Default 'off' for deterministic runs.
-#                     (Reserved for future accelerations; currently no-op.)
-#         reuse_meta: If True, avoid meta cleanup between cases (reserved; currently no-op).
-#     """
-#     # Normalize cache_mode: accept Enum or str; store as lower-case str
-#     if not isinstance(cache_mode, str):
-#         cache_mode = getattr(cache_mode, "value", str(cache_mode))
-#     cache_mode = cache_mode.lower()
-
-#     if cache_mode not in {"off", "ro", "rw"}:
-#         raise ValueError(f"unknown cache_mode: {cache_mode}")
-
-#     failures = 0
-
-#     # ---- Build a cache context for utests (profile name 'utest') ----
-#     try:
-#         project_dir = REGISTRY.get_project_dir()
-#     except Exception:
-#         project_dir = None
-
-#     # Best-effort engine detection for env_ctx/cache keying
-#     if hasattr(executor, "con"):  # duckdb
-#         engine_name = "duckdb"
-#     elif hasattr(executor, "engine"):  # postgres
-#         engine_name = "postgres"
-#     elif hasattr(executor, "client"):  # bigquery
-#         engine_name = "bigquery"
-#     else:
-#         engine_name = "unknown"
-
-#     env_ctx: EnvCtx = build_env_ctx(
-#         engine=engine_name,
-#         profile_name="utest",
-#         relevant_env_keys=[k for k in os.environ if k.startswith("FF_")],
-#         sources=getattr(REGISTRY, "sources", {}),
-#     )
-
-#     cache = None
-#     if project_dir is not None:
-#         cache = FingerprintCache(project_dir, profile="utest", engine=engine_name)
-#         cache.load()
-
-#     computed_fps: dict[str, str] = {}
-
-#     for spec in specs:
-#         node = REGISTRY.nodes.get(spec.model)
-#         if not node:
-#             print(f"⚠️  Model '{spec.model}' not found (in {spec.path})")
-#             failures += 1
-#             continue
-
-#         for case in spec.cases:
-#             if only_case and case.name != only_case:
-#                 continue
-#             print(f"→ {spec.model} :: {case.name}")
-
-#             # Optional meta hygiene per case
-#             if not reuse_meta:
-#                 with suppress(Exception):
-#                     delete_meta_for_node(executor, node.name)
-
-#             # ----- Fingerprint for THIS CASE -----
-#             # 1) case id → keeps cases distinct
-#             dep_fps: dict[str, str] = {
-#                 "__case__": f"{getattr(spec, 'path', 'spec')}::{getattr(case, 'name', 'case')}"
-#             }
-#             # 2) inputs → invalidates cache when unit-test inputs change
-#             dep_fps["__inputs__"] = _fingerprint_case_inputs(spec, case)
-
-#             cand_fp: str | None = None
-#             try:
-#                 if node.kind == "sql":
-#                     # Render the SQL exactly like the executor would
-#                     sql = executor.render_sql(
-#                         node,
-#                         jenv,
-#                         ref_resolver=lambda nm: executor._resolve_ref(nm, jenv),
-#                         source_resolver=executor._resolve_source,
-#                     )
-#                     cand_fp = fingerprint_sql(
-#                         node=node, rendered_sql=sql, env_ctx=env_ctx, dep_fps=dep_fps
-#                     )
-#                 else:
-#                     func = REGISTRY.py_funcs[node.name]
-#                     src = get_function_source(func)
-#                     cand_fp = fingerprint_py(
-#                         node=node, func_src=src, env_ctx=env_ctx, dep_fps=dep_fps
-#                     )
-#             except Exception:
-#                 # Fingerprint is best-effort in utests; if it fails, behave as cache miss.
-#                 cand_fp = None
-
-#             # 1) Inputs laden/prüfen (inkrementiert failures bei ungültigen Inputs)
-#             failures += _load_inputs_for_case(executor, spec, case, node)
-
-#             # 2) Optional: skip execution on cache hit
-#             materialized = (getattr(node, "meta", {}) or {}).get("materialized", "table")
-#             skip = False
-#             if (
-#                 cand_fp
-#                 and cache is not None
-#                 and cache_mode in {"ro", "rw"}
-#                 and can_skip_node(
-#                     node_name=node.name,
-#                     new_fp=cand_fp,
-#                     cache=cache,
-#                     executor=executor,
-#                     materialized=materialized,
-#                 )
-#             ):
-#                 # Only skip if both fingerprint AND relation existence agree (via helper)
-#                 print("   ↻ skipped (utest cache hit)")
-#                 skip = True
-
-#             if not skip:
-#                 ok, err = _execute_node(executor, node, jenv)
-#                 if not ok:
-#                     print(f"   ❌ execution failed: {err}")
-#                     failures += 1
-#                     continue
-#                 # Update cache map if we are in a writing mode
-#                 if cand_fp and cache is not None and cache_mode == "rw":
-#                     computed_fps[node.name] = cand_fp
-
-#             # 3) Ergebnis lesen
-#             ok, df_or_exc, target_rel = _read_target_df(executor, spec, case)
-#             if not ok:
-#                 print(f"   ❌ cannot read result '{target_rel}': {df_or_exc}")
-#                 failures += 1
-#                 continue
-#             df = df_or_exc
-
-#             # 4) Erwartungen prüfen
-#             ok, msg = _assert_expected_rows(df, case)
-#             if ok:
-#                 print("   ✅ ok")
-#             else:
-#                 print(f"   ❌ {msg}")
-#                 failures += 1
-
-#     # Persist cache once at the end (only for rw)
-#     if cache is not None and computed_fps and cache_mode == "rw":
-#         cache.update_many(computed_fps)
-#         cache.save()
-
-#     return failures
-
-
 @dataclass
 class UtestCtx:
     executor: Any
@@ -663,7 +502,7 @@ def _detect_engine_name(executor: Any) -> str:
         return "duckdb"
     if hasattr(executor, "engine"):
         return "postgres"
-    if hasattr(executor, "client"):
+    if hasattr(executor, "client"):  # pragma: no cover
         return "bigquery"
     return "unknown"
 
@@ -699,7 +538,7 @@ def _fingerprint_case(node: Any, spec: Any, case: Any, ctx: UtestCtx) -> str | N
         "__inputs__": _fingerprint_case_inputs(spec, case),
     }
     try:
-        if node.kind == "sql":
+        if node.kind == "sql":  # pragma: no cover
             sql = ctx.executor.render_sql(
                 node,
                 ctx.jenv,
@@ -714,7 +553,7 @@ def _fingerprint_case(node: Any, spec: Any, case: Any, ctx: UtestCtx) -> str | N
         src = get_function_source(func)
         return fingerprint_py(node=node, func_src=src, env_ctx=ctx.env_ctx, dep_fps=dep_fps)
     except Exception:
-        return None  # Fingerprint optional
+        return None  # fingerprint optional
 
 
 def _maybe_skip_by_cache(node: Any, cand_fp: str | None, ctx: UtestCtx) -> bool:
@@ -729,7 +568,7 @@ def _maybe_skip_by_cache(node: Any, cand_fp: str | None, ctx: UtestCtx) -> bool:
         materialized=materialized,
     ):
         print("   ↻ skipped (utest cache hit)")
-        if ctx.cache_mode == "rw":  # optional: beim Skip nicht nötig, aber harmless
+        if ctx.cache_mode == "rw":
             ctx.computed_fps.setdefault(node.name, cand_fp)
         return True
     return False
@@ -826,7 +665,7 @@ def run_unit_specs(
             _read_and_assert(spec, case, ctx)
 
     # Cache persistieren (nur rw)
-    if ctx.cache and ctx.computed_fps and ctx.cache_mode == "rw":
+    if ctx.cache and ctx.computed_fps and ctx.cache_mode == "rw":  # pragma: no cover
         ctx.cache.update_many(ctx.computed_fps)
         ctx.cache.save()
 

@@ -13,6 +13,8 @@ from fastflowtransform.core import REGISTRY, Node
 
 def _stub_minimal_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Stub project/profile/executor so the command can run without I/O."""
+    # Make sure the minimal project skeleton passes CLI path validation.
+    (tmp_path / "models").mkdir(parents=True, exist_ok=True)
 
     def fake_load_project_and_env(project_arg: str):
         # Minimal registry with one model file path (not used by utest runner)

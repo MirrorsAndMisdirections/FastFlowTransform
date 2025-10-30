@@ -16,9 +16,9 @@ For an operational walkthrough (CLI usage, troubleshooting, pipelines) see the [
 
 ## Docs Navigation
 1. [Getting Started](./index.md)
-2. [User Guide](./Technical_Overview.md#part-i--operational-guide)
+2. [User Guide](./Technical_Overview.md#part-i-operational-guide)
 3. **Modeling Reference** — you are here (`Config_and_Macros.md`)
-4. [Developer Guide](./Technical_Overview.md#part-ii--architecture--internals)
+4. [Developer Guide](./Technical_Overview.md#part-ii-architecture-internals)
 
 ---
 
@@ -31,10 +31,10 @@ For an operational walkthrough (CLI usage, troubleshooting, pipelines) see the [
   - [1.3 Seeds, sources, and dependencies](#13-seeds-sources-and-dependencies)
 - [2. `config()` options](#2-config-options)
 - [3. Variables with `var()`](#3-variables-with-var)
-- [4. Template context & helpers](#4-template-context--helpers)
-- [5. Macros & reusable Jinja code](#5-macros--reusable-jinja-code)
+- [4. Template context & helpers](#4-template-context-helpers)
+- [5. Macros & reusable Jinja code](#5-macros-reusable-jinja-code)
 - [6. Materialization semantics](#6-materialization-semantics)
-- [7. Testing & quality gates](#7-testing--quality-gates)
+- [7. Testing & quality gates](#7-testing-quality-gates)
 - [8. Quick cheat sheet](#8-quick-cheat-sheet)
 
 ---
@@ -86,6 +86,26 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
     return out
 ```
 
+#### Engine-scoped registration
+
+When the same project supports multiple execution backends, use `engine_model` to register a Python model only for specific engines. The decorator wraps `@model` but bails out early if the active engine (from `FF_ENGINE` or the selected profile) is not allowed.
+
+```python
+from fastflowtransform import engine_model
+import pandas as pd
+
+@engine_model(
+    only=("duckdb", "postgres"),
+    name="api_users_requests",
+    deps=["users.ff"],
+    tags=["example:api_demo", "scope:engine"],
+)
+def fetch(_: pd.DataFrame) -> pd.DataFrame:
+    ...
+```
+
+Allowed values are case-insensitive strings or tuples. If the engine does not match, the function is left undecorated and no node is created, preventing duplicate registrations across engine-specific folders.
+
 ### 1.3 Seeds, sources, and dependencies
 
 - Declare external tables in `sources.yml`; they become available via `source('group','table')`.
@@ -94,6 +114,27 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
   - SQL models → parse `ref()` / `source()` calls.
   - Python models → use the decorator’s `deps`.
   - Additional runtime dependencies can be expressed via `relation_for(<node>)`.
+
+> **Warning:** SQL dependency detection is static. Only literal calls such as `ref('users.ff')` are registered. When you need to gate a dependency behind a variable, materialise the options in a mapping (`{'foo': ref('foo'), 'bar': ref('bar')}`) and pick from that map at runtime; a bare `ref(variable)` will not show up in the DAG.
+
+- Persistence (e.g. Spark/Databricks): configure default targets under `project.yml → models.storage` (and optionally `seeds.storage`). Example:
+
+  ```yaml
+  models:
+    storage:
+      api_users_http:
+        path: ".local/spark/api_users_http"
+        format: delta
+        options:
+          mergeSchema: true
+
+  seeds:
+    storage:
+      users:
+        path: ".local/spark/seeds/users"
+  ```
+
+  Entries end up in `node.meta["storage"]` (keys: `path`, `format`, `options`) and are respected by the matching executor.
 
 ```yaml
 # sources.yml
@@ -146,12 +187,14 @@ Supported keys (v0.1):
 |----------------|-----------------|------------------------------------------------------------------------------|
 | `materialized` | `"table" \| "view" \| "ephemeral"` | Controls how FastFlowTransform persists the model. See [Materialization semantics](#6-materialization-semantics). |
 | `tags`         | `list[str]`     | Arbitrary labels surfaced in docs / selection tooling.                       |
+| `engines`      | `list[str]` or `str` | Restrict registration to the listed engines (case-insensitive). Requires the active engine to be known (profile selection or `FF_ENGINE`). |
 | (future)       | –               | Additional metadata is stored under `node.meta[...]` if added later.         |
 
 **Tips**
 
 - Place `config()` before any SQL text.
 - Use tags to power custom filters in docs or to drive test selection.
+- Combine `engines=[...]` with per-engine subfolders to keep one physical file per backend without name clashes. When no engine is active, FastFlowTransform raises a clear error to avoid silent skips.
 - Ephemeral models inline into downstream SQL; pick `view` for shareable logic without materializing a table.
 
 ---
@@ -331,7 +374,7 @@ fft utest . --env dev
 fft utest . --model users_enriched --case flags_gmail
 ```
 
-See the [Technical Overview](./Technical_Overview.md#model-unit-tests-fastflowtransform-utest) for an exhaustive walkthrough (engine overrides, CI examples, troubleshooting).
+See the [Technical Overview](./Technical_Overview.md#model-unit-tests-fft-utest) for an exhaustive walkthrough (engine overrides, CI examples, troubleshooting).
 
 ---
 

@@ -6,7 +6,7 @@ import shutil
 import sys
 from contextlib import suppress
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from dotenv import dotenv_values
 
@@ -94,14 +94,16 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 def cleanup_databricks(
     *,
+    project: Path,
     master: str | None,
     app_name: str | None,
     warehouse_dir: str | None,
     database: str | None,
     catalog: str | None,
+    extra_conf: dict[str, Any] | None,
     use_hive: bool,
     dry_run: bool,
-) -> None:
+) -> Path | None:
     master = master or os.getenv("FF_DBR_MASTER", "local[*]")
     app_name = app_name or os.getenv("FF_DBR_APPNAME", "cleanup")
     warehouse = warehouse_dir or os.getenv("FF_DBR_WAREHOUSE_DIR")
@@ -114,7 +116,7 @@ def cleanup_databricks(
             "[dry-run] Would reset Databricks/Spark environment "
             f"(master={master}, database={database}, warehouse={warehouse})"
         )
-        return
+        return None
 
     try:
         from pyspark.sql import SparkSession
@@ -127,12 +129,18 @@ def cleanup_databricks(
     if warehouse:
         warehouse_path = Path(warehouse).expanduser()
         if not warehouse_path.is_absolute():
-            warehouse_path = Path.cwd() / warehouse_path
+            warehouse_path = (project / warehouse_path).resolve()
+        _log(f"Resetting warehouse directory {warehouse_path}")
         warehouse_path.mkdir(parents=True, exist_ok=True)
         builder = builder.config("spark.sql.warehouse.dir", str(warehouse_path))
 
     if catalog:
         builder = builder.config("spark.sql.catalog.spark_catalog", catalog)
+
+    if extra_conf:
+        for key, value in extra_conf.items():
+            if value is not None:
+                builder = builder.config(str(key), str(value))
 
     if enable_hive:
         builder = builder.config("spark.sql.catalogImplementation", "hive")
@@ -146,8 +154,14 @@ def cleanup_databricks(
             spark.sql(f"CREATE DATABASE `{database}`")
         elif catalog:
             _log(f"Clearing catalog `{catalog}` tables")
-            for tbl in spark.catalog.listTables(catalog=catalog):
-                spark.sql(f"DROP TABLE IF EXISTS `{tbl.catalog}`.`{tbl.database}`.`{tbl.name}`")
+            tables = spark.sql(f"SHOW TABLES IN `{catalog}`").collect()
+            for row in tables:
+                db = row["database"]
+                tbl = row["tableName"]
+                if db:
+                    spark.sql(f"DROP TABLE IF EXISTS `{catalog}`.`{db}`.`{tbl}`")
+                else:
+                    spark.sql(f"DROP TABLE IF EXISTS `{catalog}`.`{tbl}`")
     finally:
         with suppress(Exception):
             spark.stop()
@@ -156,9 +170,12 @@ def cleanup_databricks(
         _log(f"Resetting warehouse directory {warehouse_path}")
         shutil.rmtree(warehouse_path, ignore_errors=True)
         warehouse_path.mkdir(parents=True, exist_ok=True)
+    return warehouse_path
 
 
-def cleanup_common_artifacts(*, project: Path, dry_run: bool) -> None:
+def cleanup_common_artifacts(
+    *, project: Path, dry_run: bool, extra_paths: Iterable[Path] | None = None
+) -> None:
     targets = [
         project / ".fastflowtransform",
         project / "docs",
@@ -167,6 +184,10 @@ def cleanup_common_artifacts(*, project: Path, dry_run: bool) -> None:
         project / "build",
         project / ".local",
     ]
+    if extra_paths:
+        for path in extra_paths:
+            if path:
+                targets.append(Path(path))
     _remove_paths(targets, dry_run=dry_run)
     extra = [p for p in project.glob("*.egg-info")]
     _remove_paths(extra, dry_run=dry_run)
@@ -245,6 +266,7 @@ def main(argv: list[str] | None = None) -> int:
         _load_dotenv_layered(project, env_name)
         profile = _load_profile(project, env_name, args.engine)
 
+        warehouse_path: Path | None = None
         if args.engine == "duckdb":
             profile_duckdb = getattr(getattr(profile, "duckdb", None), "path", None)
             db_path = args.duckdb_path or os.getenv("FF_DUCKDB_PATH") or profile_duckdb
@@ -264,12 +286,15 @@ def main(argv: list[str] | None = None) -> int:
             profile_database = getattr(profile_db, "database", None)
             profile_catalog = getattr(profile_db, "catalog", None)
             profile_use_hive = getattr(profile_db, "use_hive_metastore", False)
-            cleanup_databricks(
+            profile_extra_conf = getattr(profile_db, "extra_conf", None)
+            warehouse_path = cleanup_databricks(
+                project=project,
                 master=args.spark_master or profile_master,
                 app_name=args.spark_app_name or profile_app,
                 warehouse_dir=args.spark_warehouse or profile_warehouse,
                 database=args.spark_database or profile_database,
                 catalog=args.spark_catalog or profile_catalog,
+                extra_conf=profile_extra_conf,
                 use_hive=args.spark_use_hive or bool(profile_use_hive),
                 dry_run=args.dry_run,
             )
@@ -278,7 +303,22 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if not args.skip_artifacts:
-        cleanup_common_artifacts(project=project, dry_run=args.dry_run)
+        extra_paths: list[Path] = []
+        if args.engine == "databricks_spark":
+            configured = (
+                args.spark_warehouse
+                or os.getenv("FF_DBR_WAREHOUSE_DIR")
+                or getattr(getattr(profile, "databricks_spark", None), "warehouse_dir", None)
+            )
+            if configured:
+                p = Path(configured).expanduser()
+                if not p.is_absolute():
+                    p = (project / p).resolve()
+                extra_paths.append(p)
+            if warehouse_path:
+                extra_paths.append(warehouse_path)
+            extra_paths.append((project / "spark-warehouse").resolve())
+        cleanup_common_artifacts(project=project, dry_run=args.dry_run, extra_paths=extra_paths)
 
     return 0
 

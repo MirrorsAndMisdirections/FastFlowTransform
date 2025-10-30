@@ -1,9 +1,10 @@
-from fastflowtransform import model
+from fastflowtransform import engine_model
 from fastflowtransform.api.http import get_df
 import pandas as pd
 
 
-@model(
+@engine_model(
+    only="duckdb",
     name="api_users_http",
     deps=["users.ff"],  # at least one dependency is required by the executor contract
     tags=["example:api_demo", "scope:engine", "engine:duckdb"],

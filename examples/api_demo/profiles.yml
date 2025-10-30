@@ -23,6 +23,13 @@ dev_databricks:
   databricks_spark:
     master: "{{ env('FF_SPARK_MASTER', 'local[*]') }}"
     app_name: "{{ env('FF_SPARK_APP_NAME', 'api_demo') }}"
+    warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse"
+    extra_conf:
+      spark.hadoop.javax.jdo.option.ConnectionURL: "jdbc:derby:{{ project_dir() }}/.local/metastore_db;create=true"
+      spark.hadoop.datanucleus.rdbms.datastoreAdapterClassName: "org.datanucleus.store.rdbms.adapter.DerbyAdapter"
+      spark.hadoop.datanucleus.schema.autoCreateAll: "true"
+      spark.hadoop.javax.jdo.option.ConnectionDriverName: "org.apache.derby.jdbc.EmbeddedDriver"
+      spark.driver.extraJavaOptions: "-Dderby.stream.error.file={{ project_dir() }}/.local/derby.log"
 
 default:
   engine: duckdb

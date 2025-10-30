@@ -6,6 +6,7 @@ The `examples/api_demo` scenario demonstrates how FastFlowTransform blends local
 - **Multiple environments**: switch between DuckDB, Postgres, and Databricks Spark using `profiles.yml` + `.env.*`.
 - **HTTP integration**: compare the built-in FastFlowTransform HTTP client (`api_users_http`) with a plain `requests` implementation (`api_users_requests`).
 - **Offline caching & telemetry**: inspect HTTP snapshots via `run_results.json`.
+- **Engine-aware registration**: scope Python models via `engine_model` and SQL models via `config(engines=[...])` so only the active engine’s nodes load.
 
 ## Data Model
 
@@ -30,19 +31,28 @@ The `examples/api_demo` scenario demonstrates how FastFlowTransform blends local
 2. **API enrichment** – two Python implementations under `models/engines/duckdb/`:
    - `api_users_http.ff.py` uses the built-in HTTP wrapper (`fastflowtransform.api.http.get_df`) with cache/offline support.
    - `api_users_requests.ff.py` uses raw `requests` for maximum flexibility.
+   - Wrap engine-specific callables with `engine_model(only="duckdb", ...)` to skip registration when another engine is selected.
 
 3. **Mart join** – `models/common/mart_users_join.ff.sql`
    ```sql
-  {% set api_users_model = var('api_users_model', 'api_users_http') %}
+   {{ config(engines=['duckdb','postgres','databricks_spark']) }}
+   {% set api_users_model = var('api_users_model', 'api_users_http') %}
+   {% set api_users_refs = {
+       'api_users_http': ref('api_users_http'),
+       'api_users_requests': ref('api_users_requests')
+   } %}
+   {% set api_users_relation = api_users_refs.get(api_users_model, api_users_refs['api_users_http']) %}
    with a as (
      select u.id as user_id, u.email from {{ ref('users.ff') }} u
    ),
    b as (
-     select * from {{ ref(api_users_model) }}
+     select * from {{ api_users_relation }}
    )
    select ...
    ```
-   Ties everything together and exposes the `var('api_users_model')` hook to choose the HTTP implementation.
+   Ties everything together and exposes the `var('api_users_model')` hook to choose the HTTP implementation while still keeping literal `ref('…')` calls in the template (required for DAG detection). `config(engines=[...])` keeps the SQL node registered only for the engines you list, preventing duplicate names across engine-specific folders.
+
+   > **Warning:** The DAG builder only detects dependencies from literal `ref('model_name')` strings. A pure `ref(api_users_model)` (without the mapping shown above) compiles, but the graph would miss the edge to `api_users_http`/`api_users_requests`.
 
 ## Profiles & Secrets
 

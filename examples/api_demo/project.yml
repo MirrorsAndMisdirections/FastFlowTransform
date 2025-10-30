@@ -3,8 +3,29 @@ version: "0.1"
 
 vars: {}
 
+models:
+  storage:
+    users:
+      path: ".local/spark/users"
+      format: parquet
+    api_users_http:
+      path: ".local/spark/api_users_http"
+      format: parquet
+    api_users_requests:
+      path: ".local/spark/api_users_requests"
+      format: parquet
+    mart_users_join.ff:
+      path: ".local/spark/mart_users_join"
+      format: parquet
+
+seeds:
+  storage:
+    seed_users:
+      path: ".local/spark/seed_users"
+      format: parquet
+
 tests:
-  # Batch‑Tabellen
+  # Batch tables
   - type: not_null
     table: mart_users_join
     column: user_id

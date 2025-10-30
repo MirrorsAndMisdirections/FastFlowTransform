@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import os
 import re
 import types
 from collections.abc import Callable, Iterable, Mapping
@@ -15,7 +16,9 @@ import jinja2.runtime
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from .errors import DependencyNotFoundError, ModuleLoadError
+from fastflowtransform import storage
+from fastflowtransform.errors import DependencyNotFoundError, ModuleLoadError
+from fastflowtransform.logging import get_logger
 
 _SOURCE_CFG_FIELDS = {
     "identifier",
@@ -279,6 +282,7 @@ class Registry:
         self.macros: dict[str, Path] = {}  # macro_name -> file path
         self.project_vars: dict[str, Any] = {}  # project.yml: vars
         self.cli_vars: dict[str, Any] = {}  # CLI --vars overrides
+        self.active_engine: str | None = None
 
     def get_project_dir(self) -> Path:
         """Return the project directory after load_project(), or raise if not set."""
@@ -310,7 +314,218 @@ class Registry:
         """Set CLI --vars overrides (highest precedence)."""
         self.cli_vars = dict(overrides or {})
 
+    def set_active_engine(self, engine: str | None) -> None:
+        """Store active engine hint (case-insensitive) for conditional loading."""
+        self.active_engine = engine.lower().strip() if isinstance(engine, str) else None
+
+    def _lookup_storage_meta(self, node_name: str) -> dict[str, Any]:
+        """
+        Return storage metadata for a given node (if configured in project.yml).
+        Accepts names with or without trailing '.ff'.
+        """
+        return storage.get_model_storage(node_name)
+
+    def _current_engine(self) -> str | None:
+        """
+        Determine the active engine in precedence order:
+        1) Explicit hint via set_active_engine()
+        2) Environment variable FF_ENGINE
+        3) project.yml vars → engine
+        4) CLI --vars {engine: ...}
+        """
+        if self.active_engine:
+            return self.active_engine
+
+        env_engine = os.getenv("FF_ENGINE")
+        if isinstance(env_engine, str) and env_engine.strip():
+            return env_engine.strip().lower()
+
+        proj_engine = self.project_vars.get("engine")
+        if isinstance(proj_engine, str) and proj_engine.strip():
+            return proj_engine.strip().lower()
+
+        cli_engine = self.cli_vars.get("engine")
+        if isinstance(cli_engine, str) and cli_engine.strip():
+            return cli_engine.strip().lower()
+
+        return None
+
+    def _should_register_for_engine(self, meta: Mapping[str, Any], *, path: Path) -> bool:
+        """
+        SQL models may declare config(engines=[...]) to limit registration.
+        Returns True when the current engine matches (or no restriction given).
+        """
+        raw = meta.get("engines")
+        if raw is None:
+            return True
+
+        tokens: Iterable[Any]
+        if isinstance(raw, str):
+            tokens = [raw]
+        elif isinstance(raw, Iterable) and not isinstance(raw, (str, Mapping)):
+            tokens = raw
+        else:
+            raise ModuleLoadError(
+                f"{path}: config(engines=...) must be a string or iterable of strings."
+            )
+
+        allowed: set[str] = set()
+        for tok in tokens:
+            if not isinstance(tok, (str, bytes)):
+                raise ModuleLoadError(
+                    f"{path}: config(engines=...) expects strings, got {type(tok).__name__}."
+                )
+            text = str(tok).strip()
+            if text:
+                allowed.add(text.lower())
+
+        if not allowed:
+            return True
+
+        current = self._current_engine()
+        if current is None:
+            raise ModuleLoadError(
+                f"{path}: config(engines=...) requires an active engine.\n"
+                "Hint: Export FF_ENGINE or call REGISTRY.set_active_engine('duckdb'|...)."
+            )
+        return current in allowed
+
+    # def load_project(self, project_dir: Path) -> None:
+    #     self.nodes.clear()
+    #     self.py_funcs.clear()
+    #     self.py_requires.clear()
+    #     self.sources = {}
+    #     self.project_vars = {}
+    #     self.cli_vars = {}
+    #     self.macros.clear()
+
+    #     storage.set_model_storage({})
+    #     storage.set_seed_storage({})
+
+    #     self.project_dir = project_dir
+    #     models_dir = project_dir / "models"
+    #     self.env = Environment(
+    #         loader=FileSystemLoader(str(models_dir)),
+    #         undefined=StrictUndefined,
+    #         autoescape=False,
+    #         trim_blocks=True,
+    #         lstrip_blocks=True,
+    #     )
+
+    #     # Make sure macros are available to all templates before model discovery.
+    #     self._load_macros(models_dir)
+    #     self._load_py_macros(models_dir)
+
+    #     # load sources (version 2 schema)
+    #     src_path = project_dir / "sources.yml"
+    #     if src_path.exists():
+    #         raw_sources = yaml.safe_load(src_path.read_text(encoding="utf-8"))
+    #         try:
+    #             self.sources = _parse_sources_yaml(raw_sources)
+    #         except ValueError as exc:
+    #             raise ValueError(f"Failed to parse sources.yml: {exc}") from exc
+    #     else:
+    #         self.sources = {}
+
+    #     # load project.yml (vars)
+    #     proj_path = project_dir / "project.yml"
+    #     if proj_path.exists():
+    #         proj_cfg = yaml.safe_load(proj_path.read_text(encoding="utf-8")) or {}
+    #         self.project_vars = dict(proj_cfg.get("vars", {}) or {})
+
+    #         models_cfg = proj_cfg.get("models") if isinstance(proj_cfg, Mapping) else None
+    #         model_storage_raw = None
+    #         if isinstance(models_cfg, Mapping):
+    #             candidate = models_cfg.get("storage")
+    #             if isinstance(candidate, Mapping):
+    #                 model_storage_raw = candidate
+    #         storage.set_model_storage(
+    #             storage.normalize_storage_map(model_storage_raw, project_dir=project_dir)
+    #         )
+
+    #         seeds_cfg = proj_cfg.get("seeds") if isinstance(proj_cfg, Mapping) else None
+    #         seed_storage_raw = None
+    #         if isinstance(seeds_cfg, Mapping):
+    #             candidate = seeds_cfg.get("storage")
+    #             if isinstance(candidate, Mapping):
+    #                 seed_storage_raw = candidate
+    #         storage.set_seed_storage(
+    #             storage.normalize_storage_map(seed_storage_raw, project_dir=project_dir)
+    #         )
+
+    #     # discover models
+    #     for p in models_dir.rglob("*.ff.sql"):
+    #         name = p.stem
+    #         deps = self._scan_sql_deps(p)
+    #         meta = dict(self._parse_model_config(p))
+    #         storage_meta = self._lookup_storage_meta(name)
+    #         if storage_meta:
+    #             existing = dict(meta.get("storage") or {})
+    #             existing.update(storage_meta)
+    #             meta["storage"] = existing
+    #         if not self._should_register_for_engine(meta, path=p):
+    #             continue
+    #         self._add_node_or_fail(name, "sql", p, deps, meta=meta)
+    #     for p in models_dir.rglob("*.ff.py"):
+    #         self._load_py_module(p)
+    #         for _, func in list(self.py_funcs.items()):
+    #             func_path = Path(getattr(func, "__ff_path__", "")).resolve()
+    #             if func_path == p.resolve():
+    #                 name = getattr(func, "__ff_name__", func.__name__)
+    #                 deps = getattr(func, "__ff_deps__", [])
+    #                 kind = getattr(func, "__ff_kind__", "python") or "python"
+
+    #                 meta = dict(getattr(func, "__ff_meta__", {}) or {})
+    #                 storage_meta = self._lookup_storage_meta(name)
+    #                 if storage_meta:
+    #                     existing = dict(meta.get("storage") or {})
+    #                     existing.update(storage_meta)
+    #                     meta["storage"] = existing
+    #                 tags = list(getattr(func, "__ff_tags__", []) or [])
+    #                 if tags:
+    #                     existing_tags = meta.get("tags")
+    #                     if isinstance(existing_tags, list):
+    #                         merged = existing_tags + [t for t in tags if t not in existing_tags]
+    #                         meta["tags"] = merged
+    #                     elif existing_tags is None:
+    #                         meta["tags"] = tags
+    #                     else:
+    #                         # Normalize non-list tags into a list while preserving the value
+    #                         meta["tags"] = [existing_tags, *tags]
+
+    #                 self._add_node_or_fail(name, kind, p, deps, meta=meta)
+
+    #                 req = getattr(func, "__ff_require__", None)
+    #                 if req:
+    #                     self.py_requires[name] = req
+
+    #     # ---- Dependency validation (early and clear)
+    #     self._validate_dependencies()
+
     def load_project(self, project_dir: Path) -> None:
+        """Load a FastFlowTransform project from the given directory."""
+        self._reset_registry_state()
+        self.project_dir = project_dir
+
+        models_dir = project_dir / "models"
+        self._init_jinja_env(models_dir)
+
+        # macros first, because models may use them
+        self._load_macros(models_dir)
+        self._load_py_macros(models_dir)
+
+        self._load_sources_yaml(project_dir)
+        self._load_project_yaml(project_dir)
+
+        # discover models
+        self._discover_sql_models(models_dir)
+        self._discover_python_models(models_dir)
+
+        # final validation
+        self._validate_dependencies()
+
+    def _reset_registry_state(self) -> None:
+        """Reset in-memory registry structures to a clean state."""
         self.nodes.clear()
         self.py_funcs.clear()
         self.py_requires.clear()
@@ -318,9 +533,12 @@ class Registry:
         self.project_vars = {}
         self.cli_vars = {}
         self.macros.clear()
+        # reset storage maps
+        storage.set_model_storage({})
+        storage.set_seed_storage({})
 
-        self.project_dir = project_dir
-        models_dir = project_dir / "models"
+    def _init_jinja_env(self, models_dir: Path) -> None:
+        """Initialize the Jinja environment for this project."""
         self.env = Environment(
             loader=FileSystemLoader(str(models_dir)),
             undefined=StrictUndefined,
@@ -329,63 +547,104 @@ class Registry:
             lstrip_blocks=True,
         )
 
-        # Make sure macros are available to all templates before model discovery.
-        self._load_macros(models_dir)
-        self._load_py_macros(models_dir)
-
-        # load sources (version 2 schema)
+    def _load_sources_yaml(self, project_dir: Path) -> None:
+        """Load sources.yml (version 2) if present."""
         src_path = project_dir / "sources.yml"
-        if src_path.exists():
-            raw_sources = yaml.safe_load(src_path.read_text(encoding="utf-8"))
-            try:
-                self.sources = _parse_sources_yaml(raw_sources)
-            except ValueError as exc:
-                raise ValueError(f"Failed to parse sources.yml: {exc}") from exc
-        else:
+        if not src_path.exists():
             self.sources = {}
+            return
 
-        # load project.yml (vars)
+        raw_sources = yaml.safe_load(src_path.read_text(encoding="utf-8"))
+        try:
+            self.sources = _parse_sources_yaml(raw_sources)
+        except ValueError as exc:
+            raise ValueError(f"Failed to parse sources.yml: {exc}") from exc
+
+    def _load_project_yaml(self, project_dir: Path) -> None:
+        """Load project.yml (vars, storage blocks) if present."""
         proj_path = project_dir / "project.yml"
-        if proj_path.exists():
-            proj_cfg = yaml.safe_load(proj_path.read_text(encoding="utf-8")) or {}
-            self.project_vars = dict(proj_cfg.get("vars", {}) or {})
+        if not proj_path.exists():
+            return
 
-        # discover models
-        for p in models_dir.rglob("*.ff.sql"):
-            name = p.stem
-            deps = self._scan_sql_deps(p)
-            meta = self._parse_model_config(p)
-            self._add_node_or_fail(name, "sql", p, deps, meta=meta)
-        for p in models_dir.rglob("*.ff.py"):
-            self._load_py_module(p)
+        proj_cfg = yaml.safe_load(proj_path.read_text(encoding="utf-8")) or {}
+        self.project_vars = dict(proj_cfg.get("vars", {}) or {})
+
+        # models.storage
+        models_cfg = proj_cfg.get("models") if isinstance(proj_cfg, Mapping) else None
+        model_storage_raw = None
+        if isinstance(models_cfg, Mapping):
+            candidate = models_cfg.get("storage")
+            if isinstance(candidate, Mapping):
+                model_storage_raw = candidate
+        storage.set_model_storage(
+            storage.normalize_storage_map(model_storage_raw, project_dir=project_dir)
+        )
+
+        # seeds.storage
+        seeds_cfg = proj_cfg.get("seeds") if isinstance(proj_cfg, Mapping) else None
+        seed_storage_raw = None
+        if isinstance(seeds_cfg, Mapping):
+            candidate = seeds_cfg.get("storage")
+            if isinstance(candidate, Mapping):
+                seed_storage_raw = candidate
+        storage.set_seed_storage(
+            storage.normalize_storage_map(seed_storage_raw, project_dir=project_dir)
+        )
+
+    def _discover_sql_models(self, models_dir: Path) -> None:
+        """Scan *.ff.sql files, parse deps, and register nodes."""
+        for path in models_dir.rglob("*.ff.sql"):
+            name = path.stem
+            deps = self._scan_sql_deps(path)
+            meta = dict(self._parse_model_config(path))
+            storage_meta = self._lookup_storage_meta(name)
+            if storage_meta:
+                existing = dict(meta.get("storage") or {})
+                existing.update(storage_meta)
+                meta["storage"] = existing
+            if not self._should_register_for_engine(meta, path=path):
+                continue
+            self._add_node_or_fail(name, "sql", path, deps, meta=meta)
+
+    def _discover_python_models(self, models_dir: Path) -> None:
+        """Scan *.ff.py files, import them, and register decorated callables."""
+        for path in models_dir.rglob("*.ff.py"):
+            self._load_py_module(path)
+
+            # we might have loaded several functions; filter by file path
             for _, func in list(self.py_funcs.items()):
                 func_path = Path(getattr(func, "__ff_path__", "")).resolve()
-                if func_path == p.resolve():
-                    name = getattr(func, "__ff_name__", func.__name__)
-                    deps = getattr(func, "__ff_deps__", [])
-                    kind = getattr(func, "__ff_kind__", "python") or "python"
+                if func_path != path.resolve():
+                    continue
 
-                    meta = dict(getattr(func, "__ff_meta__", {}) or {})
-                    tags = list(getattr(func, "__ff_tags__", []) or [])
-                    if tags:
-                        existing_tags = meta.get("tags")
-                        if isinstance(existing_tags, list):
-                            merged = existing_tags + [t for t in tags if t not in existing_tags]
-                            meta["tags"] = merged
-                        elif existing_tags is None:
-                            meta["tags"] = tags
-                        else:
-                            # Normalize non-list tags into a list while preserving the value
-                            meta["tags"] = [existing_tags, *tags]
+                name = getattr(func, "__ff_name__", func.__name__)
+                deps = getattr(func, "__ff_deps__", [])
+                kind = getattr(func, "__ff_kind__", "python") or "python"
 
-                    self._add_node_or_fail(name, kind, p, deps, meta=meta)
+                meta = dict(getattr(func, "__ff_meta__", {}) or {})
+                storage_meta = self._lookup_storage_meta(name)
+                if storage_meta:
+                    existing = dict(meta.get("storage") or {})
+                    existing.update(storage_meta)
+                    meta["storage"] = existing
 
-                    req = getattr(func, "__ff_require__", None)
-                    if req:
-                        self.py_requires[name] = req
+                # merge tags from decorator into model meta.tags
+                tags = list(getattr(func, "__ff_tags__", []) or [])
+                if tags:
+                    existing_tags = meta.get("tags")
+                    if isinstance(existing_tags, list):
+                        merged = existing_tags + [t for t in tags if t not in existing_tags]
+                        meta["tags"] = merged
+                    elif existing_tags is None:
+                        meta["tags"] = tags
+                    else:
+                        meta["tags"] = [existing_tags, *tags]
 
-        # ---- Dependency validation (early and clear)
-        self._validate_dependencies()
+                self._add_node_or_fail(name, kind, path, deps, meta=meta)
+
+                req = getattr(func, "__ff_require__", None)
+                if req:
+                    self.py_requires[name] = req
 
     # --- Macros ---------------------------------------------------------
     def _load_macros(self, models_dir: Path) -> None:
@@ -473,18 +732,36 @@ class Registry:
         if name in self.nodes:
             other = self.nodes[name].path
             raise ModuleLoadError(
-                "Doppelter Modellname erkannt:\n"
-                f"• bereits registriert: {other}\n"
-                f"• weiterer Fund:        {path}\n"
-                "Tipp: Benenne eines der Modelle um (Dateistamm = Node-Name) "
-                "oder nutze @model(name='…') für Python."
+                "Duplicate model name detected:\n"
+                f"• alredy registered: {other}\n"
+                f"• new model:        {path}\n"
+                "Hint: Rename one of the models (file name = node name)"
+                "or use @model(name='…') for Python."
             )
         self.nodes[name] = Node(name=name, kind=kind, path=path, deps=deps, meta=meta)
 
     def _scan_sql_deps(self, path: Path) -> list[str]:
         txt = path.read_text(encoding="utf-8")
-        pattern = re.compile(r"ref\s*\(\s*['\"]([A-Za-z0-9_.\-]+)['\"]\s*\)")
-        return pattern.findall(txt)
+        literal = re.compile(r"ref\s*\(\s*['\"]([A-Za-z0-9_.\-]+)['\"]\s*\)")
+        dynamic = re.compile(r"ref\s*\(\s*([^)]+)\)")
+
+        deps = literal.findall(txt)
+
+        for expr in dynamic.findall(txt):
+            expr_stripped = expr.strip()
+            if not (
+                (expr_stripped.startswith("'") and expr_stripped.endswith("'"))
+                or (expr_stripped.startswith('"') and expr_stripped.endswith('"'))
+            ):
+                logger = get_logger("registry")
+                logger.warning(
+                    "%s: ref(%s) cannot be statically resolved; DAG may miss this dependency. "
+                    "Wrap options in a mapping of literal ref('...') calls and pick from that map.",
+                    path,
+                    expr_stripped,
+                )
+
+        return deps
 
     # -------- {{ config(...) }} Head-Parser --------
     def _parse_model_config(self, path: Path) -> dict[str, Any]:

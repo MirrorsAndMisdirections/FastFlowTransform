@@ -67,7 +67,15 @@ make install      # upgrades pip + installs FastFlowTransform in editable mode
 
 ## Quickstart
 
-> 📚 **Mehr lesen … CLI-Details**
+### Project skeleton (optional)
+
+```bash
+fft init ./demo_project --engine duckdb
+```
+
+`fft init` generates a non-interactive skeleton (no demo models) and adds inline comments pointing to the relevant documentation pages.
+
+> 📚 **Read more… CLI-Details**
 > For flag referencees, automatization and backgrounds see [`docs/Technical_Overview.md`](docs/Technical_Overview.md#cli-flows).
 
 Run the end-to-end DuckDB demo (seed → run → docs → tests) in under a minute:

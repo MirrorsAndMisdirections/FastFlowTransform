@@ -14,10 +14,6 @@ dev-venv:
 	$(UV) pip install --python .venv/bin/python --upgrade pip
 	$(UV) pip install --python .venv/bin/python --editable .
 
-# Lightweight local CI entrypoint (full matrix lives in GitHub Actions)
-ci:
-	pytest -q
-
 test-pg-batch:
 	FFT_SQL_DEBUG=1 $(UV) run pytest -q tests/test_smoke_postgres.py::test_pg_batch_tests_green
 
@@ -25,7 +21,7 @@ unittest:
 	FFT_SQL_DEBUG=1 $(UV) run pytest -q tests
 
 cover:
-	uv run pytest --cov=src/fastflowtransform --cov-report=term-missing --cov-report=xml --cov-report=html
+	FFT_SQL_DEBUG=1 $(UV) run pytest -q tests --cov=fastflowtransform --cov-report=term-missing --cov-report=html
 
 utest:
 	fft utest "$(FF_PROJECT)" --env "$(FF_ENV)"
@@ -60,3 +56,6 @@ act-commit:
 	-P ubuntu-latest=ghcr.io/catthehacker/ubuntu:act-22.04 \
 	--env UV_PROJECT_ENVIRONMENT=/tmp/uv-venv \
 	--env VIRTUAL_ENV=
+
+concat-docs:
+	$(UV) run python _scripts/concat_docs.py -o Combined.md

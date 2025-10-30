@@ -2,13 +2,18 @@
 import os
 from contextlib import suppress
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import psycopg
 import pytest
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from psycopg import sql
 
+from fastflowtransform import utest
 from fastflowtransform.core import REGISTRY
+from fastflowtransform.executors.databricks_spark_exec import DatabricksSparkExecutor
 from tests.common.utils import ROOT, run
 
 
@@ -93,3 +98,113 @@ def pg_seeded(pg_project, pg_env):
             conn.commit()
     run(["fft", "seed", str(pg_project), "--env", "stg"], pg_env)
     yield
+
+
+# ---- Spark ----
+@pytest.fixture
+def exec_minimal(monkeypatch):
+    with patch("fastflowtransform.executors.databricks_spark_exec.SparkSession") as SP:
+        fake_spark = MagicMock()
+        SP.builder.master.return_value.appName.return_value.getOrCreate.return_value = fake_spark
+        ex = DatabricksSparkExecutor()
+    # accept mocks as frames in unit tests
+    monkeypatch.setattr(ex, "_is_frame", lambda obj: True)
+    return ex
+
+
+@pytest.fixture
+def exec_factory():
+    """
+    Build a DatabricksSparkExecutor with arbitrary __init__ kwargs,
+    but always with mocked SparkSession (no real JVM).
+    Returns (executor, fake_builder, fake_spark).
+    """
+
+    def _make(**kwargs):
+        with patch("fastflowtransform.executors.databricks_spark_exec.SparkSession") as SP:
+            fake_builder = SP.builder.master.return_value.appName.return_value
+            # make .config(...) chainable
+            fake_builder.config.return_value = fake_builder
+            fake_builder.enableHiveSupport.return_value = fake_builder
+            fake_spark = MagicMock()
+            fake_builder.getOrCreate.return_value = fake_spark
+
+            ex = DatabricksSparkExecutor(**kwargs)
+        return ex, fake_builder, fake_spark
+
+    return _make
+
+
+@pytest.fixture(scope="session")
+def spark_tmpdir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return tmp_path_factory.mktemp("spark_wh")
+
+
+@pytest.fixture(scope="session")
+def spark_exec(spark_tmpdir: Path) -> DatabricksSparkExecutor:
+    return DatabricksSparkExecutor(
+        master="local[*]",
+        app_name="fft-it",
+        warehouse_dir=str(spark_tmpdir),
+        database="default",
+    )
+
+
+# ---- utest ----
+@pytest.fixture
+def fake_registry(tmp_path, monkeypatch):
+    # wir brauchen ein REGISTRY mit projekt-dir und 1 node
+    node = SimpleNamespace(name="model_a", kind="sql", deps=["src1"])
+    reg = SimpleNamespace(
+        nodes={"model_a": node},
+        sources={},
+        get_project_dir=lambda: tmp_path,
+    )
+    monkeypatch.setattr(utest, "REGISTRY", reg)
+    # relation_for -> immer schema.model
+    monkeypatch.setattr(utest, "relation_for", lambda name: f"public.{name}")
+    return reg
+
+
+@pytest.fixture
+def duckdb_executor():
+    """
+    Fake-Executor, der dem DuckDB-Pfad ähnelt:
+    - hat .con
+    - con.register(...)
+    - con.execute(...)
+    - con.table(...).df()
+    """
+    con = MagicMock()
+    # für _read_result (duckdb)
+    table_df = pd.DataFrame([{"id": 1}])
+    con.table.return_value.df.return_value = table_df
+
+    class DuckEx:
+        def __init__(self, con):
+            self.con = con
+
+        # für _execute_node(sql)
+        def run_sql(self, node, jenv):
+            # schreibt nix, simuliert nur Erfolg
+            return None
+
+        def run_python(self, node):
+            return None
+
+    return DuckEx(con)
+
+
+@pytest.fixture
+def postgres_executor():
+    """
+    Fake-Executor für den Postgres-Zweig in _read_result.
+    """
+    engine = MagicMock()
+
+    class PgEx:
+        def __init__(self, engine):
+            self.engine = engine
+            self.schema = "public"
+
+    return PgEx(engine)

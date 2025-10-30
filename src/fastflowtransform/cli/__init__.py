@@ -24,6 +24,7 @@ from fastflowtransform.cli.docs_utils import (
     _resolve_dag_out_dir,
     _strip_html,
 )
+from fastflowtransform.cli.init_cmd import init, register as _register_init
 from fastflowtransform.cli.options import (
     CacheMode,
     CacheOpt,
@@ -126,6 +127,7 @@ _register_seed(app)
 _register_utest(app)
 _register_docgen(app)
 _register_sync_db_comments(app)
+_register_init(app)
 
 
 __all__ = [
@@ -184,6 +186,7 @@ __all__ = [
     "dag",
     "dag_levels",
     "docgen",
+    "init",
     "render_site",
     "run",
     "schedule",

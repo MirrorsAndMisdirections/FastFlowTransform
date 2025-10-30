@@ -1,13 +1,14 @@
-# src/fastflowtransform/decorators.py  (or wherever your decorator lives)
+# src/fastflowtransform/decorators.py
 from __future__ import annotations
 
 import inspect
+import os
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, ParamSpec, Protocol, TypeVar, cast
 
-from .core import REGISTRY, relation_for  # relation_for is required for normalization
-from .errors import ModuleLoadError
+from fastflowtransform.core import REGISTRY, relation_for
+from fastflowtransform.errors import ModuleLoadError
 
 P = ParamSpec("P")
 R_co = TypeVar("R_co", covariant=True)
@@ -108,5 +109,19 @@ def model(
         # Register the function
         REGISTRY.py_funcs[fname] = func
         return cast(HasFFMeta[P, R_co], func)
+
+    return deco
+
+
+def engine_model(
+    *, only: str | tuple[str, ...], **model_kwargs: Any
+) -> Callable[[Callable[P, R_co]], HasFFMeta[P, R_co]]:
+    allowed = {only} if isinstance(only, str) else {e.lower() for e in only}
+
+    def deco(fn):
+        current = os.getenv("FF_ENGINE", "").lower()
+        if current in allowed:
+            return model(**model_kwargs)(fn)
+        return fn  # stays undecorated → no registry entry
 
     return deco

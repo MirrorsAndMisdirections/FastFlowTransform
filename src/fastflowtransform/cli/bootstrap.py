@@ -55,20 +55,18 @@ def _resolve_project_path(project_arg: str) -> Path:
     p = Path(project_arg).expanduser().resolve()
     if not p.exists():
         raise typer.BadParameter(
-            f"Project path not found: {p}\n"
-            "Tip: Benutze einen absoluten Pfad oder '.' im Projekt-Root."
+            f"Project path not found: {p}\nTip: Use an absolute path or '.' in the project root."
         )
     if not p.is_dir():
         raise typer.BadParameter(
-            f"Project path is not a directory: {p}\n"
-            "Tip: Übergebe das Verzeichnis, nicht eine Datei."
+            f"Project path is not a directory: {p}\nTip: Pass the directory, not the file."
         )
     models = p / "models"
     if not models.exists() or not models.is_dir():
         raise typer.BadParameter(
             f"Invalid project at {p}\n"
-            "Erwartet ein Unterverzeichnis 'models/'.\n"
-            "Tip: Wechsle ins Projekt und nutze '.'."
+            "Expected eian subfolder 'models/'.\n"
+            "Tip: change directory to the root and use '.'."
         )
     return p
 
@@ -225,12 +223,23 @@ def _prepare_context(
     engine: EngineType | None,
     vars_opt: list[str] | None,
 ) -> CLIContext:
-    proj_raw, jenv = _load_project_and_env(project_arg)
-    proj = Path(proj_raw)
+    proj = _resolve_project_path(project_arg)
     _load_dotenv_layered(proj, env_name)
-    REGISTRY.set_cli_vars(_parse_cli_vars(vars_opt or []))
+
     env_settings, prof = _resolve_profile(env_name, engine, proj)
     _validate_profile_params(env_name, prof)
+
+    engine_name = getattr(prof, "engine", None)
+    REGISTRY.set_active_engine(engine_name)
+    if engine_name:
+        os.environ["FF_ENGINE"] = engine_name
+    else:
+        os.environ.pop("FF_ENGINE", None)
+
+    proj_raw, jenv = _load_project_and_env(str(proj))
+    proj = Path(proj_raw)
+
+    REGISTRY.set_cli_vars(_parse_cli_vars(vars_opt or []))
     return CLIContext(project=proj, jinja_env=jenv, env_settings=env_settings, profile=prof)
 
 

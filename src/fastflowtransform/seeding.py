@@ -14,6 +14,7 @@ from urllib.parse import unquote, urlparse
 import pandas as pd
 import yaml
 
+from fastflowtransform import storage
 from fastflowtransform.logging import echo
 
 try:  # Optional Spark dependency
@@ -282,160 +283,6 @@ def _resolve_schema_and_table_by_cfg(
 
 # ------------------------------ Materialization (engines) ------------------------------
 
-
-# def materialize_seed(
-#     table: str, df: pd.DataFrame, executor: Any, schema: str | None = None
-# ) -> None:
-#     """
-#     Materialize a DataFrame as a database table across engines.
-
-#     Behavior:
-#       DuckDB:
-#         - Registers a temporary view for the DataFrame and performs
-#           ``CREATE OR REPLACE TABLE <schema>.<table> AS SELECT * FROM <tmp>``.
-#         - Ensures ``CREATE SCHEMA IF NOT EXISTS`` when requested.
-
-#       SQLAlchemy engines (e.g., Postgres):
-#         - Uses ``pandas.DataFrame.to_sql(if_exists="replace", schema=schema)``.
-
-#     Args:
-#         table: Target table name.
-#         df: Data to persist.
-#         executor: Backend connection/engine (e.g., DuckDB connection
-#         or SQLAlchemy Engine/Connection).
-#         schema: Optional schema name for the target table.
-
-#     Raises:
-#         RuntimeError: If no supported executor connection is detected.
-#     """
-#     # DuckDB path (robust detection)
-#     con = getattr(executor, "con", None)
-#     if con is not None:
-#         try:
-#             is_duck_con = isinstance(con, _dd.DuckDBPyConnection)
-#         except Exception:
-#             is_duck_con = all(hasattr(con, m) for m in ("register", "execute"))
-
-#         if is_duck_con:
-#             full_name = _qualify(table, schema)
-#             created_schema = False
-#             if schema and not _is_qualified(table):
-#                 con.execute(f"create schema if not exists {_dq(schema)}")
-#                 created_schema = True
-
-#             t0 = perf_counter()
-#             tmp = f"_ff_seed_{uuid.uuid4().hex[:8]}"
-#             con.register(tmp, df)
-#             try:
-#                 con.execute(f"create or replace table {full_name} as select * from {_dq(tmp)}")
-#             finally:
-#                 try:
-#                     con.unregister(tmp)  # duckdb >= 0.8
-#                 except Exception:
-#                     con.execute(f"drop view if exists {_dq(tmp)}")
-#             dt_ms = int((perf_counter() - t0) * 1000)
-
-#             _echo_seed_line(
-#                 full_name=full_name,
-#                 rows=len(df),
-#                 cols=df.shape[1],
-#                 engine="duckdb",
-#                 ms=dt_ms,
-#                 created_schema=created_schema,
-#                 action="replaced",
-#             )
-#             return
-
-#     # SQLAlchemy Engine path
-#     eng = getattr(executor, "engine", None)
-#     if eng is not None and "sqlalchemy" in eng.__class__.__module__:
-#         t0 = perf_counter()
-#         df.to_sql(table, eng, if_exists="replace", index=False, schema=schema, method="multi")
-#         dt_ms = int((perf_counter() - t0) * 1000)
-#         dialect = getattr(getattr(eng, "dialect", None), "name", "sqlalchemy")
-#         _echo_seed_line(
-#             full_name=_qualify(table, schema),
-#             rows=len(df),
-#             cols=df.shape[1],
-#             engine=dialect,
-#             ms=dt_ms,
-#             created_schema=False,
-#             action="replaced",
-#         )
-#         return
-
-#     # Spark / Databricks path
-#     spark = getattr(executor, "spark", None)
-#     if spark is not None:
-#         def _spark_ident(name: str) -> str:
-#             return name.replace("`", "``")
-
-#         created_schema = False
-#         if schema and not _is_qualified(table):
-#             spark.sql(f"CREATE DATABASE IF NOT EXISTS `{_spark_ident(schema)}`")
-#             created_schema = True
-#             parts = [schema, table]
-#         else:
-#             parts = table.split(".")
-
-#         parts = [p for p in parts if p]
-#         target_identifier = ".".join(parts)
-#         target_sql = ".".join(f"`{_spark_ident(p)}`" for p in parts)
-#         target_location = _spark_table_location(parts, spark)
-
-#         t0 = perf_counter()
-#         sdf = spark.createDataFrame(df)
-#         cleanup_hint = None
-
-#         with suppress(Exception):
-#             spark.sql(f"DROP TABLE IF EXISTS {target_sql}")
-#         if target_location and target_location.exists():
-#             with suppress(Exception):
-#                 shutil.rmtree(target_location, ignore_errors=True)
-#                 cleanup_hint = "reset location"
-
-#         table_format = getattr(executor, "spark_table_format", None)
-#         table_options = getattr(executor, "spark_table_options", None) or {}
-
-#         def _write() -> None:
-#             writer = sdf.write.mode("overwrite")
-#             if table_format:
-#                 writer = writer.format(table_format)
-#             if table_options:
-#                 writer = writer.options(**table_options)
-#             writer.saveAsTable(target_identifier)
-
-#         try:
-#             _write()
-#         except _SparkAnalysisException as exc:  # type: ignore[misc]
-#             message = str(exc)
-#             if target_location and "LOCATION_ALREADY_EXISTS" in message.upper():
-#                 with suppress(Exception):
-#                     shutil.rmtree(target_location, ignore_errors=True)
-#                 cleanup_hint = "reset location"
-#                 _write()
-#             else:
-#                 raise RuntimeError(f"Spark seed load failed for {target_sql}: {exc}") from exc
-#         except Exception as exc:
-#             raise RuntimeError(f"Spark seed load failed for {target_sql}: {exc}") from exc
-#         dt_ms = int((perf_counter() - t0) * 1000)
-
-#         _echo_seed_line(
-#             full_name=target_sql,
-#             rows=len(df),
-#             cols=df.shape[1],
-#             engine="spark",
-#             ms=dt_ms,
-#             created_schema=created_schema,
-#             action="replaced",
-#             extra=cleanup_hint,
-#         )
-#         return
-
-#     # Fallback (not implemented): you could emit VALUES via executor.execute(sql) for tiny seeds.
-#     raise RuntimeError("No compatible executor connection for seeding found.")
-
-
 # ------------------------------------------------------------
 # Engine-specifig Handlers
 # ------------------------------------------------------------
@@ -536,41 +383,54 @@ def _handle_spark(table: str, df: pd.DataFrame, executor: Any, schema: str | Non
     target_sql = ".".join(f"`{_spark_ident(p)}`" for p in parts)
     target_location = _spark_table_location(parts, spark)
 
+    table_format = getattr(executor, "spark_table_format", None)
+    table_options = getattr(executor, "spark_table_options", None) or {}
+
+    storage_meta = storage.get_seed_storage(target_identifier)
+
     t0 = perf_counter()
     sdf = spark.createDataFrame(df)
     cleanup_hint = None
 
-    with suppress(Exception):
-        spark.sql(f"DROP TABLE IF EXISTS {target_sql}")
-    if target_location and target_location.exists():
+    if storage_meta.get("path"):
+        storage.spark_write_to_path(
+            spark,
+            target_identifier,
+            sdf,
+            storage=storage_meta,
+            default_format=table_format,
+            default_options=table_options,
+        )
+        cleanup_hint = "custom path"
+    else:
         with suppress(Exception):
-            shutil.rmtree(target_location, ignore_errors=True)
-            cleanup_hint = "reset location"
-
-    table_format = getattr(executor, "spark_table_format", None)
-    table_options = getattr(executor, "spark_table_options", None) or {}
-
-    def _write() -> None:
-        writer = sdf.write.mode("overwrite")
-        if table_format:
-            writer = writer.format(table_format)
-        if table_options:
-            writer = writer.options(**table_options)
-        writer.saveAsTable(target_identifier)
-
-    try:
-        _write()
-    except _SparkAnalysisException as exc:
-        message = str(exc)
-        if target_location and "LOCATION_ALREADY_EXISTS" in message.upper():
+            spark.sql(f"DROP TABLE IF EXISTS {target_sql}")
+        if target_location and target_location.exists():
             with suppress(Exception):
                 shutil.rmtree(target_location, ignore_errors=True)
-            cleanup_hint = "reset location"
+                cleanup_hint = "reset location"
+
+        def _write() -> None:
+            writer = sdf.write.mode("overwrite")
+            if table_format:
+                writer = writer.format(table_format)
+            if table_options:
+                writer = writer.options(**table_options)
+            writer.saveAsTable(target_identifier)
+
+        try:
             _write()
-        else:
+        except _SparkAnalysisException as exc:
+            message = str(exc)
+            if target_location and "LOCATION_ALREADY_EXISTS" in message.upper():
+                with suppress(Exception):
+                    shutil.rmtree(target_location, ignore_errors=True)
+                cleanup_hint = "reset location"
+                _write()
+            else:
+                raise RuntimeError(f"Spark seed load failed for {target_sql}: {exc}") from exc
+        except Exception as exc:
             raise RuntimeError(f"Spark seed load failed for {target_sql}: {exc}") from exc
-    except Exception as exc:
-        raise RuntimeError(f"Spark seed load failed for {target_sql}: {exc}") from exc
 
     dt_ms = int((perf_counter() - t0) * 1000)
     _echo_seed_line(

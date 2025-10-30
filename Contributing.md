@@ -87,4 +87,4 @@ Instances of abusive, harassing, or otherwise unacceptable behavior may be repor
 
 ## 📄 License
 
-By contributing, you agree that your contributions will be licensed under the [Apache-2.0 License](LICENSE).
+By contributing, you agree that your contributions will be licensed under the [Apache-2.0 License](License.md).

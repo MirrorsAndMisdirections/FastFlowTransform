@@ -10,26 +10,26 @@
 
 ## Docs Navigation
 1. [Getting Started](./index.md)
-2. **User Guide** — see [Part I – Operational Guide](#part-i--operational-guide) (this document)
+2. **User Guide** — see [Part I – Operational Guide](#part-i-operational-guide) (this document)
 3. [Modeling Reference](./Config_and_Macros.md)
-4. **Developer Guide** — see [Part II – Architecture & Internals](#part-ii--architecture--internals) (this document)
+4. **Developer Guide** — see [Part II – Architecture & Internals](#part-ii-architecture-internals) (this document)
 
 ---
 
 ## Table of Contents
 
 - [Docs Navigation](#docs-navigation)
-- [Part I – Operational Guide](#part-i--operational-guide)
+- [Part I – Operational Guide](#part-i-operational-guide)
   - [Project Layout](#project-layout)
   - [Sample Models](#sample-models)
-  - [Seeds & Example Data](#seeds--example-data)
+  - [Seeds & Example Data](#seeds-example-data)
   - [Makefile Targets](#makefile-targets)
   - [CLI Flows](#cli-flows)
-  - [Logging & Verbosity](#logging--verbosity)
-  - [Model Unit Tests (`fft utest`)](#model-unit-tests-fastflowtransform-utest)
+  - [Logging & Verbosity](#logging-verbosity)
+  - [Model Unit Tests (`fft utest`)](#model-unit-tests-fft-utest)
   - [Troubleshooting](#troubleshooting)
   - [Error Codes](#error-codes)
-  - [Profiles & Environment Overrides](#profiles--environment-overrides)
+  - [Profiles & Environment Overrides](#profiles-environment-overrides)
   - [Parallel Scheduler (v0.3)](#parallel-scheduler-v03)
   - [Cache Policy (v0.3)](#cache-policy-v03)
   - [Fingerprint Formula (v0.3)](#fingerprint-formula-v03)
@@ -37,8 +37,8 @@
   - [Jinja DSL Quick Reference](#jinja-dsl-quick-reference)
   - [Roadmap Snapshot](#roadmap-snapshot)
   - [Cross-Table Reconciliations](#cross-table-reconciliations)
-  - [Auto-Docs & Lineage](#auto-docs--lineage)
-- [Part II – Architecture & Internals](#part-ii--architecture--internals)
+  - [Auto-Docs & Lineage](#auto-docs-lineage)
+- [Part II – Architecture & Internals](#part-ii-architecture-internals)
   - [Architecture Overview](#architecture-overview)
   - [Core Modules](#core-modules)
     - [`core.py`](#corepy)
@@ -47,7 +47,7 @@
     - [Executors](#executors)
     - [`validation.py`](#validationpy)
     - [`testing.py`](#testingpy)
-    - [`docs.py` & Templates](#docspy--templates)
+    - [`docs.py` & Templates](#docspy-templates)
     - [`seeding.py`](#seedingpy)
   - [CLI Implementation](#cli-implementation)
   - [Settings Infrastructure](#settings-infrastructure)

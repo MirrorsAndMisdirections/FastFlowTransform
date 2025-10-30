@@ -748,6 +748,7 @@ dev = [
     { name = "pandas-stubs" },
     { name = "pre-commit" },
     { name = "pytest" },
+    { name = "pytest-cov" },
     { name = "ruff" },
     { name = "types-pyyaml" },
 ]
@@ -760,12 +761,6 @@ docs = [
     { name = "mkdocs-section-index" },
     { name = "mkdocstrings", extra = ["python"] },
     { name = "pymdown-extensions" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "coverage" },
-    { name = "pytest-cov" },
 ]
 
 [package.metadata]
@@ -793,6 +788,7 @@ requires-dist = [
     { name = "pymdown-extensions", marker = "extra == 'docs'", specifier = ">=10.0" },
     { name = "pyspark", specifier = ">=4.0.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==8.4.*" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = "==7.0.*" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.14.*" },
@@ -803,12 +799,6 @@ requires-dist = [
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12" },
 ]
 provides-extras = ["dev", "docs"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "coverage", specifier = ">=7.11.0" },
-    { name = "pytest-cov", specifier = ">=7.0.0" },
-]
 
 [[package]]
 name = "filelock"
