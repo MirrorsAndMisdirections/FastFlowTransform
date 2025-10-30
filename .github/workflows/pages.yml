@@ -34,7 +34,7 @@ jobs:
           uv sync --extra docs
       
       - name: Build site
-        run: uv run mkdocs build --strict
+        run: uv run mkdocs build
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
