@@ -36,6 +36,7 @@ spark-warehouse
 metastore_db
 derby.log
 .fastflowtransform
+Combined.md
 
 # Editors / IDEs
 .vscode/
