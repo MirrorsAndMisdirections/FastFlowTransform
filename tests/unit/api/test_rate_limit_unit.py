@@ -10,7 +10,7 @@ import fastflowtransform.api.rate_limit as rl_mod
 
 @pytest.fixture(autouse=True)
 def _reset_rate_limiter():
-    """Make sure every test starts with a clean module-level state."""
+    """Ensure each test runs with a clean module-level state."""
     rl_mod.reset()
     yield
     rl_mod.reset()
@@ -20,10 +20,7 @@ def _reset_rate_limiter():
 def test_tokenbucket_try_consume_enough_tokens(monkeypatch):
     """try_consume should return True and deduct tokens when bucket has enough."""
     tb = rl_mod.TokenBucket(capacity=5.0, refill_per_sec=1.0)
-    # prefill
     tb._tokens = 3.0
-
-    # stable time
     monkeypatch.setattr(rl_mod, "monotonic", lambda: 100.0)
 
     ok = tb.try_consume(2.0)
@@ -40,7 +37,6 @@ def test_tokenbucket_try_consume_not_enough_tokens(monkeypatch):
 
     ok = tb.try_consume(1.0)
     assert ok is False
-    # token count should be unchanged in this branch
     assert tb._tokens == pytest.approx(0.5)
 
 
@@ -49,33 +45,32 @@ def test_tokenbucket_refills_on_try_consume(monkeypatch):
     """try_consume should trigger a refill before checking tokens."""
     tb = rl_mod.TokenBucket(capacity=5.0, refill_per_sec=2.0)
     tb._tokens = 0.0
-    # first call: last_refill = 10.0
     tb._last_refill = 10.0
-    # now is 11.0 → + 2 tokens
     monkeypatch.setattr(rl_mod, "monotonic", lambda: 11.0)
 
     ok = tb.try_consume(1.0)
     assert ok is True
-    # we had 2.0, consumed 1.0 → 1.0 left
     assert tb._tokens == pytest.approx(1.0)
 
 
 @pytest.mark.unit
 def test_tokenbucket_wait_does_not_block_when_enough(monkeypatch):
     """wait() should return immediately if enough tokens are present."""
-    tb = rl_mod.TokenBucket(capacity=5.0, refill_per_sec=1.0)
-    tb._tokens = 4.0
+    # freeze time *first* so bucket gets consistent _last_refill
     monkeypatch.setattr(rl_mod, "monotonic", lambda: 200.0)
 
-    # patch sleep to raise if called
-    called = {"sleep": False}
+    tb = rl_mod.TokenBucket(capacity=5.0, refill_per_sec=1.0)
+    tb._tokens = 4.0
 
-    def fake_sleep(x):
+    called: dict[str, bool] = {"sleep": False}
+
+    def fake_sleep(_dur: float) -> None:
         called["sleep"] = True
 
     monkeypatch.setattr(rl_mod.time, "sleep", fake_sleep)
 
     tb.wait(2.0)
+
     assert called["sleep"] is False
     assert tb._tokens == pytest.approx(2.0)
 
@@ -87,11 +82,11 @@ def test_tokenbucket_wait_blocks_once_and_consumes(monkeypatch):
     tb._tokens = 0.0
     tb._last_refill = 10.0
 
-    # 1. call inside loop -> 10.0
-    # 2. call after sleep -> 11.0 (=> 1 Sekunde refill)
-    times = [10.0, 11.0, 11.0]
+    # first call inside loop -> 10.0 (not enough -> sleep 1s)
+    # second call after sleep -> 11.0 (refill 1 token -> consume)
+    times = [10.0, 11.0]
 
-    def fake_monotonic():
+    def fake_monotonic() -> float:
         return times.pop(0)
 
     slept_for: list[float] = []
@@ -99,23 +94,19 @@ def test_tokenbucket_wait_blocks_once_and_consumes(monkeypatch):
     def fake_sleep(dur: float) -> None:
         slept_for.append(dur)
 
-    # wait() ruft direkt rl_mod.monotonic() auf (import aus dem Modul)
     monkeypatch.setattr(rl_mod, "monotonic", fake_monotonic)
-    # sleep kommt über rl_mod.time.sleep
     monkeypatch.setattr(rl_mod.time, "sleep", fake_sleep)
 
     tb.wait(1.0)
 
     assert len(slept_for) == 1
-    # sollte ziemlich genau 1 Sekunde sein
     assert slept_for[0] == pytest.approx(1.0)
-    # und danach sollten die Tokens verbraucht sein
     assert tb._tokens == pytest.approx(0.0)
 
 
 @pytest.mark.unit
 def test_tokenbucket_wait_disabled_does_nothing(monkeypatch):
-    """If capacity/rps <= 0, wait() should be a no-op (used to disable the limiter)."""
+    """If capacity/rps <= 0, wait() should be a no-op."""
     tb = rl_mod.TokenBucket(capacity=0.0, refill_per_sec=1.0)
     called = {"sleep": False}
     monkeypatch.setattr(rl_mod.time, "sleep", lambda *_: called.__setitem__("sleep", True))
@@ -132,10 +123,8 @@ def test_init_rate_limiter_creates_bucket():
     """init_rate_limiter should build a TokenBucket when params are positive."""
     rl_mod.init_rate_limiter(5, 2)
     assert isinstance(rl_mod._STATE.rl, rl_mod.TokenBucket)
-    expected_capacity = 5
-    expected_refill_per_sec = 2
-    assert rl_mod._STATE.rl.capacity == expected_capacity
-    assert rl_mod._STATE.rl.refill_per_sec == expected_refill_per_sec
+    assert rl_mod._STATE.rl.capacity == 5
+    assert rl_mod._STATE.rl.refill_per_sec == 2
 
 
 @pytest.mark.unit
@@ -154,22 +143,18 @@ def test_set_params_on_uninitialized_creates_when_both_given():
     assert rl_mod._STATE.rl is None
     rl_mod.set_params(capacity=3, rps=1)
     assert isinstance(rl_mod._STATE.rl, rl_mod.TokenBucket)
-    expected_capacity = 3
-    expected_refill_per_sec = 1
-    assert rl_mod._STATE.rl.capacity == expected_capacity
-    assert rl_mod._STATE.rl.refill_per_sec == expected_refill_per_sec
+    assert rl_mod._STATE.rl.capacity == 3
+    assert rl_mod._STATE.rl.refill_per_sec == 1
 
 
 @pytest.mark.unit
 def test_set_params_updates_existing():
     """set_params should rebuild the bucket based on existing values when some params are None."""
-    rl_mod.init_rate_limiter(5, 2)  # existing
-    rl_mod.set_params(rps=10)  # keep capacity=5
+    rl_mod.init_rate_limiter(5, 2)
+    rl_mod.set_params(rps=10)
     assert isinstance(rl_mod._STATE.rl, rl_mod.TokenBucket)
-    expected_capacity = 5
-    expected_refill_per_sec = 10
-    assert rl_mod._STATE.rl.capacity == expected_capacity
-    assert rl_mod._STATE.rl.refill_per_sec == expected_refill_per_sec
+    assert rl_mod._STATE.rl.capacity == 5
+    assert rl_mod._STATE.rl.refill_per_sec == 10
 
 
 @pytest.mark.unit
@@ -195,15 +180,13 @@ def test_rate_limit_delegates_when_initialized(monkeypatch):
     bucket.wait = fake_wait  # type: ignore[assignment]
 
     rl_mod.rate_limit(3.5)
-    expected_wait = 3.5
-    assert called["wait"] == expected_wait
+    assert called["wait"] == 3.5
 
 
 @pytest.mark.unit
 def test_rate_limit_noop_when_uninitialized():
     """rate_limit() should just return when limiter is not initialized."""
     assert rl_mod._STATE.rl is None
-    # should not crash
     rl_mod.rate_limit(10.0)
     assert rl_mod._STATE.rl is None
 

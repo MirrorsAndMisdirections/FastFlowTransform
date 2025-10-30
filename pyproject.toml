@@ -99,6 +99,7 @@ select = [
 ]
 ignore = [
   "E203", # whitespace before ':', compatible with black-like formatting
+  "PLR2004",
 ]
 fixable = ["ALL"]
 

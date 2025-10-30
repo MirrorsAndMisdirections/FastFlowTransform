@@ -203,9 +203,9 @@ def _spark_columns(spark: Any, table: str) -> list[dict[str, Any]]:
     cat = None
     parts = table.split(".")
 
-    if len(parts) == 2:  # noqa PLR2004
+    if len(parts) == 2:
         db, tbl = parts
-    elif len(parts) >= 3:  # noqa PLR2004
+    elif len(parts) >= 3:
         cat, db, tbl = parts[-3], parts[-2], parts[-1]
 
     def _list_cols(target_tbl: str, target_db: str | None) -> list[dict[str, Any]]:
