@@ -132,9 +132,9 @@
   class mart_users_join_ff sql;
   users_ff["users.ff<br/>(users)"]
   class users_ff sql;
-  users_ff --> mart_users_join_ff
   api_users_http --> mart_users_join_ff
   api_users_requests --> mart_users_join_ff
+  users_ff --> mart_users_join_ff
   users_ff --> api_users_requests
   users_ff --> api_users_http
 </div>
@@ -203,7 +203,7 @@
             </td>
             <td><span class="chip sql">sql</span></td>
             <td><code>mart_users_join</code></td>
-            <td class="muted">users.ff, api_users_http, api_users_requests</td>
+            <td class="muted">api_users_http, api_users_requests, users.ff</td>
             <td>
               <span class="badge badge-table">
                 table

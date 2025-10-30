@@ -8,7 +8,9 @@ from fastflowtransform.core import REGISTRY, Node
 
 
 def _mk_node(tmp, name, kind="sql", deps=None, mat="table", tags=None):
-    p = tmp / f"{name}.dummy"
+    models_dir = tmp / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    p = models_dir / f"{name}.dummy"
     p.write_text("--", encoding="utf-8")
     n = Node(
         name=name,

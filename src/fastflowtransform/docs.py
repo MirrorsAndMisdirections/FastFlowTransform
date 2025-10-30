@@ -45,6 +45,8 @@ def _collect_columns(executor: Any) -> dict[str, list[ColumnInfo]]:
     Returns an empty mapping if unsupported or on errors.
     """
     try:
+        if hasattr(executor, "spark"):
+            return _columns_spark(executor.spark)
         if hasattr(executor, "con"):  # DuckDB
             return _columns_duckdb(executor.con)
         if hasattr(executor, "engine"):  # Postgres
@@ -434,6 +436,62 @@ def _columns_snowflake(session: Any) -> dict[str, list[ColumnInfo]]:
         dt = r["DATA_TYPE"]
         null = r["IS_NULLABLE"]
         out.setdefault(t, []).append(ColumnInfo(c, str(dt), null == "YES"))
+    return out
+
+
+def _columns_spark(spark: Any) -> dict[str, list[ColumnInfo]]:
+    """
+    Collect column metadata from a SparkSession (Databricks / Spark SQL).
+    Uses catalog.listTables/listColumns, available on vanilla Spark 3+.
+    """
+    try:
+        tables = list(spark.catalog.listTables())
+    except Exception:
+        return {}
+
+    out: dict[str, list[ColumnInfo]] = {}
+    seen: set[tuple[str | None, str]] = set()
+
+    def _list_columns(table_name: str, database: str | None) -> list[Any]:
+        ident = table_name if not database else f"{database}.{table_name}"
+        try:
+            return list(spark.catalog.listColumns(ident))
+        except TypeError:
+            return list(spark.catalog.listColumns(table_name, database))
+
+    for tbl in tables:
+        database = getattr(tbl, "database", None)
+        raw_name = getattr(tbl, "name", None)
+        if not raw_name:
+            continue
+        table_name = str(raw_name)
+        key = (database, table_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            cols = _list_columns(table_name, database)
+        except Exception:
+            continue
+        if not cols:
+            continue
+
+        keys: set[str] = {table_name}
+        catalog = getattr(tbl, "catalog", None)
+        if database:
+            keys.add(f"{database}.{table_name}")
+        if database and catalog:
+            keys.add(f"{catalog}.{database}.{table_name}")
+        for c in cols:
+            nullable = bool(getattr(c, "nullable", False))
+            dtype = str(getattr(c, "dataType", ""))
+            col_name = getattr(c, "name", None)
+            if not col_name:
+                continue
+            info = ColumnInfo(str(col_name), dtype, nullable)
+            for k in keys:
+                out.setdefault(k, []).append(info)
+
     return out
 
 

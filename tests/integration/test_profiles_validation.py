@@ -1,6 +1,7 @@
 # tests/integration/test_profiles_validation.py
 from __future__ import annotations
 
+import os
 import textwrap
 from pathlib import Path
 
@@ -124,8 +125,13 @@ def test_profiles_validation(
     env_kwargs: dict,
     expect_error: bool,
     expect_substring: str | None,
+    monkeypatch,
 ):
     _write_profiles(tmp_path, profiles_yml)
+
+    # Ensure FF_* env vars from the outer environment do not affect expectations.
+    for key in [k for k in os.environ if k.startswith("FF_")]:
+        monkeypatch.delenv(key, raising=False)
 
     env = EnvSettings(**env_kwargs)
 

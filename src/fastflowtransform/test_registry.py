@@ -9,9 +9,9 @@ class Runner(Protocol):
     """Callable signature for a generic test runner.
 
     Returns:
-        ok: Whether the test passed.
-        message: Optional human-friendly message (usually set on failure).
-        example_sql: Optional example SQL (shown in summary on failure).
+        ok (bool): Whether the test passed.
+        message (str | None): Optional human-friendly message (usually set on failure).
+        example_sql (str | None): Optional example SQL (shown in summary on failure).
     """
 
     def __call__(

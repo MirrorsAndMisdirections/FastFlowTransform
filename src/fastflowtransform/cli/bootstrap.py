@@ -1,15 +1,15 @@
 # fastflowtransform/cli/bootstrap.py
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
 import typer
 import yaml
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 from jinja2 import Environment
 
 from fastflowtransform.core import REGISTRY
@@ -55,20 +55,18 @@ def _resolve_project_path(project_arg: str) -> Path:
     p = Path(project_arg).expanduser().resolve()
     if not p.exists():
         raise typer.BadParameter(
-            f"Project path not found: {p}\n"
-            "Tip: Benutze einen absoluten Pfad oder '.' im Projekt-Root."
+            f"Project path not found: {p}\nTip: Use an absolute path or '.' in the project root."
         )
     if not p.is_dir():
         raise typer.BadParameter(
-            f"Project path is not a directory: {p}\n"
-            "Tip: Übergebe das Verzeichnis, nicht eine Datei."
+            f"Project path is not a directory: {p}\nTip: Pass the directory, not the file."
         )
     models = p / "models"
     if not models.exists() or not models.is_dir():
         raise typer.BadParameter(
             f"Invalid project at {p}\n"
-            "Erwartet ein Unterverzeichnis 'models/'.\n"
-            "Tip: Wechsle ins Projekt und nutze '.'."
+            "Expected eian subfolder 'models/'.\n"
+            "Tip: change directory to the root and use '.'."
         )
     return p
 
@@ -102,20 +100,34 @@ def _load_dotenv_layered(project_dir: Path, env_name: str) -> None:
       5) <project>/.env.<env_name>.local
     """
 
-    def _safe_load(p: Path, override: bool) -> None:
-        with suppress(Exception):
-            load_dotenv(dotenv_path=p, override=override)
+    original_env = dict(os.environ)
+    merged: dict[str, str] = {}
+
+    def _merge(p: Path) -> None:
+        try:
+            if not p.exists():
+                return
+            data = dotenv_values(p)
+            for key, value in (data or {}).items():
+                if value is not None:
+                    merged[key] = value
+        except Exception:
+            pass
 
     # 1) Repo root defaults
-    _safe_load(Path.cwd() / ".env", override=False)
+    _merge(Path.cwd() / ".env")
     # 2) Project defaults
-    _safe_load(project_dir / ".env", override=True)
+    _merge(project_dir / ".env")
     # 3) Project local (gitignored)
-    _safe_load(project_dir / ".env.local", override=True)
+    _merge(project_dir / ".env.local")
     # 4) Env-specific
-    _safe_load(project_dir / f".env.{env_name}", override=True)
+    _merge(project_dir / f".env.{env_name}")
     # 5) Env-specific local (gitignored)
-    _safe_load(project_dir / f".env.{env_name}.local", override=True)
+    _merge(project_dir / f".env.{env_name}.local")
+
+    for key, value in merged.items():
+        if key not in original_env and value is not None:
+            os.environ.setdefault(key, value)
 
 
 def _resolve_profile(
@@ -211,12 +223,23 @@ def _prepare_context(
     engine: EngineType | None,
     vars_opt: list[str] | None,
 ) -> CLIContext:
-    proj_raw, jenv = _load_project_and_env(project_arg)
-    proj = Path(proj_raw)
+    proj = _resolve_project_path(project_arg)
     _load_dotenv_layered(proj, env_name)
-    REGISTRY.set_cli_vars(_parse_cli_vars(vars_opt or []))
+
     env_settings, prof = _resolve_profile(env_name, engine, proj)
     _validate_profile_params(env_name, prof)
+
+    engine_name = getattr(prof, "engine", None)
+    REGISTRY.set_active_engine(engine_name)
+    if engine_name:
+        os.environ["FF_ENGINE"] = engine_name
+    else:
+        os.environ.pop("FF_ENGINE", None)
+
+    proj_raw, jenv = _load_project_and_env(str(proj))
+    proj = Path(proj_raw)
+
+    REGISTRY.set_cli_vars(_parse_cli_vars(vars_opt or []))
     return CLIContext(project=proj, jinja_env=jenv, env_settings=env_settings, profile=prof)
 
 
@@ -295,6 +318,13 @@ def _make_executor(prof: Profile, jenv: Environment) -> tuple[Any, Callable, Cal
         ex = DatabricksSparkExecutor(
             master=prof.databricks_spark.master,
             app_name=prof.databricks_spark.app_name,
+            extra_conf=prof.databricks_spark.extra_conf,
+            warehouse_dir=prof.databricks_spark.warehouse_dir,
+            use_hive_metastore=prof.databricks_spark.use_hive_metastore,
+            catalog=prof.databricks_spark.catalog,
+            database=prof.databricks_spark.database,
+            table_format=prof.databricks_spark.table_format,
+            table_options=prof.databricks_spark.table_options,
         )
         return ex, (lambda n: run_or_dispatch(ex, n, jenv)), ex.run_python
 

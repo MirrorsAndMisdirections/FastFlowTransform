@@ -15,8 +15,12 @@ We use markers to make selective runs easy:
 | `duckdb`  | Requires DuckDB executor/fixtures          |
 | `postgres`| Requires Postgres backend                   |
 | `cli`     | Runs the CLI or Typer commands              |
+| `artifacts`| Exercises artifact generation helpers       |
+| `render`  | Exercises render-time template helpers       |
+| `schema`  | Exercises schema parsing/validation helpers  |
 | `streaming`| Exercises streaming/sessionizer features   |
 | `slow`    | Slower end-to-end scenarios                 |
+| `http`    | Exercises the HTTP API client/cache         |
 
 Example selective runs:
 

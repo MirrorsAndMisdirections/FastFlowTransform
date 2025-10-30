@@ -95,4 +95,5 @@ class ModelExecutionError(Exception):
         self.node_name = node_name
         self.relation = relation
         self.sql_snippet = sql_snippet
+        self.message = message
         super().__init__(message)

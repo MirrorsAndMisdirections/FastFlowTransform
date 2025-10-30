@@ -14,7 +14,10 @@ cli_bootstrap = importlib.import_module("fastflowtransform.cli.bootstrap")
 cli_run = importlib.import_module("fastflowtransform.cli.run")
 
 
-def test_error_block_prints_after_logs_without_interleaving(monkeypatch):
+def test_error_block_prints_after_logs_without_interleaving(monkeypatch, tmp_path):
+    models_dir = tmp_path / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+
     # Minimal schedule stub: one level, one failing node.
     def fake_schedule(levels, **kw):
         # Run the real schedule but inject a failing run_node
@@ -52,7 +55,7 @@ def test_error_block_prints_after_logs_without_interleaving(monkeypatch):
     monkeypatch.setattr(cli_bootstrap, "_make_executor", fake_make_executor)
 
     runner = CliRunner()
-    res = runner.invoke(app, ["run", ".", "--cache", "off"])
+    res = runner.invoke(app, ["run", str(tmp_path), "--cache", "off"])
     # Exit with error
     assert res.exit_code != 0
     # Logs first (including ✖ line), then the error block (starts with '┌')

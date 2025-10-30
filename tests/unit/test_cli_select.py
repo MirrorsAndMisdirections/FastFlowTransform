@@ -16,7 +16,9 @@ from fastflowtransform.core import REGISTRY, Node
 # Helpers-only: predicates & parse
 # -------------------------------
 def _mk_node(tmp_path: Path, name: str, kind: str = "sql", mat: str = "table", tags=None) -> Node:
-    p = tmp_path / (name + (".sql" if kind == "sql" else ".py"))
+    models_dir = tmp_path / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    p = models_dir / (name + (".sql" if kind == "sql" else ".py"))
     p.write_text("-- stub\n", encoding="utf-8")
     n = Node(name=name, kind=kind, path=p, deps=[], meta={"materialized": mat})
     if tags is not None:

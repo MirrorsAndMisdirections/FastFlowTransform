@@ -9,7 +9,7 @@ from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
 import httpx as _HTTP
@@ -271,6 +271,9 @@ MetaArgIn = Sequence[str | Sequence[str]] | None
 MetaParamOut = str | list[MetaEntry] | None
 
 
+OutputBackend = Literal["pandas", "spark", "bigframes"]
+
+
 def get_df(
     url: str,
     *,
@@ -284,7 +287,9 @@ def get_df(
     dtype: dict[str, str] | None = None,
     timeout: float | None = None,
     normalize: bool = False,
-) -> pd.DataFrame:
+    output: OutputBackend = "pandas",
+    session: Any | None = None,
+) -> Any:
     """
     GET JSON and normalize into a DataFrame using pandas.json_normalize.
     If `paginator` is provided, concatenates pages over the same normalization logic.
@@ -295,6 +300,14 @@ def get_df(
         Path to the list in the JSON to be normalized.
     meta : Sequence[str | Sequence[str]] | None
         Columns to include as metadata (top-level keys or nested paths).
+    output : {"pandas","spark","bigframes"}
+        Controls the returned frame type. "pandas" (default) yields a pandas DataFrame.
+        "spark" materialises a pyspark.sql.DataFrame using the provided session
+        (or an active/builder session).
+        "bigframes" is reserved for future integration and currently raises NotImplementedError.
+    session : Any | None
+        Optional backend handle. For Spark, pass a SparkSession;
+        otherwise the active session or a new one is used.
     """
 
     def _extract(obj: Any) -> Any:
@@ -343,9 +356,35 @@ def get_df(
                         df = df.astype({col: cast(Any, dt)}, copy=False)
         return df
 
+    def _finalize(pdf: pd.DataFrame) -> Any:
+        mode = (output or "pandas").lower()
+        if mode == "pandas":
+            return pdf
+        if mode == "spark":
+            try:
+                from pyspark.sql import SparkSession  # noqa: PLC0415
+            except Exception as exc:  # pragma: no cover - pyspark optional dependency
+                raise RuntimeError(
+                    "get_df(..., output='spark') requires pyspark to be installed."
+                ) from exc
+            spark = session
+            if spark is None:
+                spark = SparkSession.getActiveSession()
+            if spark is None:
+                spark = SparkSession.builder.getOrCreate()
+            return spark.createDataFrame(pdf)
+        if mode == "bigframes":
+            raise NotImplementedError(
+                "get_df(..., output='bigframes') is not implemented yet. "
+                "Open an issue if you need this backend."
+            )
+        raise ValueError(
+            f"Unsupported output backend '{output}' (expected pandas|spark|bigframes)."
+        )
+
     if paginator is None:
         js = get_json(url, params=params, headers=headers, ttl=ttl, timeout=timeout)
-        return _to_df(js)
+        return _finalize(_to_df(js))
 
     pages = get_json(
         url, params=params, headers=headers, ttl=ttl, paginator=paginator, timeout=timeout
@@ -354,5 +393,5 @@ def get_df(
     for js in pages if isinstance(pages, list) else [pages]:
         frames.append(_to_df(js))
     if not frames:
-        return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
+        return _finalize(pd.DataFrame())
+    return _finalize(pd.concat(frames, ignore_index=True))

@@ -31,6 +31,15 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
         self.engine: Engine = create_engine(dsn, future=True)
         self.schema = schema
 
+        if self.schema:
+            try:
+                with self.engine.begin() as conn:
+                    conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {self._q_ident(self.schema)}"))
+            except SQLAlchemyError as exc:
+                raise ProfileConfigError(
+                    f"Failed to ensure schema '{self.schema}' exists: {exc}"
+                ) from exc
+
         # ⇣ fastflowtransform.testing expects executor.con.execute("SQL")
         self.con = SAConnShim(self.engine, schema=self.schema)
 

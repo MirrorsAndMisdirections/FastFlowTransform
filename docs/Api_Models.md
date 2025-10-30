@@ -9,14 +9,14 @@
   * [`get_json`](#get_json)
   * [`get_df`](#get_df)
   * [Pagination](#pagination)
-  * [Context & Telemetry](#context--telemetry)
-* [CLI Flags & Environment Variables](#cli-flags--environment-variables)
+  * [Context & Telemetry](#context-telemetry)
+* [CLI Flags & Environment Variables](#cli-flags-environment-variables)
 * [Example Model](#example-model)
 * [Artifacts](#artifacts)
-* [Tests & Offline Demos](#tests--offline-demos)
+* [Tests & Offline Demos](#tests-offline-demos)
 * [Best Practices](#best-practices)
 * [Troubleshooting](#troubleshooting)
-* [Security & Compliance](#security--compliance)
+* [Security & Compliance](#security-compliance)
 * [FAQ](#faq)
 
 ---
@@ -104,6 +104,7 @@ df = get_df(
     record_path=["data"],     # path to the JSON list
     normalize=True,           # optional: flatten nested objects
     paginator=None,           # optional: pagination strategy (see below)
+    output="pandas",          # pandas|spark (default=pandas)
 )
 # -> pandas.DataFrame
 ```
@@ -112,6 +113,7 @@ df = get_df(
 
 - Default: `record_path` points to the array payload (for example `["data"]`).
 - `normalize=True` delegates to `json_normalize` for deeper structures.
+- `output='spark'` (plus an optional `session=SparkSession`) converts the normalized result into a `pyspark.sql.DataFrame`. Additional backends will reuse the same parameter.
 
 ### Pagination
 
@@ -262,6 +264,7 @@ fft run . --env dev --select dim_countries_from_api --http-cache ro
 - **Never cache secrets:** provide tokens via headers; the response body and metadata are cached.
 - **Use `--offline` in CI** for deterministic tests with a pre-seeded cache.
 - **Set TTL intentionally** when APIs change frequently.
+- **Scope engine-specific variants** with `engine_model(only=...)` so each execution backend registers only the models it can run (pair with SQL `config(engines=[...])` when duplicating logical names).
 
 ---
 

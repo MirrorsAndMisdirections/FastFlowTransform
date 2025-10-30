@@ -2,6 +2,16 @@
 
 This guide walks you through creating a minimal FastFlowTransform project from scratch and running it end-to-end.
 
+## 0. Create a skeleton (optional)
+
+Start with a minimal project structure:
+
+```bash
+fft init demo_project --engine duckdb
+```
+
+The command is non-interactive, refuses to overwrite existing directories, and leaves inline comments that point back to the relevant docs (`Project_Config.md`, `Profiles.md`, etc.). Populate the generated files before running the steps below.
+
 ## 1. Install & bootstrap
 
 ```bash

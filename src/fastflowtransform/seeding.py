@@ -2,17 +2,25 @@
 from __future__ import annotations
 
 import math
+import shutil
 import uuid
+from collections.abc import Callable, Iterable
 from contextlib import suppress
 from pathlib import Path
 from time import perf_counter
 from typing import Any, NamedTuple
+from urllib.parse import unquote, urlparse
 
-import duckdb as _dd
 import pandas as pd
 import yaml
 
+from fastflowtransform import storage
 from fastflowtransform.logging import echo
+
+try:  # Optional Spark dependency
+    from pyspark.errors.exceptions.base import AnalysisException as _SparkAnalysisException
+except Exception:  # pragma: no cover - Spark not installed
+    _SparkAnalysisException = Exception  # type: ignore
 
 # If you use this in a CLI, your code elsewhere should provide _prepare_context.
 
@@ -80,6 +88,65 @@ def _qualify(table: str, schema: str | None) -> str:
     return _dq(table)
 
 
+def _spark_warehouse_base(spark: Any) -> Path | None:
+    """Resolve the Spark warehouse directory if it points to the local filesystem."""
+    try:
+        conf_val = spark.conf.get("spark.sql.warehouse.dir", "spark-warehouse")
+    except Exception:
+        conf_val = "spark-warehouse"
+
+    if not isinstance(conf_val, str):
+        conf_val = str(conf_val)
+    parsed = urlparse(conf_val)
+    scheme = (parsed.scheme or "").lower()
+
+    if scheme and scheme != "file":
+        return None
+
+    if scheme == "file":
+        # Treat file:// URIs as local filesystem paths.
+        if parsed.netloc and parsed.netloc not in {"", "localhost"}:
+            return None
+        raw_path = unquote(parsed.path or "")
+        if not raw_path:
+            return None
+        base = Path(raw_path)
+    else:
+        base = Path(conf_val)
+
+    if not base.is_absolute():
+        base = Path.cwd() / base
+    return base
+
+
+def _spark_table_location(parts: list[str], spark: Any) -> Path | None:
+    """
+    Best-effort guess of the filesystem location for a managed Spark table.
+    Works for default schema, schema.table, and catalog.schema.table patterns.
+    """
+    base = _spark_warehouse_base(spark)
+    if base is None or not parts:
+        return None
+
+    filtered = [p for p in parts if p]
+    if not filtered:
+        return None
+
+    # Drop common catalog prefixes while retaining the schema name.
+    catalog_cutoff = 3
+    if len(filtered) >= catalog_cutoff and filtered[0].lower() in {"spark_catalog", "spark"}:
+        filtered = filtered[1:]
+
+    table = filtered[-1]
+    schema_cutoff = 2
+    schema = filtered[-2] if len(filtered) >= schema_cutoff else None
+
+    location = base
+    if schema:
+        location = location / f"{schema}.db"
+    return location / table
+
+
 # -------------------------------- Pretty echo helpers ---------------------------------
 
 
@@ -143,6 +210,8 @@ class SeedTarget(NamedTuple):
 
 def _engine_name_from_executor(executor: Any) -> str:
     """Infer a human/CFG-facing engine name from the executor object."""
+    if getattr(executor, "spark", None) is not None:
+        return "spark"
     eng = getattr(executor, "engine", None)
     if eng is not None:
         name = getattr(getattr(eng, "dialect", None), "name", None)
@@ -214,6 +283,181 @@ def _resolve_schema_and_table_by_cfg(
 
 # ------------------------------ Materialization (engines) ------------------------------
 
+# ------------------------------------------------------------
+# Engine-specifig Handlers
+# ------------------------------------------------------------
+
+
+def _handle_duckdb(table: str, df: pd.DataFrame, executor: Any, schema: str | None) -> bool:
+    """Versucht DuckDB zu erkennen und zu bedienen. Gibt True zurück, wenn ausgeführt."""
+    con = getattr(executor, "con", None)
+    if con is None:
+        return False
+
+    try:
+        import duckdb as _dd  # Noqa PLC0415
+
+        is_duck_con = isinstance(con, _dd.DuckDBPyConnection)
+    except Exception:
+        is_duck_con = all(hasattr(con, m) for m in ("register", "execute"))
+
+    if not is_duck_con:
+        return False
+
+    full_name = _qualify(table, schema)
+    created_schema = False
+    if schema and not _is_qualified(table):
+        con.execute(f"create schema if not exists {_dq(schema)}")
+        created_schema = True
+
+    t0 = perf_counter()
+    tmp = f"_ff_seed_{uuid.uuid4().hex[:8]}"
+    con.register(tmp, df)
+    try:
+        con.execute(f"create or replace table {full_name} as select * from {_dq(tmp)}")
+    finally:
+        with suppress(Exception):
+            con.unregister(tmp)  # duckdb >= 0.8
+        with suppress(Exception):
+            con.execute(f"drop view if exists {_dq(tmp)}")
+
+    dt_ms = int((perf_counter() - t0) * 1000)
+    _echo_seed_line(
+        full_name=full_name,
+        rows=len(df),
+        cols=df.shape[1],
+        engine="duckdb",
+        ms=dt_ms,
+        created_schema=created_schema,
+        action="replaced",
+    )
+    return True
+
+
+def _handle_sqlalchemy(table: str, df: pd.DataFrame, executor: Any, schema: str | None) -> bool:
+    """Versucht SQLAlchemy-Engine/-Connection zu erkennen und zu bedienen."""
+    eng = getattr(executor, "engine", None)
+    if eng is None:
+        return False
+    # heuristik: viele SQLAlchemy-Engines haben 'sqlalchemy' im Modulpfad der Klasse
+    if "sqlalchemy" not in getattr(eng.__class__, "__module__", ""):
+        return False
+
+    t0 = perf_counter()
+    # pandas übernimmt die DDL/DML — replace-Semantik wie im Original
+    df.to_sql(table, eng, if_exists="replace", index=False, schema=schema, method="multi")
+    dt_ms = int((perf_counter() - t0) * 1000)
+
+    dialect = getattr(getattr(eng, "dialect", None), "name", "sqlalchemy")
+    _echo_seed_line(
+        full_name=_qualify(table, schema),
+        rows=len(df),
+        cols=df.shape[1],
+        engine=dialect,
+        ms=dt_ms,
+        created_schema=False,
+        action="replaced",
+    )
+    return True
+
+
+def _handle_spark(table: str, df: pd.DataFrame, executor: Any, schema: str | None) -> bool:
+    """Versucht Spark/Databricks zu erkennen und zu bedienen."""
+    spark = getattr(executor, "spark", None)
+    if spark is None:
+        return False
+
+    def _spark_ident(name: str) -> str:
+        return name.replace("`", "``")
+
+    created_schema = False
+    if schema and not _is_qualified(table):
+        spark.sql(f"CREATE DATABASE IF NOT EXISTS `{_spark_ident(schema)}`")
+        created_schema = True
+        parts = [schema, table]
+    else:
+        parts = table.split(".")
+
+    parts = [p for p in parts if p]
+    target_identifier = ".".join(parts)
+    target_sql = ".".join(f"`{_spark_ident(p)}`" for p in parts)
+    target_location = _spark_table_location(parts, spark)
+
+    table_format = getattr(executor, "spark_table_format", None)
+    table_options = getattr(executor, "spark_table_options", None) or {}
+
+    storage_meta = storage.get_seed_storage(target_identifier)
+
+    t0 = perf_counter()
+    sdf = spark.createDataFrame(df)
+    cleanup_hint = None
+
+    if storage_meta.get("path"):
+        storage.spark_write_to_path(
+            spark,
+            target_identifier,
+            sdf,
+            storage=storage_meta,
+            default_format=table_format,
+            default_options=table_options,
+        )
+        cleanup_hint = "custom path"
+    else:
+        with suppress(Exception):
+            spark.sql(f"DROP TABLE IF EXISTS {target_sql}")
+        if target_location and target_location.exists():
+            with suppress(Exception):
+                shutil.rmtree(target_location, ignore_errors=True)
+                cleanup_hint = "reset location"
+
+        def _write() -> None:
+            writer = sdf.write.mode("overwrite")
+            if table_format:
+                writer = writer.format(table_format)
+            if table_options:
+                writer = writer.options(**table_options)
+            writer.saveAsTable(target_identifier)
+
+        try:
+            _write()
+        except _SparkAnalysisException as exc:
+            message = str(exc)
+            if target_location and "LOCATION_ALREADY_EXISTS" in message.upper():
+                with suppress(Exception):
+                    shutil.rmtree(target_location, ignore_errors=True)
+                cleanup_hint = "reset location"
+                _write()
+            else:
+                raise RuntimeError(f"Spark seed load failed for {target_sql}: {exc}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"Spark seed load failed for {target_sql}: {exc}") from exc
+
+    dt_ms = int((perf_counter() - t0) * 1000)
+    _echo_seed_line(
+        full_name=target_sql,
+        rows=len(df),
+        cols=df.shape[1],
+        engine="spark",
+        ms=dt_ms,
+        created_schema=created_schema,
+        action="replaced",
+        extra=cleanup_hint,
+    )
+    return True
+
+
+# ------------------------------------------------------------
+# Dispatcher
+# ------------------------------------------------------------
+
+Handler = Callable[[str, pd.DataFrame, Any, str | None], bool]
+
+_HANDLERS: Iterable[Handler] = (
+    _handle_duckdb,
+    _handle_sqlalchemy,
+    _handle_spark,
+)
+
 
 def materialize_seed(
     table: str, df: pd.DataFrame, executor: Any, schema: str | None = None
@@ -221,74 +465,14 @@ def materialize_seed(
     """
     Materialize a DataFrame as a database table across engines.
 
-    DuckDB:
-      - Registers a temporary view for the DataFrame and performs
-        CREATE OR REPLACE TABLE <schema>.<table> AS SELECT * FROM <tmp>.
-      - Ensures CREATE SCHEMA IF NOT EXISTS when requested.
-
-    SQLAlchemy engines (e.g., Postgres):
-      - Uses pandas.DataFrame.to_sql(if_exists='replace', schema=schema).
-
-    Raises:
-      RuntimeError if no supported executor connection is detected.
+    Engine-spezifische Logik ist in dedizierten Handlern gekapselt
+    (_handle_duckdb/_handle_sqlalchemy/_handle_spark). Der Dispatcher
+    ruft sie der Reihe nach auf, bis einer übernimmt.
     """
-    # DuckDB path (robust detection)
-    con = getattr(executor, "con", None)
-    if con is not None:
-        try:
-            is_duck_con = isinstance(con, _dd.DuckDBPyConnection)
-        except Exception:
-            is_duck_con = all(hasattr(con, m) for m in ("register", "execute"))
-
-        if is_duck_con:
-            full_name = _qualify(table, schema)
-            created_schema = False
-            if schema and not _is_qualified(table):
-                con.execute(f"create schema if not exists {_dq(schema)}")
-                created_schema = True
-
-            t0 = perf_counter()
-            tmp = f"_ff_seed_{uuid.uuid4().hex[:8]}"
-            con.register(tmp, df)
-            try:
-                con.execute(f"create or replace table {full_name} as select * from {_dq(tmp)}")
-            finally:
-                try:
-                    con.unregister(tmp)  # duckdb >= 0.8
-                except Exception:
-                    con.execute(f"drop view if exists {_dq(tmp)}")
-            dt_ms = int((perf_counter() - t0) * 1000)
-
-            _echo_seed_line(
-                full_name=full_name,
-                rows=len(df),
-                cols=df.shape[1],
-                engine="duckdb",
-                ms=dt_ms,
-                created_schema=created_schema,
-                action="replaced",
-            )
+    for handler in _HANDLERS:
+        if handler(table, df, executor, schema):
             return
 
-    # SQLAlchemy Engine path
-    eng = getattr(executor, "engine", None)
-    if eng is not None and "sqlalchemy" in eng.__class__.__module__:
-        t0 = perf_counter()
-        df.to_sql(table, eng, if_exists="replace", index=False, schema=schema, method="multi")
-        dt_ms = int((perf_counter() - t0) * 1000)
-        dialect = getattr(getattr(eng, "dialect", None), "name", "sqlalchemy")
-        _echo_seed_line(
-            full_name=_qualify(table, schema),
-            rows=len(df),
-            cols=df.shape[1],
-            engine=dialect,
-            ms=dt_ms,
-            created_schema=False,
-            action="replaced",
-        )
-        return
-
-    # Fallback (not implemented): you could emit VALUES via executor.execute(sql) for tiny seeds.
     raise RuntimeError("No compatible executor connection for seeding found.")
 
 
@@ -322,7 +506,7 @@ def seed_project(project_dir: Path, executor: Any, default_schema: str | None = 
       Number of successfully materialized seed tables.
 
     Raises:
-      ValueError if schema.yml uses a plain stem key while multiple files share that stem.
+      ValueError: if schema.yml uses a plain stem key while multiple files share that stem.
     """
     seeds_dir = project_dir / "seeds"
     if not seeds_dir.exists():

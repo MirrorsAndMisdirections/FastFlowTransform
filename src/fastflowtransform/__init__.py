@@ -13,10 +13,10 @@ from ._version import __version__  # re-export for `from fastflowtransform impor
 # Optional convenience re-exports (safe, low-risk imports).
 # If you prefer a minimal surface, you can remove the block below.
 try:
-    from .core import REGISTRY, Node, relation_for
-    from .dag import levels, mermaid, topo_sort
-    from .decorators import model
-    from .fingerprint import (
+    from fastflowtransform.core import REGISTRY, Node, relation_for
+    from fastflowtransform.dag import levels, mermaid, topo_sort
+    from fastflowtransform.decorators import engine_model, model
+    from fastflowtransform.fingerprint import (
         EnvCtx,
         build_env_ctx,
         fingerprint_py,
@@ -35,6 +35,7 @@ __all__ = [
     "Node",
     "__version__",
     "build_env_ctx",
+    "engine_model",
     "fingerprint_py",
     "fingerprint_sql",
     "get_function_source",

@@ -5,9 +5,12 @@
 # --- Config -------------------------------------------------------------------
 
 # DuckDB database file and project path (for the API demo typically examples/api_demo)
-DB ?= .local/demo.duckdb
+DB ?= .local/api_demo.duckdb
 PROJECT ?= .
 UV ?= uv
+
+# Engine selector (duckdb|postgres|databricks_spark)
+ENGINE ?= duckdb
 
 # HTTP wrapper defaults (override per call if needed)
 # Allowed domains are comma-separated (no https://)
@@ -25,44 +28,52 @@ else
 	OPENER := xdg-open
 endif
 
-# --- Shared env for all runs (DuckDB + HTTP) ---------------------------------
-RUN_ENV = FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)" \
-          FF_HTTP_ALLOWED_DOMAINS="$(FF_HTTP_ALLOWED_DOMAINS)" \
-          FF_HTTP_CACHE_DIR="$(FF_HTTP_CACHE_DIR)" \
-          FF_HTTP_MAX_RPS="$(FF_HTTP_MAX_RPS)" \
-          FF_HTTP_MAX_RETRIES="$(FF_HTTP_MAX_RETRIES)" \
-          FF_HTTP_TIMEOUT="$(FF_HTTP_TIMEOUT)"
 
-# Engine env
 ifeq ($(ENGINE),duckdb)
-  ENGINE_ENV = FF_ENGINE=duckdb FF_DUCKDB_PATH="$(DB)"
+  PROFILE_ENV = dev_duckdb
   ENGINE_TAG = engine:duckdb
 endif
 ifeq ($(ENGINE),postgres)
-  ENGINE_ENV = FF_ENGINE=postgres FF_PG_DSN="$(FF_PG_DSN)" FF_PG_SCHEMA="$(FF_PG_SCHEMA)"
+  PROFILE_ENV = dev_postgres
   ENGINE_TAG = engine:postgres
 endif
 ifeq ($(ENGINE),databricks_spark)
-  ENGINE_ENV = FF_ENGINE=databricks_spark FF_SPARK_MASTER="$(FF_SPARK_MASTER)"
+  PROFILE_ENV = dev_databricks
   ENGINE_TAG = engine:databricks_spark
 endif
 
-# Select only common + this engine; keeps DAG clean and avoids executing foreign variants
-SELECT = tag:example:api_demo,tag:scope:common,tag:$(ENGINE_TAG)
+
+BASE_ENV = FFT_ACTIVE_ENV=$(PROFILE_ENV)
+RUN_ENV = $(BASE_ENV)
+
+# Select only API demo models for the active engine (common models carry all engine tags)
+SELECT_FLAGS = --select tag:example:api_demo --select tag:$(ENGINE_TAG)
+
+CLEAN_SCRIPT = ../_scripts/cleanup_env.py
+
+ifeq ($(ENGINE),duckdb)
+  CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine duckdb --env "$(PROFILE_ENV)" --project "$(PROJECT)" --duckdb-path "$(DB)"
+else ifeq ($(ENGINE),postgres)
+  CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine postgres --env "$(PROFILE_ENV)" --project "$(PROJECT)"
+else ifeq ($(ENGINE),databricks_spark)
+  CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine databricks_spark --env "$(PROFILE_ENV)" --project "$(PROJECT)"
+else
+  CLEAN_CMD = $(error Unsupported ENGINE=$(ENGINE) for cleanup)
+endif
 
 # --- Standard R1 targets ------------------------------------------------------
 
 seed:
-	$(ENGINE_ENV) $(UV) run fft seed "$(PROJECT)" --env dev
+	env $(BASE_ENV) $(UV) run fft seed "$(PROJECT)" --env $(PROFILE_ENV)
 
 run:
-	$(ENGINE_ENV) $(RUN_ENV) $(UV) run fft run "$(PROJECT)" --env dev
+	env $(RUN_ENV) $(UV) run fft run "$(PROJECT)" --env $(PROFILE_ENV) $(SELECT_FLAGS)
 
 test:
-	$(ENGINE_ENV) $(UV) run fft test "$(PROJECT)" --env dev
+	env $(BASE_ENV) $(UV) run fft test "$(PROJECT)" --env $(PROFILE_ENV) $(SELECT_FLAGS)
 
 dag:
-	$(ENGINE_ENV) $(UV) run fft dag  "$(PROJECT)" --env dev --html
+	env $(RUN_ENV) $(UV) run fft dag  "$(PROJECT)" --env $(PROFILE_ENV) $(SELECT_FLAGS) --html
 
 artifacts:
 	@echo
@@ -71,35 +82,23 @@ artifacts:
 	@echo "  DAG HTML: $(PROJECT)/site/dag/index.html"
 
 incr:
-	$(RUN_ENV) $(UV) run fft run "$(PROJECT)" --env dev --select fct_events_inc.ff --cache rw || true
+	env $(RUN_ENV) $(UV) run fft run "$(PROJECT)" --env $(PROFILE_ENV) --select fct_events_inc.ff --cache rw || true
 
 state-mod:
 	@if [ -f "$(PROJECT)/models/users.ff.sql" ]; then touch "$(PROJECT)/models/users.ff.sql"; fi
-	$(RUN_ENV) $(UV) run fft run "$(PROJECT)" --env dev --cache rw --select state:modified
+	env $(RUN_ENV) $(UV) run fft run "$(PROJECT)" --env $(PROFILE_ENV) --cache rw --select state:modified
 
 state-mod-plus:
-	$(RUN_ENV) $(UV) run fft run "$(PROJECT)" --env dev --cache rw --select state:modified+
+	env $(RUN_ENV) $(UV) run fft run "$(PROJECT)" --env $(PROFILE_ENV) --cache rw --select state:modified+
 
 res-error:
-	$(RUN_ENV) $(UV) run fft run "$(PROJECT)" --env dev --select result:error || true
+	env $(RUN_ENV) $(UV) run fft run "$(PROJECT)" --env $(PROFILE_ENV) --select result:error || true
 
 res-warn:
-	$(RUN_ENV) $(UV) run fft run "$(PROJECT)" --env dev --select result:warn  || true
-
-pg-seed:
-	FF_ENGINE=postgres FF_PG_DSN="$(FF_PG_DSN)" FF_PG_SCHEMA="$(FF_PG_SCHEMA)" $(UV) run fft seed "$(PROJECT)" --env stg
-
-pg-run:
-	FF_ENGINE=postgres FF_PG_DSN="$(FF_PG_DSN)" FF_PG_SCHEMA="$(FF_PG_SCHEMA)" \
-	FF_HTTP_ALLOWED_DOMAINS="$(FF_HTTP_ALLOWED_DOMAINS)" \
-	FF_HTTP_CACHE_DIR="$(FF_HTTP_CACHE_DIR)" \
-	FF_HTTP_MAX_RPS="$(FF_HTTP_MAX_RPS)" \
-	FF_HTTP_MAX_RETRIES="$(FF_HTTP_MAX_RETRIES)" \
-	FF_HTTP_TIMEOUT="$(FF_HTTP_TIMEOUT)" \
-	$(UV) run fft run  "$(PROJECT)" --env stg
+	env $(RUN_ENV) $(UV) run fft run "$(PROJECT)" --env $(PROFILE_ENV) --select result:warn  || true
 
 clean:
-	rm -rf .local "$(PROJECT)/docs" dist build *.egg-info .fastflowtransform
+	$(CLEAN_CMD)
 
 demo-open:
 	@if [ -f "$(PROJECT)/site/dag/index.html" ]; then \
@@ -110,7 +109,7 @@ demo-open:
 
 demo: clean
 	@echo "== 🚀 R1 Demo (DuckDB) =="
-	@echo "DB=$(DB)  PROJECT=$(PROJECT)"
+	@echo "Profile=$(PROFILE_ENV)  DB=$(DB)  PROJECT=$(PROJECT)"
 	+$(MAKE) seed
 	+$(MAKE) run
 	+$(MAKE) dag
@@ -134,13 +133,13 @@ demo: clean
 # --- API-specific convenience targets ----------------------------------------
 
 api-run:
-	$(RUN_ENV) $(UV) run fft run "$(PROJECT)" --env dev --select "kind:python" --cache rw
+	env $(RUN_ENV) $(UV) run fft run "$(PROJECT)" --env $(PROFILE_ENV) --select "kind:python" --cache rw
 
 api-warm:
 	+$(MAKE) api-run
 
 api-offline:
-	$(RUN_ENV) FF_HTTP_OFFLINE=1 $(UV) run fft run "$(PROJECT)" --env dev --select "kind:python" --cache rw
+	env $(RUN_ENV) FF_HTTP_OFFLINE=1 $(UV) run fft run "$(PROJECT)" --env $(PROFILE_ENV) --select "kind:python" --cache rw
 
 api-cache-clear:
 	rm -rf "$(FF_HTTP_CACHE_DIR)"
@@ -156,7 +155,7 @@ api-show-http:
 
 api-demo: clean
 	@echo "== 🌐 API Demo (DuckDB) =="
-	@echo "DB=$(DB)  PROJECT=$(PROJECT)"
+	@echo "Profile=$(PROFILE_ENV)  DB=$(DB)  PROJECT=$(PROJECT)"
 	+$(MAKE) run
 	+$(MAKE) dag
 	+$(MAKE) api-show-http || true

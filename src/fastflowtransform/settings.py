@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 
 import yaml
+from jinja2 import Environment, StrictUndefined
 from pydantic import BaseModel, Field, TypeAdapter
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -34,6 +35,12 @@ class DatabricksSparkConfig(BaseModel):
     master: str = "local[*]"
     app_name: str = "fastflowtransform"
     extra_conf: dict[str, Any] | None = None
+    warehouse_dir: str | None = None
+    use_hive_metastore: bool = False
+    catalog: str | None = None
+    database: str | None = None
+    table_format: str = "parquet"
+    table_options: dict[str, Any] | None = None
 
 
 class SnowflakeSnowparkConfig(BaseModel):
@@ -112,6 +119,10 @@ class EnvSettings(BaseSettings):
     # databricks spark
     DBR_MASTER: str | None = None
     DBR_APPNAME: str | None = None
+    DBR_ENABLE_HIVE: int | None = None
+    DBR_WAREHOUSE_DIR: str | None = None
+    DBR_TABLE_FORMAT: str | None = None
+    DBR_DATABASE: str | None = None
 
     # snowflake snowpark
     SF_ACCOUNT: str | None = None
@@ -148,7 +159,26 @@ def load_profiles(project_dir: Path) -> dict:
     pf_path = project_dir / "profiles.yml"
     if not pf_path.exists():
         return {}
-    return yaml.safe_load(pf_path.read_text(encoding="utf-8")) or {}
+    raw_text = pf_path.read_text(encoding="utf-8")
+    rendered = _render_profiles_template(raw_text, project_dir)
+    return yaml.safe_load(rendered) or {}
+
+
+def _render_profiles_template(text: str, project_dir: Path) -> str:
+    def _env(name: str, default: str | None = "") -> str:
+        val = os.getenv(name)
+        if val is not None:
+            return val
+        return "" if default is None else str(default)
+
+    jenv = Environment(autoescape=False, undefined=StrictUndefined)
+    jenv.globals["env"] = _env
+    jenv.globals["project_dir"] = lambda: str(project_dir)
+    template = jenv.from_string(text)
+    try:
+        return template.render()
+    except Exception as exc:
+        raise ProfileConfigError(f"Failed to render profiles.yml: {exc}") from exc
 
 
 # ---------- Resolver ----------
@@ -217,6 +247,16 @@ def _ov_databricks_spark(raw: dict[str, Any], env: EnvSettings) -> None:
     dbr = raw.setdefault("databricks_spark", {})
     _set_if(dbr, "master", getattr(env, "DBR_MASTER", None))
     _set_if(dbr, "app_name", getattr(env, "DBR_APPNAME", None))
+    _set_if(dbr, "warehouse_dir", getattr(env, "DBR_WAREHOUSE_DIR", None))
+    _set_if(dbr, "table_format", getattr(env, "DBR_TABLE_FORMAT", None))
+    _set_if(dbr, "database", getattr(env, "DBR_DATABASE", None))
+
+    enable_hive = getattr(env, "DBR_ENABLE_HIVE", None)
+    if enable_hive is not None:
+        if isinstance(enable_hive, str):
+            dbr["use_hive_metastore"] = enable_hive.strip().lower() in {"1", "true", "yes", "on"}
+        else:
+            dbr["use_hive_metastore"] = bool(enable_hive)
     # ggf. weitere Connect-Parameter hier setzen
 
 

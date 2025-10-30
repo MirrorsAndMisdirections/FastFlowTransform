@@ -42,6 +42,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest==8.4.*",
+  "pytest-cov==7.0.*",
   "ruff==0.14.*",
   "mypy==1.18.*",
   "pre-commit==3.*",
@@ -53,6 +54,11 @@ docs = [
   "mkdocs>=1.6",
   "mkdocs-material>=9.5",
   "pymdown-extensions>=10.0",
+  "mkdocstrings[python]>=0.25",
+  "mkdocs-autorefs>=1.0",
+  "mkdocs-section-index>=0.3",
+  "mkdocs-gen-files>=0.5",
+  "mkdocs-literate-nav>=0.6",
 ]
 
 [project.urls]
@@ -93,6 +99,7 @@ select = [
 ]
 ignore = [
   "E203", # whitespace before ':', compatible with black-like formatting
+  "PLR2004",
 ]
 fixable = ["ALL"]
 
@@ -159,9 +166,3 @@ omit = [
 show_missing = true
 skip_covered = false
 fail_under = 80 
-
-[dependency-groups]
-dev = [
-    "coverage>=7.11.0",
-    "pytest-cov>=7.0.0",
-]

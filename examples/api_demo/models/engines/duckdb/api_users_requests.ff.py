@@ -1,5 +1,5 @@
 # NOTE: Plain Python variant (requests/httpx). No built-in FFT telemetry or HTTP cache here.
-from fastflowtransform import model
+from fastflowtransform import engine_model
 import pandas as pd
 
 try:
@@ -8,9 +8,11 @@ except Exception as _e:  # pragma: no cover
     raise RuntimeError("Please install 'requests' to run this model") from _e
 
 
-@model(
+@engine_model(
+    only="duckdb",
     name="api_users_requests",
     deps=["users.ff"],  # keep a dependency for executor contract
+    tags=["example:api_demo", "scope:engine", "engine:duckdb"],
 )
 def fetch(_: pd.DataFrame) -> pd.DataFrame:
     """
