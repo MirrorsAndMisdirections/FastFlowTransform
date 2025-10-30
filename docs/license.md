@@ -1,3 +1,3 @@
 # License
 
---8<-- "License"
+--8<-- "License.md"
