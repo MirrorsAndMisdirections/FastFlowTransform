@@ -32,9 +32,6 @@ jobs:
       - name: Install docs (and dev) dependencies
         run: |
           uv sync --extra docs
-
-      - name: Generate API reference pages (real files)
-        run: uv run python scripts/generate_api_docs.py
       
       - name: Build site
         run: uv run mkdocs build --strict
