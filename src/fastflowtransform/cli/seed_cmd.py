@@ -7,22 +7,6 @@ from fastflowtransform.cli.options import EngineOpt, EnvOpt, ProjectArg, VarsOpt
 from fastflowtransform.logging import echo
 from fastflowtransform.seeding import _human_int, seed_project
 
-# def seed(
-#     project: ProjectArg = ".",
-#     env_name: EnvOpt = "dev",
-#     engine: EngineOpt = None,
-#     vars: VarsOpt = None,
-# ) -> None:
-#     ctx = _prepare_context(project, env_name, engine, vars)
-#     execu, _, _ = ctx.make_executor()
-
-#     schema: str | None = None
-#     if ctx.profile.engine == "postgres":
-#         schema = ctx.profile.postgres.db_schema
-
-#     n = seed_project(ctx.project, execu, schema)
-#     echo(f"✓ Seeded {n} table(s)")
-
 
 def seed(
     project: ProjectArg = ".",

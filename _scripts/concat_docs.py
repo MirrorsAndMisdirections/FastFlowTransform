@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # concat_docs.py
 """
-Fügt alle Markdown-Dateien aus dem docs-Verzeichnis zu einer einzelnen Datei zusammen.
-- Respektiert die Reihenfolge in mkdocs.yml (nav).
-- Ignoriert doppelte Einträge / Anker (#...).
-- Hängt übrige .md-Dateien (nicht in nav) am Ende an.
-- Optional: Headings demoten (um mehrfaches H1 zu vermeiden).
+Concatenates all Markdown files from the docs directory into a single file.
+- Respects the order in mkdocs.yml (nav).
+- Ignores duplicate entries / anchors (#...).
+- Appends remaining .md files (not in nav) at the end.
+- Optional: Demote headings (to avoid multiple H1s).
 
-Beispiel:
+Example:
     python concat_docs.py -o Combined.md
     python concat_docs.py -o Combined.md --demote --exclude "reference/**" --exclude "site/**"
 """
@@ -30,18 +30,18 @@ MKDOCS_YML = "mkdocs.yml"
 
 
 def load_nav_order(project_root: Path) -> list[Path]:
-    """Liest mkdocs.yml und extrahiert eine geordnete Liste der Markdown-Pfade (ohne Anker)."""
+    """Read mkdocs.yml and extract an ordered list of Markdown paths (without anchors)."""
     yml_path = project_root / MKDOCS_YML
     ordered: list[Path] = []
     if yaml is None or not yml_path.exists():
-        return ordered  # keine Order-Info -> leere Liste
+        return ordered  # no ordering info -> empty list
     data = yaml.safe_load(yml_path.read_text(encoding="utf-8"))
     nav = data.get("nav") if isinstance(data, dict) else None
     if not isinstance(nav, list):
         return ordered
 
     def normalize_nav_item(item) -> list[str]:
-        # item kann dict ({"Title": "path.md" | ["subitems"]}) oder string sein
+        # Item can be dict ({"Title": "path.md" | ["subitems"]}) or string
         out: list[str] = []
         if isinstance(item, str):
             out.append(item)
@@ -60,12 +60,12 @@ def load_nav_order(project_root: Path) -> list[Path]:
 
     seen = set()
     for p in paths:
-        # Nur Dateien unter docs berücksichtigen; Anker entfernen
+        # Only consider files under docs; strip anchors
         p_no_anchor = p.split("#", 1)[0]
         if not p_no_anchor.lower().endswith(".md"):
             continue
-        # mkdocs erlaubt relative Pfade; wir interpretieren sie relativ zu docs/
-        # Falls der Pfad bereits "docs/..." enthält, normalisieren wir trotzdem
+        # mkdocs allows relative paths; interpret them relative to docs/
+        # If the path already contains "docs/...", normalize it anyway
         if p_no_anchor.startswith(DOCS_DIR_DEFAULT + "/"):
             rel = Path(p_no_anchor).relative_to(DOCS_DIR_DEFAULT)
         else:
@@ -94,8 +94,8 @@ def apply_excludes(paths: list[Path], patterns: list[str]) -> list[Path]:
 
 def demote_headings(text: str, levels: int = 1) -> str:
     """
-    Erhöht die Anzahl der '#' um 'levels' für alle ATX-Headings (Markdown #).
-    Lässt Codeblöcke unberührt.
+    Increase the number of '#' by 'levels' for all ATX headings (Markdown #).
+    Leave code fences untouched.
     """
     if levels <= 0:
         return text
@@ -160,12 +160,12 @@ def main():
         print(f"Fehler: docs-Verzeichnis nicht gefunden: {docs_dir}", file=sys.stderr)
         sys.exit(1)
 
-    # 1) Reihenfolge aus mkdocs.yml (falls nicht deaktiviert / vorhanden)
+    # 1) Order from mkdocs.yml (if not disabled / available)
     nav_order = load_nav_order(project_root) if not args.no_nav else []
     all_md = collect_md_files(docs_dir)
     all_md = apply_excludes(all_md, args.exclude)
 
-    # 2) Liste zusammenstellen: zuerst nav, dann Rest (ohne Duplikate)
+    # 2) Build list: nav entries first, then the rest (without duplicates)
     ordered: list[Path] = []
     seen = set()
     for rel in nav_order:

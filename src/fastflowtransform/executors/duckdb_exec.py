@@ -35,6 +35,17 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
         """
         return DuckExecutor(self.db_path)
 
+    def _exec_many(self, sql: str) -> None:
+        """
+        Execute multiple SQL statements separated by ';' on the same connection.
+        DuckDB normally accepts one statement per execute(), so we split here.
+        """
+        # very simple splitter - good enough for what we emit in the executor
+        for stmt in (part.strip() for part in sql.split(";")):
+            if not stmt:
+                continue
+            self.con.execute(stmt)
+
     # ---- Frame hooks ----
     def _read_relation(self, relation: str, node: Node, deps: Iterable[str]) -> pd.DataFrame:
         try:
@@ -143,20 +154,25 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
 
     def incremental_merge(self, relation: str, select_sql: str, unique_key: list[str]) -> None:
         """
-        Fallback strategy:
-          - Staging-CTE: data from SELECT
-          - Delete-Merge: delete collisions in target
-          - Insert all staging rows
+        Fallback strategy for DuckDB:
+        - DELETE collisions via DELETE ... USING (<select>) s
+        - INSERT all rows via INSERT ... SELECT * FROM (<select>)
+        We intentionally do NOT use a CTE here, because we execute two separate
+        statements and DuckDB won't see the CTE from the previous statement.
         """
-        keys_pred = " AND ".join([f"t.{k}=s.{k}" for k in unique_key])
-        # Clean inner SELECT for CTE: remove trailing semicolon and keep only SELECT body
+        # 1) clean inner SELECT
         body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
-        sql = f"""
-        with src as ({body})
-        delete from {relation} t using src s where {keys_pred};
-        insert into {relation} select * from src;
-        """
-        self.con.execute(sql)
+
+        # 2) predicate for DELETE
+        keys_pred = " AND ".join([f"t.{k}=s.{k}" for k in unique_key]) or "FALSE"
+
+        # 3) first: delete collisions
+        delete_sql = f"delete from {relation} t using ({body}) s where {keys_pred}"
+        self.con.execute(delete_sql)
+
+        # 4) then: insert fresh rows
+        insert_sql = f"insert into {relation} select * from ({body}) src"
+        self.con.execute(insert_sql)
 
     def alter_table_sync_schema(
         self, relation: str, select_sql: str, *, mode: str = "append_new_columns"

@@ -14,7 +14,7 @@ def test_python_model_tags_propagate_to_node(tmp_path: Path, monkeypatch) -> Non
     model_file.write_text(
         (
             "from fastflowtransform import model\n\n"
-            "@model(name='py_tagged', tags=['example', 'demo'], meta={'materialized': 'view'})\n"
+            "@model(name='py_tagged', tags=['example', 'demo'], materialized='view')\n"
             "def build(df=None):\n"
             "    return df\n"
         ),

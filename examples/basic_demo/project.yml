@@ -15,4 +15,49 @@ docs:
 vars: {}
 
 # Declare project-wide data quality checks under `tests`. See docs/Data_Quality_Tests.md.
-tests: []
+tests:
+  - type: not_null
+    table: seed_users
+    column: id
+    tags: [example_basic_demo]
+
+  - type: unique
+    table: seed_users
+    column: id
+    tags: [example_basic_demo]
+
+  - type: unique
+    table: users_clean
+    column: user_id
+    tags: [example_basic_demo]
+
+  - type: not_null
+    table: users_clean
+    column: email_domain
+    tags: [example_basic_demo]
+
+  - type: not_null
+    table: mart_users_by_domain
+    column: email_domain
+    tags: [example_basic_demo]
+
+  - type: unique
+    table: mart_latest_signup
+    column: email_domain
+    tags: [example_basic_demo]
+
+  - type: not_null
+    table: mart_latest_signup
+    column: latest_user_id
+    tags: [example_basic_demo]
+
+  - type: not_null
+    table: mart_latest_signup
+    column: latest_signup_date
+    tags: [example_basic_demo]
+
+  - type: greater_equal
+    table: mart_users_by_domain
+    column: user_count
+    threshold: 0
+    tags: [example_basic_demo]

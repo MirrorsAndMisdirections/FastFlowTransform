@@ -16,11 +16,15 @@ SRC_DIR = PROJECT_ROOT / "src"
 if SRC_DIR.exists() and str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from fastflowtransform.logging import LOG_PREFIX
 from fastflowtransform.settings import EnvSettings, resolve_profile
 
 
 def _log(msg: str) -> None:
-    print(msg)
+    if LOG_PREFIX:
+        print(f"{LOG_PREFIX} {msg}")
+    else:
+        print(msg)
 
 
 def _coerce_path(value: str | None, project: Path) -> Path | None:
@@ -261,32 +265,44 @@ def main(argv: list[str] | None = None) -> int:
         or ("dev_" + args.engine if args.engine in {"duckdb", "postgres"} else "dev")
     )
 
-    try:
-        os.environ["FFT_ACTIVE_ENV"] = env_name
-        _load_dotenv_layered(project, env_name)
-        profile = _load_profile(project, env_name, args.engine)
+    os.environ["FFT_ACTIVE_ENV"] = env_name
+    _load_dotenv_layered(project, env_name)
 
-        warehouse_path: Path | None = None
+    profile = None
+    try:
+        profile = _load_profile(project, env_name, args.engine)
+    except Exception as exc:  # pragma: no cover - best-effort logging
+        _log(
+            f"Warning: failed to resolve profile '{env_name}' for engine '{args.engine}': {exc}. "
+            "Continuing with environment variables only."
+        )
+
+    warehouse_path: Path | None = None
+    try:
         if args.engine == "duckdb":
-            profile_duckdb = getattr(getattr(profile, "duckdb", None), "path", None)
+            profile_duckdb = (
+                getattr(getattr(profile, "duckdb", None), "path", None) if profile else None
+            )
             db_path = args.duckdb_path or os.getenv("FF_DUCKDB_PATH") or profile_duckdb
             cleanup_duckdb(project=project, db_path=db_path, dry_run=args.dry_run)
         elif args.engine == "postgres":
-            profile_pg = getattr(profile, "postgres", None)
-            profile_dsn = getattr(profile_pg, "dsn", None)
-            profile_schema = getattr(profile_pg, "db_schema", None)
+            profile_pg = getattr(profile, "postgres", None) if profile else None
+            profile_dsn = getattr(profile_pg, "dsn", None) if profile_pg else None
+            profile_schema = getattr(profile_pg, "db_schema", None) if profile_pg else None
             dsn = args.postgres_dsn or os.getenv("FF_PG_DSN") or profile_dsn
             schema = args.postgres_schema or os.getenv("FF_PG_SCHEMA") or profile_schema
             cleanup_postgres(dsn=dsn, schema=schema, dry_run=args.dry_run)
         elif args.engine == "databricks_spark":
-            profile_db = getattr(profile, "databricks_spark", None)
-            profile_master = getattr(profile_db, "master", None)
-            profile_app = getattr(profile_db, "app_name", None)
-            profile_warehouse = getattr(profile_db, "warehouse_dir", None)
-            profile_database = getattr(profile_db, "database", None)
-            profile_catalog = getattr(profile_db, "catalog", None)
-            profile_use_hive = getattr(profile_db, "use_hive_metastore", False)
-            profile_extra_conf = getattr(profile_db, "extra_conf", None)
+            profile_db = getattr(profile, "databricks_spark", None) if profile else None
+            profile_master = getattr(profile_db, "master", None) if profile_db else None
+            profile_app = getattr(profile_db, "app_name", None) if profile_db else None
+            profile_warehouse = getattr(profile_db, "warehouse_dir", None) if profile_db else None
+            profile_database = getattr(profile_db, "database", None) if profile_db else None
+            profile_catalog = getattr(profile_db, "catalog", None) if profile_db else None
+            profile_use_hive = (
+                getattr(profile_db, "use_hive_metastore", False) if profile_db else False
+            )
+            profile_extra_conf = getattr(profile_db, "extra_conf", None) if profile_db else None
             warehouse_path = cleanup_databricks(
                 project=project,
                 master=args.spark_master or profile_master,

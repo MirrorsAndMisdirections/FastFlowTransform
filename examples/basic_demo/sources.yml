@@ -1,9 +1,9 @@
-# Source declarations describe external tables. See docs/Sources.md for details.
 version: 2
+
 sources:
-  # Example:
-  # - name: raw
-  #   schema: staging
-  #   tables:
-  #     - name: users
-  #       identifier: seed_users
+  - name: crm
+    description: Seeded CRM-style data for the demo.
+    tables:
+      - name: users
+        identifier: seed_users
+        description: Three sample users that populate the seed table.

@@ -16,6 +16,51 @@ from typing import Any
 import typer
 
 # -----------------------------------------------------------------------------
+# Prefix configuration
+# -----------------------------------------------------------------------------
+LOG_PREFIX = os.getenv("FFT_LOG_PREFIX", "[FFT]").strip()
+
+
+def _prefix_enabled() -> bool:
+    return bool(LOG_PREFIX)
+
+
+def _prefix_text_line(line: str) -> str:
+    if not _prefix_enabled():
+        return line
+    return f"{LOG_PREFIX} {line}"
+
+
+def _prefix_text_block(text: str) -> str:
+    if not _prefix_enabled() or not text:
+        return text
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return text
+    prefixed: list[str] = []
+    for line in lines:
+        if line.strip():
+            prefixed.append(_prefix_text_line(line))
+        else:
+            prefixed.append(line)
+    return "".join(prefixed)
+
+
+def _prefix_format(fmt: str) -> str:
+    if not _prefix_enabled():
+        return fmt
+    return f"{LOG_PREFIX} {fmt}"
+
+
+def _apply_prefix(message: Any) -> Any:
+    if not _prefix_enabled() or message is None:
+        return message
+    if isinstance(message, str):
+        return _prefix_text_block(message)
+    return _prefix_text_line(str(message))
+
+
+# -----------------------------------------------------------------------------
 # Context (enriched into log records) and runtime flags
 # -----------------------------------------------------------------------------
 _run_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("ff_run_id", default=None)
@@ -116,7 +161,7 @@ class _ConsoleFormatter(_logging.Formatter):
     _date = "%Y-%m-%d %H:%M:%S"
 
     def __init__(self) -> None:
-        super().__init__(self._fmt, self._date)
+        super().__init__(_prefix_format(self._fmt), self._date)
 
 
 class _JsonFormatter(_logging.Formatter):
@@ -231,30 +276,32 @@ def get_logger(name: str | None = None) -> _logging.Logger:
     return _logging.getLogger(base if not name else f"{base}.{name}")
 
 
-def echo(*args: Any, **kwargs: Any) -> None:
+def echo(message: Any = "", *, prefix: bool = True, **kwargs: Any) -> None:
     """
-    Thin passthrough to typer.echo(...).
+    Thin wrapper around typer.echo(...) that prepends the global log prefix.
 
     Usage:
         echo("hello")
         echo("to stderr", err=True)
         echo("no newline", nl=False)
         echo("colored", color=True)
+        echo("raw message", prefix=False)  # skip prefix if needed
     """
-    typer.echo(*args, **kwargs)
+    msg = _apply_prefix(message) if prefix else message
+    typer.echo(msg, **kwargs)
 
 
-def echo_debug(*args: Any, **kwargs: Any) -> None:
+def echo_debug(message: Any = "", *, prefix: bool = True, **kwargs: Any) -> None:
     """
-    Like typer.echo(...), but only emits when `fastflowtransform` logger is in DEBUG.
+    Like echo(...), but only emits when `fastflowtransform` logger is in DEBUG.
 
     Usage:
         echo_debug("SQL preview:", sql_text)
         echo_debug("to stderr only in debug", err=True)
     """
-    logger = _logging.getLogger("fastflowtransform")
+    logger = get_logger()
     if logger.isEnabledFor(_logging.DEBUG):
-        typer.echo(*args, **kwargs)
+        echo(message, prefix=prefix, **kwargs)
 
 
 def info(msg: str, *args: Any, **kwargs: Any) -> None:
@@ -281,7 +328,9 @@ def dprint(*parts: Any) -> None:
     Only prints when general debug is enabled.
     """
     if is_debug_enabled():
-        print("[DBG]", *parts, file=sys.stdout)
+        body = " ".join(str(p) for p in parts) if parts else ""
+        msg = "[DBG]" if not body else f"[DBG] {body}"
+        print(_prefix_text_line(msg), file=sys.stdout)
 
 
 def sql_debug(msg: str, *args: Any, **kwargs: Any) -> None:
