@@ -64,6 +64,8 @@ Use the `@model` decorator from `fastflowtransform.core` to register a callable.
 - `name` (optional) → overrides the logical name (defaults to stem).
 - `deps` → list of dependency nodes (file stems or logical names).
 - `requires` → column contract per dependency (validated via `validation.validate_required_columns`).
+- `materialized` (optional) → `'table' | 'view' | 'ephemeral'`; mirrors `config(materialized=...)` for SQL.
+- `tags` (optional) → convenience for attaching selection labels without writing `meta={"tags": ...}`.
 
 Dependencies determine the call signature:
 
@@ -78,7 +80,8 @@ import pandas as pd
 @model(
     name="users_enriched",
     deps=["users.ff"],
-    requires={"users": {"id", "email"}}
+    requires={"users": {"id", "email"}},
+    materialized="view",
 )
 def enrich(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
@@ -172,7 +175,7 @@ override those defaults, add per-engine overrides, or point at files:
 
 ## 2. `config()` options
 
-Call `config()` at the top of SQL models (and optionally within Python models via decorator kwargs in future versions).
+Call `config()` at the top of SQL models. Python models get the same options via the `@model(..., materialized=..., tags=...)` decorator kwargs.
 
 ```sql
 {{ config(

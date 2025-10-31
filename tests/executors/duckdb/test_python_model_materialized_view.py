@@ -23,7 +23,7 @@ def test_python_model_materialized_as_view(tmp_path: Path, monkeypatch):
 from fastflowtransform.decorators import model
 import pandas as pd
 
-@model(name="py_users.ff", deps=["base.ff"])
+@model(name="py_users.ff", deps=["base.ff"], materialized="view")
 def build(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["is_gmail"] = out["email"].str.endswith("@gmail.com")
@@ -38,13 +38,8 @@ def build(df: pd.DataFrame) -> pd.DataFrame:
         encoding="utf-8",
     )
 
-    # Also place a config block on the Python view in a tiny shim SQL file:
-    # We attach materialized='view' via a separate top directive model that won't be built;
-    # alternatively, set REGISTRY.nodes['py_users.ff'].meta manually after load.
-    # For simplicity here, we modify meta after load.
     REGISTRY.load_project(tmp_path)
-    # mark the python node as view
-    REGISTRY.nodes["py_users.ff"].meta["materialized"] = "view"
+    assert REGISTRY.nodes["py_users.ff"].meta["materialized"] == "view"
 
     env = REGISTRY.env
     assert env is not None

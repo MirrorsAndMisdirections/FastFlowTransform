@@ -15,7 +15,7 @@ from fastflowtransform import model  # your existing decorator
     name="env_vars.ff",
     tags=["demo", "env"],
     kind="python",
-    meta={"materialized": "table"},
+    materialized="table",
 )
 def build(_: pd.DataFrame | None) -> pd.DataFrame:
     """

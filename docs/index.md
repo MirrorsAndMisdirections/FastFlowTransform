@@ -17,6 +17,7 @@ Welcome! This page is your starting point for FastFlowTransform docs. Pick the t
 - [Sources Declaration](./Sources.md)
 - [Project Configuration](./Project_Config.md)
 - [State Selection (changed & results)](./State_Selection.md)
+- [Basic Demo Overview](./examples/Basic_Demo.md)
 - [Cross-Table Reconciliations](./Technical_Overview.md#cross-table-reconciliations)
 - [Auto-Docs & Lineage](./Technical_Overview.md#auto-docs-lineage)
 - [Developer Guide](./Technical_Overview.md#part-ii-architecture-internals)
@@ -39,7 +40,7 @@ Welcome! This page is your starting point for FastFlowTransform docs. Pick the t
 - **Understand the project layout & CLI workflow:** see *Project Layout*, *Makefile Targets*, and *CLI Flows* in the [Technical Overview](Technical_Overview.md#project-layout).
 - **Configure runtimes & profiles:** review executor profiles, environment overrides, and logging options in the [Technical Overview](Technical_Overview.md#profiles-environment-overrides).
 - **Model data quality & troubleshoot runs:** the [Technical Overview](Technical_Overview.md#model-unit-tests-fft-utest) covers unit tests, troubleshooting tips, and exit codes.
-- **Explore runnable demos:** browse the `examples/` directory in the repo; each subproject comes with its own README.
+- **Explore runnable demos:** start with the [Basic Demo Overview](examples/Basic_Demo.md) or browse the `examples/` directory; each subproject ships with its own README.
 
 ### 2. Extend FastFlowTransform (Developers & Contributors)
 

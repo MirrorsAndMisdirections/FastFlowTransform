@@ -1,4 +1,3 @@
 # Seeds directory
 
-Add CSV or Parquet files for reproducible seeds.
-Usage examples are covered in docs/Quickstart.md and docs/Config_and_Macros.md#13-seeds-sources-and-dependencies.
+`seed_users.csv` ships with the demo and feeds the staging model. Extend or replace it with your own CSV or Parquet files when experimenting.

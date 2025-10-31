@@ -58,6 +58,7 @@ def model(
     *,
     tags: Sequence[str] | None = None,
     kind: str = "python",
+    materialized: str | None = None,
     meta: Mapping[str, Any] | None = None,
 ) -> Callable[[Callable[P, R_co]], HasFFMeta[P, R_co]]:
     """
@@ -72,7 +73,8 @@ def model(
               (dep_name = logical name or physical relation).
         tags: Optional tags for selection (e.g. ['demo','env']).
         kind: Logical kind; defaults to 'python' (useful for selectors kind:python).
-        meta: Arbitrary metadata, e.g. {'materialized': 'table'|'view'|'incremental'}.
+        materialized: Shorthand for meta['materialized']; mirrors config(materialized='...').
+        meta: Arbitrary metadata for executors/docs (merged with materialized if provided).
     """
 
     def deco(func: Callable[P, R_co]) -> HasFFMeta[P, R_co]:
@@ -92,7 +94,11 @@ def model(
 
         f_any.__ff_tags__ = list(tags) if tags else []
         f_any.__ff_kind__ = kind or "python"
-        f_any.__ff_meta__ = dict(meta) if meta else {}
+
+        metadata = dict(meta) if meta else {}
+        if materialized is not None:
+            metadata["materialized"] = materialized
+        f_any.__ff_meta__ = metadata
 
         # Determine the source path (better error message if it fails)
         src: str | None = inspect.getsourcefile(func)
