@@ -75,7 +75,7 @@ def _is_qualified(name: str) -> bool:
     return "." in name
 
 
-def _qualify(table: str, schema: str | None) -> str:
+def _qualify(table: str, schema: str | None, catalog: str | None = None) -> str:
     """
     Return a safely quoted, optionally schema-qualified identifier.
     - Respects already-qualified names like raw.users or "raw"."users".
@@ -83,8 +83,17 @@ def _qualify(table: str, schema: str | None) -> str:
     """
     if _is_qualified(table):
         return ".".join(_dq(p) for p in table.split("."))
+    catalog_part = catalog.strip() if isinstance(catalog, str) and catalog.strip() else None
     if schema:
-        return f"{_dq(schema)}.{_dq(table)}"
+        schema_part = schema.strip()
+        parts: list[str] = []
+        if catalog_part:
+            parts.append(_dq(catalog_part))
+        parts.append(_dq(schema_part))
+        parts.append(_dq(table))
+        return ".".join(parts)
+    if catalog_part:
+        return f"{_dq(catalog_part)}.{_dq(table)}"
     return _dq(table)
 
 
@@ -304,7 +313,8 @@ def _handle_duckdb(table: str, df: pd.DataFrame, executor: Any, schema: str | No
     if not is_duck_con:
         return False
 
-    full_name = _qualify(table, schema)
+    catalog = getattr(executor, "catalog", None)
+    full_name = _qualify(table, schema, catalog)
     created_schema = False
     if schema and not _is_qualified(table):
         con.execute(f"create schema if not exists {_dq(schema)}")

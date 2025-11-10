@@ -46,7 +46,6 @@ from fastflowtransform.fingerprint import (
     fingerprint_sql,
     get_function_source,
 )
-from fastflowtransform.incremental import run_or_dispatch as run_sql_with_incremental
 from fastflowtransform.log_queue import LogQueue
 from fastflowtransform.logging import bind_context, bound_context, clear_context, echo, warn
 from fastflowtransform.meta import ensure_meta_table
@@ -102,12 +101,6 @@ class _RunEngine:
                     clone_needed = not (isinstance(db_path, str) and db_path.strip() == ":memory:")
                     if clone_needed:
                         ex = ex.clone()
-
-                    def _run_sql_duckdb(n):
-                        # Planner: intercept incremental materializations
-                        return run_sql_with_incremental(ex, n, self.ctx.jinja_env)
-
-                    run_sql_wrapped = _run_sql_duckdb
                     run_py_wrapped = ex.run_python
                 except Exception:
                     pass
@@ -144,6 +137,41 @@ class _RunEngine:
         except Exception:
             return None
         return None
+
+    def _executor_namespace(self) -> str | None:
+        """
+        Best-effort namespace (catalog/database/schema/dataset) to enrich log output.
+        """
+        if not isinstance(self.shared, tuple) or not self.shared:
+            return None
+        executor = self.shared[0]
+        if executor is None:
+            return None
+        parts: list[str] = []
+        for attr in ("catalog", "database"):
+            val = getattr(executor, attr, None)
+            if isinstance(val, str) and val.strip():
+                parts.append(val.strip())
+        for attr in ("dataset", "schema"):
+            val = getattr(executor, attr, None)
+            if isinstance(val, str) and val.strip():
+                parts.append(val.strip())
+        return ".".join(parts) if parts else None
+
+    def _qualified_target(self, name: str) -> str | None:
+        namespace = self._executor_namespace()
+        if not namespace:
+            return None
+        rel = relation_for(name)
+        if not rel:
+            return None
+        return f"{namespace}.{rel}"
+
+    def format_run_label(self, name: str) -> str:
+        qualified = self._qualified_target(name)
+        if qualified:
+            return f"{name} ({qualified})"
+        return name
 
     def run_node(self, name: str) -> None:
         node = REGISTRY.nodes[name]
@@ -363,7 +391,8 @@ def _run_schedule(engine_, lvls, jobs, keep_going, ctx):
         on_error=None,
         logger=logq,
         engine_abbr=_abbr(ctx.profile.engine),
-        name_width=28,
+        name_width=88,
+        name_formatter=engine_.format_run_label,
     )
 
     finished_at = datetime.now(UTC).isoformat(timespec="seconds")

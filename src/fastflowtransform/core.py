@@ -10,7 +10,7 @@ from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import jinja2.runtime
 import yaml
@@ -283,6 +283,7 @@ class Registry:
         self.project_vars: dict[str, Any] = {}  # project.yml: vars
         self.cli_vars: dict[str, Any] = {}  # CLI --vars overrides
         self.active_engine: str | None = None
+        self.incremental_models: dict[str, dict[str, Any]] = {}
 
     def get_project_dir(self) -> Path:
         """Return the project directory after load_project(), or raise if not set."""
@@ -324,6 +325,15 @@ class Registry:
         Accepts names with or without trailing '.ff'.
         """
         return storage.get_model_storage(node_name)
+
+    def _lookup_incremental_meta(self, node_name: str) -> dict[str, Any]:
+        """
+        Return incremental metadata for a given node (from project.yml → models.incremental).
+        Accepts names with or without trailing '.ff'.
+        """
+        key = node_name[:-3] if node_name.endswith(".ff") else node_name
+        cfg = self.incremental_models.get(key) or {}
+        return dict(cfg)
 
     def _current_engine(self) -> str | None:
         """
@@ -390,118 +400,6 @@ class Registry:
             )
         return current in allowed
 
-    # def load_project(self, project_dir: Path) -> None:
-    #     self.nodes.clear()
-    #     self.py_funcs.clear()
-    #     self.py_requires.clear()
-    #     self.sources = {}
-    #     self.project_vars = {}
-    #     self.cli_vars = {}
-    #     self.macros.clear()
-
-    #     storage.set_model_storage({})
-    #     storage.set_seed_storage({})
-
-    #     self.project_dir = project_dir
-    #     models_dir = project_dir / "models"
-    #     self.env = Environment(
-    #         loader=FileSystemLoader(str(models_dir)),
-    #         undefined=StrictUndefined,
-    #         autoescape=False,
-    #         trim_blocks=True,
-    #         lstrip_blocks=True,
-    #     )
-
-    #     # Make sure macros are available to all templates before model discovery.
-    #     self._load_macros(models_dir)
-    #     self._load_py_macros(models_dir)
-
-    #     # load sources (version 2 schema)
-    #     src_path = project_dir / "sources.yml"
-    #     if src_path.exists():
-    #         raw_sources = yaml.safe_load(src_path.read_text(encoding="utf-8"))
-    #         try:
-    #             self.sources = _parse_sources_yaml(raw_sources)
-    #         except ValueError as exc:
-    #             raise ValueError(f"Failed to parse sources.yml: {exc}") from exc
-    #     else:
-    #         self.sources = {}
-
-    #     # load project.yml (vars)
-    #     proj_path = project_dir / "project.yml"
-    #     if proj_path.exists():
-    #         proj_cfg = yaml.safe_load(proj_path.read_text(encoding="utf-8")) or {}
-    #         self.project_vars = dict(proj_cfg.get("vars", {}) or {})
-
-    #         models_cfg = proj_cfg.get("models") if isinstance(proj_cfg, Mapping) else None
-    #         model_storage_raw = None
-    #         if isinstance(models_cfg, Mapping):
-    #             candidate = models_cfg.get("storage")
-    #             if isinstance(candidate, Mapping):
-    #                 model_storage_raw = candidate
-    #         storage.set_model_storage(
-    #             storage.normalize_storage_map(model_storage_raw, project_dir=project_dir)
-    #         )
-
-    #         seeds_cfg = proj_cfg.get("seeds") if isinstance(proj_cfg, Mapping) else None
-    #         seed_storage_raw = None
-    #         if isinstance(seeds_cfg, Mapping):
-    #             candidate = seeds_cfg.get("storage")
-    #             if isinstance(candidate, Mapping):
-    #                 seed_storage_raw = candidate
-    #         storage.set_seed_storage(
-    #             storage.normalize_storage_map(seed_storage_raw, project_dir=project_dir)
-    #         )
-
-    #     # discover models
-    #     for p in models_dir.rglob("*.ff.sql"):
-    #         name = p.stem
-    #         deps = self._scan_sql_deps(p)
-    #         meta = dict(self._parse_model_config(p))
-    #         storage_meta = self._lookup_storage_meta(name)
-    #         if storage_meta:
-    #             existing = dict(meta.get("storage") or {})
-    #             existing.update(storage_meta)
-    #             meta["storage"] = existing
-    #         if not self._should_register_for_engine(meta, path=p):
-    #             continue
-    #         self._add_node_or_fail(name, "sql", p, deps, meta=meta)
-    #     for p in models_dir.rglob("*.ff.py"):
-    #         self._load_py_module(p)
-    #         for _, func in list(self.py_funcs.items()):
-    #             func_path = Path(getattr(func, "__ff_path__", "")).resolve()
-    #             if func_path == p.resolve():
-    #                 name = getattr(func, "__ff_name__", func.__name__)
-    #                 deps = getattr(func, "__ff_deps__", [])
-    #                 kind = getattr(func, "__ff_kind__", "python") or "python"
-
-    #                 meta = dict(getattr(func, "__ff_meta__", {}) or {})
-    #                 storage_meta = self._lookup_storage_meta(name)
-    #                 if storage_meta:
-    #                     existing = dict(meta.get("storage") or {})
-    #                     existing.update(storage_meta)
-    #                     meta["storage"] = existing
-    #                 tags = list(getattr(func, "__ff_tags__", []) or [])
-    #                 if tags:
-    #                     existing_tags = meta.get("tags")
-    #                     if isinstance(existing_tags, list):
-    #                         merged = existing_tags + [t for t in tags if t not in existing_tags]
-    #                         meta["tags"] = merged
-    #                     elif existing_tags is None:
-    #                         meta["tags"] = tags
-    #                     else:
-    #                         # Normalize non-list tags into a list while preserving the value
-    #                         meta["tags"] = [existing_tags, *tags]
-
-    #                 self._add_node_or_fail(name, kind, p, deps, meta=meta)
-
-    #                 req = getattr(func, "__ff_require__", None)
-    #                 if req:
-    #                     self.py_requires[name] = req
-
-    #     # ---- Dependency validation (early and clear)
-    #     self._validate_dependencies()
-
     def load_project(self, project_dir: Path) -> None:
         """Load a FastFlowTransform project from the given directory."""
         self._reset_registry_state()
@@ -533,6 +431,7 @@ class Registry:
         self.project_vars = {}
         self.cli_vars = {}
         self.macros.clear()
+        self.incremental_models = {}
         # reset storage maps
         storage.set_model_storage({})
         storage.set_seed_storage({})
@@ -569,8 +468,20 @@ class Registry:
         proj_cfg = yaml.safe_load(proj_path.read_text(encoding="utf-8")) or {}
         self.project_vars = dict(proj_cfg.get("vars", {}) or {})
 
-        # models.storage
         models_cfg = proj_cfg.get("models") if isinstance(proj_cfg, Mapping) else None
+
+        self.incremental_models = {}
+        if isinstance(models_cfg, Mapping):
+            incr_candidate = models_cfg.get("incremental")
+            if isinstance(incr_candidate, Mapping):
+                norm: dict[str, dict[str, Any]] = {}
+                for k, v in incr_candidate.items():
+                    if not isinstance(k, str) or not isinstance(v, Mapping):
+                        continue
+                    vv = dict(cast(Mapping[str, Any], v))
+                    norm[str(k)] = vv
+                self.incremental_models = norm
+
         model_storage_raw = None
         if isinstance(models_cfg, Mapping):
             candidate = models_cfg.get("storage")
@@ -602,6 +513,15 @@ class Registry:
                 existing = dict(meta.get("storage") or {})
                 existing.update(storage_meta)
                 meta["storage"] = existing
+
+            incr_meta = self._lookup_incremental_meta(name)
+            if incr_meta:
+                merged = dict(incr_meta)
+                merged.update(meta or {})  # config() überstimmt YAML
+                meta = merged
+            if meta.get("incremental") and not meta.get("materialized"):
+                meta["materialized"] = "incremental"
+
             if not self._should_register_for_engine(meta, path=path):
                 continue
             self._add_node_or_fail(name, "sql", path, deps, meta=meta)
@@ -628,13 +548,21 @@ class Registry:
                     existing.update(storage_meta)
                     meta["storage"] = existing
 
+                incr_meta = self._lookup_incremental_meta(name)
+                if incr_meta:
+                    merged = dict(incr_meta)
+                    merged.update(meta or {})
+                    meta = merged
+                if meta.get("incremental") and not meta.get("materialized"):
+                    meta["materialized"] = "incremental"
+
                 # merge tags from decorator into model meta.tags
                 tags = list(getattr(func, "__ff_tags__", []) or [])
                 if tags:
                     existing_tags = meta.get("tags")
                     if isinstance(existing_tags, list):
-                        merged = existing_tags + [t for t in tags if t not in existing_tags]
-                        meta["tags"] = merged
+                        combined_tags = existing_tags + [t for t in tags if t not in existing_tags]
+                        meta["tags"] = combined_tags
                     elif existing_tags is None:
                         meta["tags"] = tags
                     else:

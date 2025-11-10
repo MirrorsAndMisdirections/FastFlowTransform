@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 
 @dataclass
@@ -123,21 +124,39 @@ def spark_write_to_path(
 
     target_sql = ".".join(_quote(p) for p in parts)
 
-    spark.sql(f"DROP TABLE IF EXISTS {target_sql}")
-
-    path_str = str(path)
-    if "://" not in path_str:
-        target_path = Path(path_str)
-        if target_path.exists():
-            shutil.rmtree(target_path, ignore_errors=True)
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-
     writer = df.write.mode("overwrite")
     if fmt:
         writer = writer.format(fmt)
     if options:
         writer = writer.options(**options)
-    writer.save(path_str)
+
+    path_str = str(path)
+    is_local_path = "://" not in path_str
+
+    if is_local_path:
+        target_path = Path(path_str)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = target_path.parent / f".ff_tmp_{target_path.name}_{uuid4().hex}"
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path, ignore_errors=True)
+
+        try:
+            writer.save(str(tmp_path))
+        except Exception:
+            shutil.rmtree(tmp_path, ignore_errors=True)
+            raise
+
+        spark.sql(f"DROP TABLE IF EXISTS {target_sql}")
+        if target_path.exists():
+            shutil.rmtree(target_path, ignore_errors=True)
+        try:
+            tmp_path.rename(target_path)
+        except Exception:
+            shutil.rmtree(tmp_path, ignore_errors=True)
+            raise
+    else:
+        writer.save(path_str)
+        spark.sql(f"DROP TABLE IF EXISTS {target_sql}")
 
     using_clause = f"USING {fmt}" if fmt else ""
     escaped_path = path_str.replace("'", "''")

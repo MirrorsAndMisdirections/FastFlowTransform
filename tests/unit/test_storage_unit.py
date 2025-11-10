@@ -168,6 +168,12 @@ def test_spark_write_to_path_happy(tmp_path: Path, monkeypatch):
     # .options(...) → writer
     writer.options.return_value = writer
 
+    def _save_side_effect(path_str: str):
+        p = Path(path_str)
+        p.mkdir(parents=True, exist_ok=True)
+
+    writer.save.side_effect = _save_side_effect
+
     # storage entry with local path
     target_dir = tmp_path / "out"
     storage_meta = {
@@ -196,7 +202,12 @@ def test_spark_write_to_path_happy(tmp_path: Path, monkeypatch):
     writer.options.assert_called_once_with(mergeSchema="true", compression="snappy")
 
     # 3) save() called with path
-    writer.save.assert_called_once_with(str(target_dir))
+    assert writer.save.call_count == 1
+    tmp_save_path = writer.save.call_args[0][0]
+    assert ".ff_tmp_" in tmp_save_path
+    assert str(target_dir.parent) in tmp_save_path
+
+    assert target_dir.exists()
 
     # 4) create table ... location ...
     # fmt is known → USING parquet
@@ -214,6 +225,8 @@ def test_spark_write_to_path_without_format_uses_default(tmp_path: Path):
     writer = MagicMock()
     fake_df.write.mode.return_value = writer
     writer.format.return_value = writer
+
+    writer.save.side_effect = lambda p: Path(p).mkdir(parents=True, exist_ok=True)
 
     target_dir = tmp_path / "x"
     storage_meta = {

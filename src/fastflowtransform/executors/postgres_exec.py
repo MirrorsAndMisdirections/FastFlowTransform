@@ -191,6 +191,7 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
             """
         )
         with self.engine.begin() as con:
+            self._set_search_path(con)
             return bool(con.execute(sql, {"t": relation}).fetchone())
 
     def create_table_as(self, relation: str, select_sql: str) -> None:
@@ -199,6 +200,18 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
         with self.engine.begin() as con:
             self._set_search_path(con)
             con.execute(text(f"create table {qrel} as {body}"))
+
+    def full_refresh_table(self, relation: str, select_sql: str) -> None:
+        """
+        Full refresh for incremental fallbacks:
+        DROP TABLE IF EXISTS + CREATE TABLE AS.
+        """
+        body = self._selectable_body(select_sql).strip().rstrip(";\n\t ")
+        qrel = self._qualified(relation)
+        with self.engine.begin() as conn:
+            self._set_search_path(conn)
+            conn.execute(text(f"drop table if exists {qrel}"))
+            conn.execute(text(f"create table {qrel} as {body}"))
 
     def incremental_insert(self, relation: str, select_sql: str) -> None:
         body = self._extract_select_like(select_sql)

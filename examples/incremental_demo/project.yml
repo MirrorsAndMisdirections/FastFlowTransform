@@ -1,0 +1,61 @@
+name: incremental_demo
+version: "0.1"
+
+vars: {}
+
+models:
+  storage:
+    events_base.ff:
+      path: ".local/spark/events_base"
+      format: parquet
+
+    fct_events_sql_inline.ff:
+      path: ".local/spark/fct_events_sql_inline"
+      format: parquet
+
+    fct_events_sql_yaml.ff:
+      path: ".local/spark/fct_events_sql_yaml"
+      format: parquet
+
+    fct_events_py_incremental.ff:
+      path: ".local/spark/fct_events_py_incremental"
+      format: parquet
+
+  incremental:
+    fct_events_sql_inline.ff:
+      unique_key: "event_id"
+      delta_columns: ["updated_at"]
+      mode: "merge"
+
+    fct_events_sql_yaml.ff:
+      unique_key: "event_id"
+      delta_columns: ["updated_at"]
+      mode: "merge"
+      delta_where: "updated_at > (select coalesce(max(updated_at), '1970-01-01') from {{ this }})"
+
+    fct_events_py_incremental.ff:
+      unique_key: "event_id"
+      delta_columns: ["updated_at"]
+      mode: "merge"
+
+seeds:
+  storage:
+    seed_events:
+      path: ".local/spark/seed_events"
+      format: parquet
+
+tests:
+  - type: not_null
+    table: fct_events_sql_inline
+    column: event_id
+    tags: [incremental]
+
+  - type: not_null
+    table: fct_events_sql_yaml
+    column: event_id
+    tags: [incremental]
+
+  - type: not_null
+    table: fct_events_py_incremental
+    column: event_id
+    tags: [incremental]

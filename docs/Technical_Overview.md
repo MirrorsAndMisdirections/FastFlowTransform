@@ -426,7 +426,7 @@ jobs:
 
 ### Troubleshooting
 
-- **DuckDB seeds not visible** → ensure `FF_DUCKDB_PATH` (or profile path) is identical for `seed`, `run`, `dag`, and `test`.
+- **DuckDB seeds not visible** → ensure `FF_DUCKDB_PATH` (or profile path) is identical for `seed`, `run`, `dag`, and `test`. If you configure `FF_DUCKDB_SCHEMA`/`FF_DUCKDB_CATALOG`, keep them consistent across commands as well so unqualified references resolve to the right namespace.
 - **Postgres connection refused** → confirm `FF_PG_DSN`, container status (`docker ps`), and that port `5432` is open.
 - **BigQuery permissions** → set `GOOGLE_APPLICATION_CREDENTIALS` and match dataset/location to your profile.
 - **HTML docs missing** → run `fft dag <project> --html` and open `<project>/docs/index.html`.
@@ -471,7 +471,7 @@ bq:
 
 **ENV overrides (examples):**
 
-`FF_ENGINE`, `FF_DUCKDB_PATH`, `FF_PG_DSN`, `FF_PG_SCHEMA`, `FF_BQ_DATASET`, `FF_BQ_LOCATION`, `FF_BQ_USE_BIGFRAMES=1`
+`FF_ENGINE`, `FF_DUCKDB_PATH`, `FF_DUCKDB_SCHEMA`, `FF_DUCKDB_CATALOG`, `FF_PG_DSN`, `FF_PG_SCHEMA`, `FF_BQ_DATASET`, `FF_BQ_LOCATION`, `FF_BQ_USE_BIGFRAMES=1`
 
 **Priority (lowest → highest):** `profiles.yml` < environment variables (`FF_*`) < CLI flags (e.g. `--engine`).
 

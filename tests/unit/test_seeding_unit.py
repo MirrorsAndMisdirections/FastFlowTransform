@@ -4,6 +4,7 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -92,6 +93,18 @@ def test_is_qualified():
 def test_qualify_unqualified_with_schema():
     out = seeding._qualify("users", "raw")
     assert out == '"raw"."users"'
+
+
+@pytest.mark.unit
+def test_qualify_with_schema_and_catalog():
+    out = seeding._qualify("users", "raw", "cat")
+    assert out == '"cat"."raw"."users"'
+
+
+@pytest.mark.unit
+def test_qualify_with_catalog_only():
+    out = seeding._qualify("users", None, "cat")
+    assert out == '"cat"."users"'
 
 
 @pytest.mark.unit
@@ -376,19 +389,37 @@ def test_handle_spark_happy_default_table(tmp_path: Path, monkeypatch):
 @pytest.mark.unit
 @pytest.mark.spark
 def test_handle_spark_uses_seed_storage(monkeypatch):
-    # storage override set to custom path
+    # 1) Seed-Storage Override setzen
     storage.set_seed_storage(
         {"raw.users": {"path": "/tmp/custom", "format": "parquet", "options": {"x": "1"}}}
     )
 
+    # 2) Fake Spark + DataFrame
     fake_spark = MagicMock()
     fake_sdf = MagicMock()
     fake_spark.createDataFrame.return_value = fake_sdf
+
     writer = MagicMock()
     fake_sdf.write.mode.return_value = writer
     writer.format.return_value = writer
     writer.options.return_value = writer
 
+    # 3) spark_write_to_path stubben, damit kein echtes FS angefasst wird
+    called: dict[str, Any] = {}
+
+    def _fake_write_to_path(
+        spark, identifier, df, *, storage: dict, default_format, default_options
+    ):
+        called["spark"] = spark
+        called["identifier"] = identifier
+        called["df"] = df
+        called["storage"] = storage
+        called["default_format"] = default_format
+        called["default_options"] = default_options
+
+    monkeypatch.setattr(seeding.storage, "spark_write_to_path", _fake_write_to_path)
+
+    # 4) Executor-Stub
     executor = SimpleNamespace(
         spark=fake_spark,
         spark_table_format=None,
@@ -396,15 +427,17 @@ def test_handle_spark_uses_seed_storage(monkeypatch):
     )
 
     df = pd.DataFrame({"id": [1]})
-    # name must match our storage key
+
+    # 5) Aufruf
     handled = seeding._handle_spark("raw.users", df, executor, schema=None)
     assert handled is True
 
-    # since we used storage override, it should have called storage.spark_write_to_path
-    # easiest: monkeypatch seeding.storage.spark_write_to_path and assert
-    # but here we can assert spark.sql got a DROP TABLE? no, path → register only
-    # so instead let's just check that createDataFrame was called (path flow runs too)
-    fake_spark.createDataFrame.assert_called_once()
+    # 6) Asserts
+    fake_spark.createDataFrame.assert_called_once_with(df)
+    assert called["spark"] is fake_spark
+    assert called["identifier"] == "raw.users"
+    assert called["storage"]["path"] == "/tmp/custom"
+    assert called["storage"]["format"] == "parquet"
 
 
 # ---------------------------------------------------------------------------

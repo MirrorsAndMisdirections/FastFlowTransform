@@ -1,14 +1,12 @@
 # src/fastflowtransform/executors/databricks_spark_exec.py
 from __future__ import annotations
 
-import shutil
 from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from pyspark.errors.exceptions.base import AnalysisException
 from pyspark.sql import DataFrame as SDF, SparkSession
 from pyspark.sql.types import DataType
 
@@ -171,11 +169,10 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
                 continue
         return storage.get_model_storage(rel_clean)
 
-    def _write_to_storage_path(
-        self, relation: str, df: SDF, storage_meta: dict[str, Any]
-    ) -> None:  # pragma: no cover
+    def _write_to_storage_path(self, relation: str, df: SDF, storage_meta: dict[str, Any]) -> None:
         parts = self._identifier_parts(relation)
         identifier = ".".join(parts)
+
         storage.spark_write_to_path(
             self.spark,
             identifier,
@@ -184,6 +181,11 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
             default_format=self.spark_table_format,
             default_options=self.spark_table_options,
         )
+
+        path = storage_meta.get("path")
+        if path:
+            with suppress(Exception):
+                self.spark.catalog.refreshByPath(path)
 
     # ---- SQL hooks ----
     def _format_relation_for_ref(self, name: str) -> str:
@@ -301,33 +303,14 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
             return
 
         table_name = ".".join(parts)
-        target_location = self._table_location(parts)
 
-        def _write() -> None:
-            writer = df.write.mode("overwrite")
-            if self.spark_table_format:
-                writer = writer.format(self.spark_table_format)
-            if self.spark_table_options:
-                writer = writer.options(**self.spark_table_options)
-            writer.saveAsTable(table_name)
+        writer = df.write.mode("overwrite")
+        if self.spark_table_format:
+            writer = writer.format(self.spark_table_format)
+        if self.spark_table_options:
+            writer = writer.options(**self.spark_table_options)
 
-        target_sql = ".".join(self._q_ident(p) for p in parts)
-        with suppress(Exception):
-            self.spark.sql(f"DROP TABLE IF EXISTS {target_sql}")
-        if target_location and target_location.exists():
-            with suppress(Exception):
-                shutil.rmtree(target_location, ignore_errors=True)
-
-        try:
-            _write()
-        except AnalysisException as exc:  # pragma: no cover - requires real Spark/Delta error
-            message = str(exc)
-            if target_location and "LOCATION_ALREADY_EXISTS" in message.upper():
-                with suppress(Exception):
-                    shutil.rmtree(target_location, ignore_errors=True)
-                _write()
-            else:
-                raise
+        writer.saveAsTable(table_name)
 
     def _create_or_replace_view(self, target_sql: str, select_body: str, node: Node) -> None:
         self.spark.sql(f"CREATE OR REPLACE VIEW {target_sql} AS {select_body}")
@@ -365,23 +348,30 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
 
     def create_table_as(self, relation: str, select_sql: str) -> None:
         """CREATE TABLE AS with cleaned SELECT body."""
-        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
+        body = self._selectable_body(select_sql).strip().rstrip(";\n\t ")
+        df = self.spark.sql(body)
+        self._save_df_as_table(relation, df)
+
+    def full_refresh_table(self, relation: str, select_sql: str) -> None:
+        """
+        Engine-specific full refresh for incremental fallbacks.
+        Important: NO 'REPLACE TABLE' SQL, but DataFrame path + saveAsTable instead.
+        """
+        body = self._selectable_body(select_sql).strip().rstrip(";\n\t ")
         df = self.spark.sql(body)
         self._save_df_as_table(relation, df)
 
     def incremental_insert(self, relation: str, select_sql: str) -> None:
         """INSERT INTO with cleaned SELECT body."""
-        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
+        body = self._selectable_body(select_sql).strip().rstrip(";\n\t ")
         self.spark.sql(f"INSERT INTO {relation} {body}")
 
     def incremental_merge(self, relation: str, select_sql: str, unique_key: list[str]) -> None:
-        """
-        Try Delta MERGE (Databricks typical). If MERGE fails (non-Delta), fallback to full replace.
-        """
-        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
+        body = self._selectable_body(select_sql).strip().rstrip(";\n\t ")
         pred = " AND ".join([f"t.{k}=s.{k}" for k in unique_key]) or "FALSE"
+
+        # 1) Happy Path: native MERGE (Delta / Unity Catalog)
         try:
-            # Use inline subquery as source; SET * / INSERT * requires Delta ≥ 1.2 / Spark ≥ 3.4.
             self.spark.sql(
                 f"""
                 MERGE INTO {relation} AS t
@@ -391,8 +381,9 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
                 WHEN NOT MATCHED THEN INSERT *
                 """
             )
+            return
         except Exception:
-            # Fallback: Full replace is safer across lake formats
+            # 2) Fallback: Full-Refresh
             df = self.spark.sql(body)
             self._save_df_as_table(relation, df)
 

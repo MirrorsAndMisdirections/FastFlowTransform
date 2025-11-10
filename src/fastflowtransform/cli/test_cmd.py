@@ -1,3 +1,4 @@
+# fastflowtransform/cli/test_cmd.py
 from __future__ import annotations
 
 import os
@@ -17,6 +18,7 @@ from fastflowtransform.cli.options import (
     EnvOpt,
     ProjectArg,
     SelectOpt,
+    SkipBuildOpt,
     VarsOpt,
 )
 from fastflowtransform.cli.selectors import _compile_selector
@@ -314,6 +316,7 @@ def test(
     engine: EngineOpt = None,
     vars: VarsOpt = None,
     select: SelectOpt = None,
+    skip_build: SkipBuildOpt = False,
 ) -> None:
     # _ensure_logging()
     ctx = _prepare_context(project, env_name, engine, vars)
@@ -327,7 +330,8 @@ def test(
 
     model_pred = (lambda _n: True) if legacy_tag_only else pred
     # Run models; if a model fails, show friendly error then exit(1).
-    _run_models(model_pred, run_sql, run_py)
+    if not skip_build:
+        _run_models(model_pred, run_sql, run_py)
 
     # 1) project.yml tests
     tests: list[Any] = _load_tests(ctx.project)

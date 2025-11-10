@@ -1,3 +1,4 @@
+# fastflowtransform/settings.py
 from __future__ import annotations
 
 import os
@@ -7,7 +8,7 @@ from typing import Annotated, Any, Literal, cast
 
 import yaml
 from jinja2 import Environment, StrictUndefined
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from fastflowtransform.errors import ProfileConfigError
@@ -16,7 +17,10 @@ EngineType = Literal["duckdb", "postgres", "bigquery", "databricks_spark", "snow
 
 
 class DuckDBConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     path: str = ":memory:"  # file path or ":memory:"
+    db_schema: str | None = Field(default=None, alias="schema")
+    catalog: str | None = None
 
 
 class PostgresConfig(BaseModel):
@@ -106,6 +110,8 @@ class EnvSettings(BaseSettings):
 
     # DuckDB
     DUCKDB_PATH: str | None = None
+    DUCKDB_SCHEMA: str | None = None
+    DUCKDB_CATALOG: str | None = None
 
     # Postgres
     PG_DSN: str | None = None
@@ -223,6 +229,8 @@ def _set_if(d: dict[str, Any], key: str, value: Any | None) -> None:
 def _ov_duckdb(raw: dict[str, Any], env: EnvSettings) -> None:
     duck = raw.setdefault("duckdb", {})
     _set_if(duck, "path", getattr(env, "DUCKDB_PATH", None))
+    _set_if(duck, "schema", getattr(env, "DUCKDB_SCHEMA", None))
+    _set_if(duck, "catalog", getattr(env, "DUCKDB_CATALOG", None))
 
 
 def _ov_postgres(raw: dict[str, Any], env: EnvSettings) -> None:

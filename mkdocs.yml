@@ -35,8 +35,9 @@ nav:
   - API Reference: reference/index.md
   - Examples:
       - Environment Matrix: examples/Environment_Matrix.md
-      - API Demo Overview: examples/API_Demo.md
       - Basic Demo Overview: examples/Basic_Demo.md
+      - API Demo Overview: examples/API_Demo.md
+      - Incremental Demo Overview: examples/Incremental_Demo.md
       - Local Engine Setup: examples/Local_Engine_Setup.md
   - Contributing: Contributing.md
   - License: License.md

@@ -1,6 +1,6 @@
 # Envs & Secrets
-.env
-.env.*
+.env.local
+.env.*.local
 
 # Local DBs / Artifacts
 *.duckdb
@@ -36,7 +36,7 @@ spark-warehouse
 metastore_db
 derby.log
 .fastflowtransform
-Combined.md
+_exports/**
 
 # Editors / IDEs
 .vscode/

@@ -78,6 +78,7 @@ def _stub_schedule(monkeypatch: pytest.MonkeyPatch):
         logger=None,
         engine_abbr="",
         name_width=28,
+        name_formatter=None,
     ):
         start = time.perf_counter()
         per: dict[str, float] = {}
@@ -92,6 +93,9 @@ def _stub_schedule(monkeypatch: pytest.MonkeyPatch):
                             before(name, 1)
                         except TypeError:
                             before(name)
+                    if name_formatter:
+                        # exercise formatter for parity with real schedule
+                        name_formatter(name)
                     run_node(name)
                 except BaseException as e:
                     if on_error:

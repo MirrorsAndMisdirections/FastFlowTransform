@@ -99,6 +99,7 @@ def _run_level(
     logger: LogQueue | None,
     engine_abbr: str,
     name_width: int,
+    name_formatter: Callable[[str], str] | None,
 ) -> tuple[bool, int, int, int]:
     """Führt eine Ebene aus und loggt. Rückgabe: (had_error, ok_count, fail_count, lvl_ms)."""
     if not names:
@@ -110,26 +111,31 @@ def _run_level(
     fail_in_level = 0
     level_had_error = False
 
+    display_names: dict[str, str] = {}
+
     with ThreadPoolExecutor(max_workers=max(1, int(jobs)), thread_name_prefix="ff-worker") as pool:
         futures: dict[Future[None], str] = {}
         for nm in names:
-            _log_start(logger, lvl_idx, engine_abbr, nm, name_width)
+            label = name_formatter(nm) if name_formatter else nm
+            display_names[nm] = label
+            _log_start(logger, lvl_idx, engine_abbr, label, name_width)
             futures[pool.submit(task, nm)] = nm
 
         for fut in as_completed(futures):
             nm = futures[fut]
+            label = display_names.get(nm, nm)
             try:
                 fut.result()
                 ok_in_level += 1
                 _log_end(
-                    logger, lvl_idx, engine_abbr, nm, True, int(per_node[nm] * 1000), name_width
+                    logger, lvl_idx, engine_abbr, label, True, int(per_node[nm] * 1000), name_width
                 )
             except BaseException as e:
                 level_had_error = True
                 failed[nm] = e
                 fail_in_level += 1
                 ms = int((per_node.get(nm, perf_counter() - lvl_t0)) * 1000)
-                _log_end(logger, lvl_idx, engine_abbr, nm, False, ms, name_width)
+                _log_end(logger, lvl_idx, engine_abbr, label, False, ms, name_width)
                 if fail_policy == "fail_fast":
                     for f in futures:
                         if not f.done():
@@ -153,6 +159,7 @@ def schedule(
     logger: LogQueue | None = None,
     engine_abbr: str = "",
     name_width: int = 28,
+    name_formatter: Callable[[str], str] | None = None,
 ) -> ScheduleResult:
     """Run levels sequentially; within a level run up to `jobs` nodes in parallel."""
     per_node: dict[str, float] = {}
@@ -174,6 +181,7 @@ def schedule(
             logger=logger,
             engine_abbr=engine_abbr,
             name_width=name_width,
+            name_formatter=name_formatter,
         )
         if had_error:
             if on_error:

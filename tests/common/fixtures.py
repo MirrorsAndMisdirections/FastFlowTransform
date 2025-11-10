@@ -59,17 +59,21 @@ def duckdb_env(duckdb_db_path):
     return {"FF_ENGINE": "duckdb", "FF_DUCKDB_PATH": str(duckdb_db_path)}
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def duckdb_seeded(duckdb_project, duckdb_env):
     db_path = duckdb_env.get("FF_DUCKDB_PATH")
-    if db_path:
-        db_file = Path(db_path)
+    db_file = Path(db_path) if db_path else None
+    if db_file:
         if db_file.exists():
             db_file.unlink()
-            # ensure parent dir exists for fresh DB creation
-            db_file.parent.mkdir(parents=True, exist_ok=True)
+        db_file.parent.mkdir(parents=True, exist_ok=True)
     run(["fft", "seed", str(duckdb_project), "--env", "dev"], duckdb_env)
-    yield
+    try:
+        yield
+    finally:
+        if db_file:
+            with suppress(Exception):
+                db_file.unlink()
 
 
 # ---- Postgres ----
