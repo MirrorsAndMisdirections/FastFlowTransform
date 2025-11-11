@@ -128,7 +128,6 @@ demo: clean
 	+$(MAKE) res-warn
 	@echo
 	@echo "✅ Demo done. Open DAG here: $(PROJECT)/site/dag/index.html"
-	+$(MAKE) demo-open
 
 # --- API-specific convenience targets ----------------------------------------
 

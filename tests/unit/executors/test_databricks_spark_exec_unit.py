@@ -16,7 +16,7 @@ from fastflowtransform.executors.databricks_spark_exec import (
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_split_db_table_unit():
     assert _split_db_table("db.tbl") == ("db", "tbl")
     assert _split_db_table("`db`.`tbl`") == ("db`", "`tbl")
@@ -24,7 +24,7 @@ def test_split_db_table_unit():
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_q_ident_unit(exec_minimal):
     assert exec_minimal._q_ident("foo") == "`foo`"
     assert exec_minimal._q_ident("foo`bar") == "`foo``bar`"
@@ -32,7 +32,7 @@ def test_q_ident_unit(exec_minimal):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_validate_required_single_df_unit(exec_minimal):
     # Fake Spark DF
     fake_df = SimpleNamespace(schema=SimpleNamespace(fieldNames=lambda: ["id", "email"]))
@@ -45,7 +45,7 @@ def test_validate_required_single_df_unit(exec_minimal):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_validate_required_single_df_raises_unit(exec_minimal):
     fake_df = SimpleNamespace(schema=SimpleNamespace(fieldNames=lambda: ["id"]))
     with pytest.raises(ValueError):
@@ -57,7 +57,7 @@ def test_validate_required_single_df_raises_unit(exec_minimal):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_validate_required_multi_dep_unit(exec_minimal):
     fake_users = SimpleNamespace(schema=SimpleNamespace(fieldNames=lambda: ["id", "email"]))
     fake_orders = SimpleNamespace(
@@ -75,7 +75,7 @@ def test_validate_required_multi_dep_unit(exec_minimal):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_format_source_reference_classic_unit(exec_minimal):
     cfg = {"identifier": "seed_users", "schema": "staging", "catalog": "spark_catalog"}
     ref = exec_minimal._format_source_reference(cfg, "raw", "users")
@@ -85,7 +85,7 @@ def test_format_source_reference_classic_unit(exec_minimal):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_format_source_reference_path_based_unit(exec_minimal):
     # wir patchen spark.read.format(...) Kette
     fake_df = MagicMock()
@@ -110,7 +110,7 @@ def test_format_source_reference_path_based_unit(exec_minimal):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test__materialize_relation_uses_save_table_when_no_path(exec_minimal):
     """Executor should call internal table-saving logic when no storage path is configured."""
     df = MagicMock()
@@ -127,7 +127,7 @@ def test__materialize_relation_uses_save_table_when_no_path(exec_minimal):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test__materialize_relation_uses_write_to_storage_path(exec_minimal, tmp_path):
     """Executor should delegate to _write_to_storage_path when storage meta has a path."""
     df = MagicMock()
@@ -149,7 +149,7 @@ def test__materialize_relation_uses_write_to_storage_path(exec_minimal, tmp_path
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test__write_to_storage_path_calls_storage_helper(exec_minimal, monkeypatch, tmp_path):
     """_write_to_storage_path should just be a thin adapter to storage.spark_write_to_path."""
     called = {}
@@ -177,7 +177,7 @@ def test__write_to_storage_path_calls_storage_helper(exec_minimal, monkeypatch, 
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test__create_view_over_table_executes_expected_sql(exec_minimal):
     """_create_view_over_table should emit a simple CREATE OR REPLACE VIEW SELECT * statement."""
     exec_minimal.spark.sql = MagicMock()
@@ -192,7 +192,7 @@ def test__create_view_over_table_executes_expected_sql(exec_minimal):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_on_node_built_calls_meta_helpers(exec_minimal, monkeypatch):
     """on_node_built should best-effort call ensure_meta_table and upsert_meta."""
     ensure_called = {}
@@ -215,7 +215,7 @@ def test_on_node_built_calls_meta_helpers(exec_minimal, monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_spark_conn_shim_execute_runs_select(monkeypatch):
     """_SparkConnShim.execute should return rows collected from spark.sql."""
     fake_spark = MagicMock()
@@ -228,7 +228,7 @@ def test_spark_conn_shim_execute_runs_select(monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_read_relation_uses_spark_table(exec_minimal):
     exec_minimal.spark.table.return_value = "DF"
     out = exec_minimal._read_relation("users", Node(name="n", kind="sql", path=Path(".")), [])
@@ -237,14 +237,14 @@ def test_read_relation_uses_spark_table(exec_minimal):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_validate_required_no_requires_is_noop(exec_minimal):
     # should not raise
     exec_minimal._validate_required("node_x", inputs=MagicMock(), requires={})
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_materialize_relation_rejects_non_frame(exec_minimal, monkeypatch):
     # für diesen Test brauchen wir das echte Verhalten
     monkeypatch.setattr(exec_minimal, "_is_frame", lambda obj: False)
@@ -254,7 +254,7 @@ def test_materialize_relation_rejects_non_frame(exec_minimal, monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_exists_relation_qualified(exec_minimal):
     exec_minimal.spark.catalog._jcatalog.tableExists.return_value = True
     assert exec_minimal.exists_relation("default.my_tbl") is True
@@ -262,7 +262,7 @@ def test_exists_relation_qualified(exec_minimal):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_exists_relation_unqualified(exec_minimal):
     exec_minimal.spark.catalog.tableExists.return_value = False
     assert exec_minimal.exists_relation("my_tbl") is False
@@ -270,21 +270,21 @@ def test_exists_relation_unqualified(exec_minimal):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_init_makes_relative_warehouse_absolute(exec_factory):
     ex, _, _ = exec_factory(warehouse_dir="rel_dir")
     assert ex.warehouse_dir.is_absolute()
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_init_with_catalog_sets_config(exec_factory):
     _, fake_builder, _ = exec_factory(catalog="hive_metastore")
     fake_builder.config.assert_any_call("spark.sql.catalog.spark_catalog", "hive_metastore")
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_init_with_extra_conf(exec_factory):
     _, fake_builder, _ = exec_factory(extra_conf={"spark.foo": "1", "spark.bar": "2"})
     fake_builder.config.assert_any_call("spark.foo", "1")
@@ -292,7 +292,7 @@ def test_init_with_extra_conf(exec_factory):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_init_with_hive_support(exec_factory):
     _, fake_builder, _ = exec_factory(use_hive_metastore=True)
     fake_builder.config.assert_any_call("spark.sql.catalogImplementation", "hive")
@@ -300,14 +300,14 @@ def test_init_with_hive_support(exec_factory):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_init_with_table_options(exec_factory):
     ex, _, _ = exec_factory(table_options={"mergeSchema": True})
     assert ex.spark_table_options == {"mergeSchema": "True"}
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_storage_meta_prefers_node_storage(exec_minimal):
     node = Node(
         name="users.ff", kind="sql", path=Path("x"), meta={"storage": {"path": "/tmp/users"}}
@@ -317,7 +317,7 @@ def test_storage_meta_prefers_node_storage(exec_minimal):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_storage_meta_uses_global_lookup_when_node_empty(exec_minimal):
     with patch("fastflowtransform.executors.databricks_spark_exec.storage.get_model_storage") as gm:
         gm.return_value = {"path": "/tmp/global"}
@@ -327,7 +327,7 @@ def test_storage_meta_uses_global_lookup_when_node_empty(exec_minimal):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_storage_meta_falls_back_to_registry_scan(exec_minimal, monkeypatch):
     # 1) Fake-Node im Registry, der Storage hat
     reg_node = Node(
@@ -348,7 +348,7 @@ def test_storage_meta_falls_back_to_registry_scan(exec_minimal, monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_storage_meta_registry_scan_then_global(exec_minimal, monkeypatch):
     reg_node = Node(
         name="orders.ff",
@@ -371,7 +371,7 @@ def test_storage_meta_registry_scan_then_global(exec_minimal, monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_format_relation_for_ref(exec_minimal):
     with patch("fastflowtransform.executors.databricks_spark_exec.relation_for") as rel_for:
         rel_for.return_value = "real_table"
@@ -380,7 +380,7 @@ def test_format_relation_for_ref(exec_minimal):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_format_source_reference_location_without_format_raises(exec_minimal):
     cfg = {"location": "/tmp/data", "identifier": "x"}  # no "format"
     with pytest.raises(KeyError, match="requires 'format'"):
@@ -388,7 +388,7 @@ def test_format_source_reference_location_without_format_raises(exec_minimal):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_save_df_as_table_respects_storage_path(exec_minimal):
     df = MagicMock()
     exec_minimal._write_to_storage_path = MagicMock()
@@ -403,7 +403,7 @@ def test_save_df_as_table_respects_storage_path(exec_minimal):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_create_or_replace_table_happy_path_calls_save(exec_minimal):
     # spark.sql soll NICHT werfen, sondern ein DF liefern
     fake_df = MagicMock()

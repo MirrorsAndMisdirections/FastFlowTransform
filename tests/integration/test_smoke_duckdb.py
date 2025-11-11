@@ -14,7 +14,7 @@ DB = PROJECT_LOCAL / "demo.duckdb"
 
 ENV = os.environ.copy()
 ENV.setdefault("FF_ENGINE", "duckdb")
-ENV.setdefault("FF_DUCKDB_PATH", str(DB))  # erzwinge konsistenten DB-Ort
+ENV.setdefault("FF_DUCKDB_PATH", str(DB))
 
 
 def setup_module(module):

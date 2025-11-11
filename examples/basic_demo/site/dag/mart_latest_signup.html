@@ -90,7 +90,7 @@
 
         <div class="muted">Path</div>
         <div>
-          <code id="path">/Users/markolekic/Dev/FlowForge/fastflowtransform/examples/basic_demo/models/engines/duckdb/mart_latest_signup.ff.py</code>
+          <code id="path">/Users/markolekic/Dev/FlowForge/fastflowtransform/examples/basic_demo/models/engines/databricks_spark/mart_latest_signup.ff.py</code>
           <button class="btn" id="copyPath" style="margin-left:8px;">Copy</button>
         </div>
 
@@ -135,7 +135,7 @@
           
           <tr>
             <td class="mono"><code>email_domain</code></td>
-            <td class="mono"><code>VARCHAR</code></td>
+            <td class="mono"><code>string</code></td>
             <td>
               
                 <span class="pill yes">yes</span>
@@ -155,7 +155,7 @@
           
           <tr>
             <td class="mono"><code>latest_user_id</code></td>
-            <td class="mono"><code>INTEGER</code></td>
+            <td class="mono"><code>int</code></td>
             <td>
               
                 <span class="pill yes">yes</span>
@@ -168,20 +168,14 @@
             </td>
             <td class="desc">
               
-                
-                  <span class="mono"><code>?.user_id</code></span>
-                  
-                    <span class="badge-transformed">transformed</span>
-                  
-                  
-                
+                <span class="muted">unknown</span>
               
             </td>
           </tr>
           
           <tr>
             <td class="mono"><code>latest_email</code></td>
-            <td class="mono"><code>VARCHAR</code></td>
+            <td class="mono"><code>string</code></td>
             <td>
               
                 <span class="pill yes">yes</span>
@@ -194,20 +188,14 @@
             </td>
             <td class="desc">
               
-                
-                  <span class="mono"><code>?.email</code></span>
-                  
-                    <span class="badge-transformed">transformed</span>
-                  
-                  
-                
+                <span class="muted">unknown</span>
               
             </td>
           </tr>
           
           <tr>
             <td class="mono"><code>latest_signup_date</code></td>
-            <td class="mono"><code>TIMESTAMP</code></td>
+            <td class="mono"><code>date</code></td>
             <td>
               
                 <span class="pill yes">yes</span>
@@ -220,13 +208,7 @@
             </td>
             <td class="desc">
               
-                
-                  <span class="mono"><code>?.signup_date</code></span>
-                  
-                    <span class="badge-transformed">transformed</span>
-                  
-                  
-                
+                <span class="muted">unknown</span>
               
             </td>
           </tr>

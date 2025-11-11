@@ -119,7 +119,7 @@ def test_qualify_already_qualified_preserves_parts():
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_spark_warehouse_base_local(tmp_path: Path):
     fake_spark = SimpleNamespace(
         conf=SimpleNamespace(get=lambda key, default=None: str(tmp_path / "wh"))
@@ -129,14 +129,14 @@ def test_spark_warehouse_base_local(tmp_path: Path):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_spark_warehouse_base_remote_scheme():
     fake_spark = SimpleNamespace(conf=SimpleNamespace(get=lambda *_: "s3://bucket/warehouse"))
     assert seeding._spark_warehouse_base(fake_spark) is None
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_spark_table_location_strips_catalog(tmp_path: Path):
     # warehouse dir is local
     fake_spark = SimpleNamespace(conf=SimpleNamespace(get=lambda *_: str(tmp_path / "wh")))
@@ -354,7 +354,7 @@ def test_handle_sqlalchemy_returns_false_if_engine_not_sqlalchemy():
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_handle_spark_happy_default_table(tmp_path: Path, monkeypatch):
     # fake spark with local warehouse
     fake_spark = MagicMock()
@@ -387,7 +387,7 @@ def test_handle_spark_happy_default_table(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_handle_spark_uses_seed_storage(monkeypatch):
     # 1) Seed-Storage Override setzen
     storage.set_seed_storage(

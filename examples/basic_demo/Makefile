@@ -92,6 +92,5 @@ demo: clean
 	+$(MAKE) run ENGINE=$(ENGINE)
 	+$(MAKE) dag ENGINE=$(ENGINE)
 	+$(MAKE) test ENGINE=$(ENGINE)
-	+$(MAKE) show ENGINE=$(ENGINE)
 	+$(MAKE) artifacts
 	@echo "✅ Demo complete."

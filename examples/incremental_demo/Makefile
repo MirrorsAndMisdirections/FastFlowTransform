@@ -93,4 +93,3 @@ demo: clean
 	+$(MAKE) test
 	+$(MAKE) artifacts
 	@echo "✅ Demo done. Open DAG here: $(PROJECT)/site/dag/index.html"
-	+$(MAKE) demo-open

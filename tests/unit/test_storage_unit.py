@@ -154,7 +154,7 @@ def test_get_seed_storage_exact_and_last_part():
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_spark_write_to_path_happy(tmp_path: Path, monkeypatch):
     # fake spark + df.write chain
     fake_spark = MagicMock()
@@ -218,7 +218,7 @@ def test_spark_write_to_path_happy(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_spark_write_to_path_without_format_uses_default(tmp_path: Path):
     fake_spark = MagicMock()
     fake_df = MagicMock()
@@ -247,7 +247,7 @@ def test_spark_write_to_path_without_format_uses_default(tmp_path: Path):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_spark_write_to_path_requires_path():
     fake_spark = MagicMock()
     fake_df = MagicMock()
@@ -265,7 +265,7 @@ def test_spark_write_to_path_requires_path():
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_spark_write_to_path_rejects_empty_identifier(tmp_path: Path):
     fake_spark = MagicMock()
     fake_df = MagicMock()
