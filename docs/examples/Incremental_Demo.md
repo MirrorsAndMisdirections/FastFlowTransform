@@ -352,21 +352,147 @@ The executor uses the `meta.incremental` / `meta.unique_key` / `meta.updated_at`
 
 ---
 
-## Delta Lake integration (Databricks Spark)
+## Delta variant (Databricks / Spark)
 
-When running on Databricks Spark, you can configure the executor to use Delta:
+In addition to the “regular” incremental models, the demo also includes a **Delta Lake variant**
+that shows how to:
 
-```env
-# examples/incremental_demo/.env.dev_databricks
-FF_DBR_TABLE_FORMAT=delta
-FF_DBR_DATABASE=incremental_demo
+- route a model to **Delta tables** via `project.yml`  
+- reuse the same incremental pattern, but with a **Delta-backed** table on Databricks/Spark  
+- keep Parquet and Delta models side-by-side in the same project
+
+This is optional and only relevant for the `databricks_spark` engine.
+
+---
+
+### Storage configuration for the Delta model
+
+In `project.yml`, the Delta variant gets its own storage entry, separate from the Parquet fact table:
+
+```yaml
+models:
+  storage:
+    # Existing Parquet fact table
+    fct_events_sql_inline:
+      path: ".local/spark/fct_events_sql_inline"
+      format: parquet
+
+    # 🔹 Delta-based fact table (Spark/Databricks only)
+    fct_events_sql_inline_delta:
+      path: ".local/spark_delta/fct_events_sql_inline"
+      format: delta
+````
+
+Notes:
+
+* The key `fct_events_sql_inline_delta` must match the **model name**.
+* `format: delta` tells the Databricks/Spark executor to create `USING DELTA LOCATION ...`.
+* The path is different from the Parquet path so artifacts don’t clash.
+
+---
+
+### Delta fact model
+
+The Delta fact model is a close sibling of `fct_events_sql_inline.ff.sql`, but:
+
+* is tagged only for the Databricks/Spark engine
+* is configured for incremental **merge** with a `unique_key` + `updated_at` column
+
+Example (conceptual) model:
+
+```sql
+-- models/common/fct_events_sql_inline_delta.ff.sql
+
+{{ config(
+    materialized='table',
+    tags=[
+        'example:incremental_demo',
+        'kind:incremental',
+        'engine:databricks_spark',
+    ],
+    meta={
+        'incremental': True,
+        'unique_key': ['event_id'],
+        'updated_at': 'updated_at',
+        'delta': {
+            'sql': "
+              with base as (
+                select event_id, updated_at, value
+                from {{ ref('events_base.ff') }}
+              )
+              select
+                event_id,
+                updated_at,
+                value
+              from base
+              where updated_at > (
+                select coalesce(max(updated_at), timestamp '1970-01-01 00:00:00')
+                from {{ this }}
+              )
+            "
+        },
+    },
+) }}
+
+-- canonical full-select (used for docs / full-refresh)
+select
+  event_id,
+  updated_at,
+  value
+from {{ ref('events_base.ff') }};
 ```
 
-With this set:
+What happens:
 
-* The Databricks Spark executor writes Delta tables by default.
-* The incremental merge path uses `MERGE INTO ... USING (...)` where possible.
-* If `MERGE` is not supported for a table (or fails for other reasons), it falls back to a safe full-refresh strategy.
+* On the **first run**, the engine sees no existing table and does a full materialization
+  (a Delta table at `.local/spark_delta/fct_events_sql_inline`).
+* On **subsequent runs**, the executor uses the `delta.sql` query as the **incremental delta** and:
+
+  * attempts a `MERGE INTO` for Delta tables, or
+  * falls back to a full-refresh strategy if MERGE is not supported.
+
+---
+
+### Running the Delta variant
+
+Once your Databricks/Spark profile is configured (e.g. `dev_databricks` in `profiles.yml` and `.env.dev_databricks`),
+you can run the Delta model like any other:
+
+```bash
+# From the repo root
+cd examples/incremental_demo
+
+# Seed
+FFT_ACTIVE_ENV=dev_databricks fft seed .
+
+# Run only the Delta variant
+FFT_ACTIVE_ENV=dev_databricks fft run . \
+  --select fct_events_sql_inline_delta.ff \
+  --select tag:engine:databricks_spark
+
+# Or include it in the general incremental demo selection
+FFT_ACTIVE_ENV=dev_databricks fft run . \
+  --select tag:example:incremental_demo \
+  --select tag:engine:databricks_spark
+```
+
+Optionally, you can add a small `not_null` test to `project.yml` to verify the Delta model:
+
+```yaml
+tests:
+  - type: not_null
+    table: fct_events_sql_inline_delta
+    column: event_id
+    tags: [batch, delta]
+```
+
+Then run:
+
+```bash
+FFT_ACTIVE_ENV=dev_databricks fft test . --select tag:delta
+```
+
+to validate the Delta-backed incremental table specifically.
 
 ---
 
@@ -408,6 +534,9 @@ FFT_ACTIVE_ENV=dev_postgres fft test . \
   --select tag:example:incremental_demo
 ```
 
+Packen würde ich den Hinweis direkt an die Stelle, wo du schon beschreibst, wie man die Demo auf Databricks startet – also deine aktuelle Sektion:
+
+````markdown
 ### Databricks Spark
 
 ```bash
@@ -416,7 +545,50 @@ FFT_ACTIVE_ENV=dev_databricks fft run . \
   --select tag:example:incremental_demo --select tag:engine:databricks_spark
 FFT_ACTIVE_ENV=dev_databricks fft test . \
   --select tag:example:incremental_demo
+````
+
+### Databricks Spark (parquet vs Delta)
+
+You can run the incremental demo on Databricks/Spark against either **parquet** or **Delta** tables.
+
+FFT reads the desired table format from the `FF_DBR_TABLE_FORMAT` environment variable, which overrides
+`databricks_spark.table_format` from `profiles.yml`.
+
+When `FF_DBR_TABLE_FORMAT=delta`, the Databricks/Spark executor automatically wires Delta Lake into the
+SparkSession (downloads the Maven artifact via `delta-spark`, adds
+`spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension`, and sets
+`spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog` unless you already
+overrode those settings). No extra `spark-submit --conf` flags are needed—just ensure the
+`delta-spark >= 4.0` Python package is installed.
+
+From the repo root:
+
+```bash
+cd examples/incremental_demo
+````
+
+Run with **parquet** tables (default):
+
+```bash
+FF_DBR_TABLE_FORMAT=parquet FFT_ACTIVE_ENV=dev_databricks fft seed .
+FF_DBR_TABLE_FORMAT=parquet FFT_ACTIVE_ENV=dev_databricks fft run . \
+  --select tag:example:incremental_demo --select tag:engine:databricks_spark
+FF_DBR_TABLE_FORMAT=parquet FFT_ACTIVE_ENV=dev_databricks fft test . \
+  --select tag:example:incremental_demo
 ```
+
+Run with **Delta** tables:
+
+```bash
+FF_DBR_TABLE_FORMAT=delta FFT_ACTIVE_ENV=dev_databricks fft seed .
+FF_DBR_TABLE_FORMAT=delta FFT_ACTIVE_ENV=dev_databricks fft run . \
+  --select tag:example:incremental_demo --select tag:engine:databricks_spark
+FF_DBR_TABLE_FORMAT=delta FFT_ACTIVE_ENV=dev_databricks fft test . \
+  --select tag:example:incremental_demo
+```
+
+This way you can switch between parquet and Delta just by changing the `FF_DBR_TABLE_FORMAT`
+environment variable, without touching the models or project.yml.
 
 Adjust environment names to match your `profiles.yml`.
 

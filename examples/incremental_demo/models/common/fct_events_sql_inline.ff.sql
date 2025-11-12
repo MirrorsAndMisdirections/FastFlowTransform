@@ -1,10 +1,8 @@
 {{ config(
     materialized='incremental',
     unique_key='event_id',
-    meta={
-        'incremental': {
-            'delta_column': 'updated_at'
-        }
+    incremental={
+        'updated_at_column': 'updated_at'
     },
     tags=[
         'example:incremental_demo',

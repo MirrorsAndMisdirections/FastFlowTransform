@@ -10,13 +10,16 @@ from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import jinja2.runtime
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
+from pydantic import ValidationError
 
 from fastflowtransform import storage
+from fastflowtransform.config.models import validate_model_meta
+from fastflowtransform.config.project import parse_project_yaml_config
 from fastflowtransform.errors import DependencyNotFoundError, ModuleLoadError
 from fastflowtransform.logging import get_logger
 
@@ -460,78 +463,92 @@ class Registry:
             raise ValueError(f"Failed to parse sources.yml: {exc}") from exc
 
     def _load_project_yaml(self, project_dir: Path) -> None:
-        """Load project.yml (vars, storage blocks) if present."""
+        """Load and validate project.yml (vars, storage, incremental overlays)."""
         proj_path = project_dir / "project.yml"
         if not proj_path.exists():
             return
 
-        proj_cfg = yaml.safe_load(proj_path.read_text(encoding="utf-8")) or {}
-        self.project_vars = dict(proj_cfg.get("vars", {}) or {})
+        try:
+            proj_cfg = parse_project_yaml_config(project_dir)
+        except Exception as exc:
+            # Surface a clear error when project.yml is invalid
+            raise ValueError(f"Failed to parse project.yml: {exc}") from exc
 
-        models_cfg = proj_cfg.get("models") if isinstance(proj_cfg, Mapping) else None
+        # Vars → available in Jinja via var("key")
+        self.project_vars = dict(proj_cfg.vars or {})
 
-        self.incremental_models = {}
-        if isinstance(models_cfg, Mapping):
-            incr_candidate = models_cfg.get("incremental")
-            if isinstance(incr_candidate, Mapping):
-                norm: dict[str, dict[str, Any]] = {}
-                for k, v in incr_candidate.items():
-                    if not isinstance(k, str) or not isinstance(v, Mapping):
-                        continue
-                    vv = dict(cast(Mapping[str, Any], v))
-                    norm[str(k)] = vv
-                self.incremental_models = norm
+        # Incremental overlays (per model) from project.yml → models.incremental
+        # Stored as plain dicts so the rest of the registry can treat them as before.
+        self.incremental_models = {
+            name: cfg.model_dump(exclude_none=True)
+            for name, cfg in proj_cfg.models.incremental.items()
+        }
 
-        model_storage_raw = None
-        if isinstance(models_cfg, Mapping):
-            candidate = models_cfg.get("storage")
-            if isinstance(candidate, Mapping):
-                model_storage_raw = candidate
+        # models.storage → storage.set_model_storage(...)
+        model_storage_raw: dict[str, dict[str, Any]] = {
+            name: s.model_dump(exclude_none=True) for name, s in proj_cfg.models.storage.items()
+        }
         storage.set_model_storage(
             storage.normalize_storage_map(model_storage_raw, project_dir=project_dir)
         )
 
-        # seeds.storage
-        seeds_cfg = proj_cfg.get("seeds") if isinstance(proj_cfg, Mapping) else None
-        seed_storage_raw = None
-        if isinstance(seeds_cfg, Mapping):
-            candidate = seeds_cfg.get("storage")
-            if isinstance(candidate, Mapping):
-                seed_storage_raw = candidate
+        # seeds.storage → storage.set_seed_storage(...)
+        seed_storage_raw: dict[str, dict[str, Any]] = {
+            name: s.model_dump(exclude_none=True) for name, s in proj_cfg.seeds.storage.items()
+        }
         storage.set_seed_storage(
             storage.normalize_storage_map(seed_storage_raw, project_dir=project_dir)
         )
 
     def _discover_sql_models(self, models_dir: Path) -> None:
-        """Scan *.ff.sql files, parse deps, and register nodes."""
+        """Scan *.ff.sql files, parse config, validate meta, and register nodes."""
         for path in models_dir.rglob("*.ff.sql"):
             name = path.stem
             deps = self._scan_sql_deps(path)
-            meta = dict(self._parse_model_config(path))
+
+            # Raw config from leading {{ config(...) }} in the SQL file
+            raw_meta = dict(self._parse_model_config(path))
+
+            # Merge project-level storage override (project.yml → models.storage)
             storage_meta = self._lookup_storage_meta(name)
             if storage_meta:
-                existing = dict(meta.get("storage") or {})
+                existing = dict(raw_meta.get("storage") or {})
                 existing.update(storage_meta)
-                meta["storage"] = existing
+                raw_meta["storage"] = existing
 
+            # Merge project-level incremental overlay (project.yml → models.incremental)
             incr_meta = self._lookup_incremental_meta(name)
             if incr_meta:
                 merged = dict(incr_meta)
-                merged.update(meta or {})  # config() überstimmt YAML
-                meta = merged
-            if meta.get("incremental") and not meta.get("materialized"):
-                meta["materialized"] = "incremental"
+                merged.update(raw_meta or {})
+                raw_meta = merged
 
+            # Pydantic validation: hard fail on unknown keys / wrong types
+            try:
+                cfg = validate_model_meta(raw_meta)
+            except ValidationError as exc:
+                raise ModuleLoadError(f"{path}: invalid config(...): {exc}") from exc
+
+            # Backwards-compatible default: incremental → materialized='incremental'
+            if cfg.is_incremental_enabled() and cfg.materialized is None:
+                cfg.materialized = "incremental"
+
+            # Node.meta is kept as a plain dict
+            meta = cfg.model_dump(exclude_none=True)
+
+            # Engine-filtering still works on the dict (config(engines=[...]))
             if not self._should_register_for_engine(meta, path=path):
                 continue
+
             self._add_node_or_fail(name, "sql", path, deps, meta=meta)
 
     def _discover_python_models(self, models_dir: Path) -> None:
-        """Scan *.ff.py files, import them, and register decorated callables."""
+        """Scan *.ff.py files, import them, validate meta, and register decorated callables."""
         for path in models_dir.rglob("*.ff.py"):
+            # Import the module so decorators can register functions
             self._load_py_module(path)
 
-            # we might have loaded several functions; filter by file path
+            # We may have loaded several functions; filter by file path
             for _, func in list(self.py_funcs.items()):
                 func_path = Path(getattr(func, "__ff_path__", "")).resolve()
                 if func_path != path.resolve():
@@ -541,35 +558,55 @@ class Registry:
                 deps = getattr(func, "__ff_deps__", [])
                 kind = getattr(func, "__ff_kind__", "python") or "python"
 
-                meta = dict(getattr(func, "__ff_meta__", {}) or {})
+                # Raw meta attached by @model(..., meta={...})
+                raw_meta = dict(getattr(func, "__ff_meta__", {}) or {})
+
+                # Merge storage override from project.yml (models.storage)
                 storage_meta = self._lookup_storage_meta(name)
                 if storage_meta:
-                    existing = dict(meta.get("storage") or {})
+                    existing = dict(raw_meta.get("storage") or {})
                     existing.update(storage_meta)
-                    meta["storage"] = existing
+                    raw_meta["storage"] = existing
 
+                # Merge incremental overlay from project.yml (models.incremental)
                 incr_meta = self._lookup_incremental_meta(name)
                 if incr_meta:
                     merged = dict(incr_meta)
-                    merged.update(meta or {})
-                    meta = merged
-                if meta.get("incremental") and not meta.get("materialized"):
-                    meta["materialized"] = "incremental"
+                    merged.update(raw_meta or {})
+                    raw_meta = merged
 
-                # merge tags from decorator into model meta.tags
+                # Merge tags from decorator into meta.tags
                 tags = list(getattr(func, "__ff_tags__", []) or [])
                 if tags:
-                    existing_tags = meta.get("tags")
+                    existing_tags = raw_meta.get("tags")
                     if isinstance(existing_tags, list):
-                        combined_tags = existing_tags + [t for t in tags if t not in existing_tags]
-                        meta["tags"] = combined_tags
+                        base = existing_tags
                     elif existing_tags is None:
-                        meta["tags"] = tags
+                        base = []
                     else:
-                        meta["tags"] = [existing_tags, *tags]
+                        base = [existing_tags]
+                    merged_tags = base + [t for t in tags if t not in base]
+                    raw_meta["tags"] = merged_tags
 
+                # Store kind in meta for selectors / docs (optional but handy)
+                raw_meta.setdefault("kind", kind)
+
+                # Validate via Pydantic
+                try:
+                    cfg = validate_model_meta(raw_meta)
+                except ValidationError as exc:
+                    raise ModuleLoadError(f"{path}: invalid @model(meta=...): {exc}") from exc
+
+                # Default incremental materialization if enabled and not set explicitly
+                if cfg.is_incremental_enabled() and cfg.materialized is None:
+                    cfg.materialized = "incremental"
+
+                meta = cfg.model_dump(exclude_none=True)
+
+                # Register node
                 self._add_node_or_fail(name, kind, path, deps, meta=meta)
 
+                # Required-columns spec (for executors) stays as before
                 req = getattr(func, "__ff_require__", None)
                 if req:
                     self.py_requires[name] = req

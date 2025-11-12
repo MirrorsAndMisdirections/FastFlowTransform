@@ -15,6 +15,14 @@ from fastflowtransform.executors.databricks_spark_exec import (
 )
 
 
+def _config_values(fake_builder, key: str) -> list[str]:
+    return [
+        call.args[1]
+        for call in fake_builder.config.call_args_list
+        if call.args and call.args[0] == key
+    ]
+
+
 @pytest.mark.unit
 @pytest.mark.databricks_spark
 def test_split_db_table_unit():
@@ -29,6 +37,68 @@ def test_q_ident_unit(exec_minimal):
     assert exec_minimal._q_ident("foo") == "`foo`"
     assert exec_minimal._q_ident("foo`bar") == "`foo``bar`"
     assert exec_minimal._q_ident(None) == ""
+
+
+@pytest.mark.unit
+@pytest.mark.databricks_spark
+def test_delta_format_sets_extension_and_catalog_defaults(exec_factory):
+    def _passthrough(builder, extra_packages=None):
+        return builder
+
+    with patch.object(mod, "configure_spark_with_delta_pip", _passthrough):
+        _, fake_builder, _ = exec_factory(table_format="delta")
+
+    ext_values = _config_values(fake_builder, "spark.sql.extensions")
+    assert ext_values, "expected spark.sql.extensions to be configured"
+    assert mod._DELTA_EXTENSION in ext_values[-1]
+
+    catalog_values = _config_values(fake_builder, "spark.sql.catalog.spark_catalog")
+    assert catalog_values, "expected spark.sql.catalog.spark_catalog to be configured"
+    assert catalog_values[-1] == mod._DELTA_CATALOG
+
+
+@pytest.mark.unit
+@pytest.mark.databricks_spark
+def test_delta_format_appends_existing_extension(exec_factory):
+    def _passthrough(builder, extra_packages=None):
+        return builder
+
+    extra_conf = {"spark.sql.extensions": "com.example.Ext"}
+    with patch.object(mod, "configure_spark_with_delta_pip", _passthrough):
+        _, fake_builder, _ = exec_factory(table_format="delta", extra_conf=extra_conf)
+
+    ext_values = _config_values(fake_builder, "spark.sql.extensions")
+    assert ext_values
+    last = ext_values[-1]
+    assert "com.example.Ext" in last
+    assert mod._DELTA_EXTENSION in last
+
+
+@pytest.mark.unit
+@pytest.mark.databricks_spark
+def test_delta_format_respects_custom_catalog(exec_factory):
+    def _passthrough(builder, extra_packages=None):
+        return builder
+
+    with patch.object(mod, "configure_spark_with_delta_pip", _passthrough):
+        _, fake_builder, _ = exec_factory(table_format="delta", catalog="unity")
+
+    catalog_values = _config_values(fake_builder, "spark.sql.catalog.spark_catalog")
+    assert catalog_values == ["unity"]
+
+
+@pytest.mark.unit
+@pytest.mark.databricks_spark
+def test_delta_format_respects_extra_conf_catalog(exec_factory):
+    def _passthrough(builder, extra_packages=None):
+        return builder
+
+    extra_conf = {"spark.sql.catalog.spark_catalog": "ext_catalog"}
+    with patch.object(mod, "configure_spark_with_delta_pip", _passthrough):
+        _, fake_builder, _ = exec_factory(table_format="delta", extra_conf=extra_conf)
+
+    catalog_values = _config_values(fake_builder, "spark.sql.catalog.spark_catalog")
+    assert catalog_values == ["ext_catalog"]
 
 
 @pytest.mark.unit

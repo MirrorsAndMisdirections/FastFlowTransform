@@ -46,7 +46,19 @@ def test_examples_with_all_engines(example, engine, request):
     env["FFT_ACTIVE_ENV"] = example.env_by_engine[engine]
 
     cmd = ["make", example.make_target, f"ENGINE={engine}"]
-    _run_cmd(cmd, cwd=example.path, extra_env=env)
+
+    if engine == "databricks_spark":
+        formats = example.spark_table_formats or ["parquet"]
+        for fmt in formats:
+            env_fmt = dict(env)
+            env_fmt["DBR_TABLE_FORMAT"] = fmt
+            _run_cmd(
+                [*cmd, f"DBR_TABLE_FORMAT={fmt}"],
+                cwd=example.path,
+                extra_env=env_fmt,
+            )
+    else:
+        _run_cmd(cmd, cwd=example.path, extra_env=env)
 
     target_dir = example.path / ".fastflowtransform" / "target"
     manifest = target_dir / "manifest.json"

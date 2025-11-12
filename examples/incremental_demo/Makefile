@@ -9,6 +9,9 @@ UV ?= uv
 # Engine selector (duckdb|postgres|databricks_spark)
 ENGINE ?= duckdb
 
+# For Databricks Spark: control table format (parquet|delta)
+DBR_TABLE_FORMAT ?= parquet
+
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
 	OPENER := open
@@ -30,6 +33,10 @@ ifeq ($(ENGINE),databricks_spark)
 endif
 
 BASE_ENV = FFT_ACTIVE_ENV=$(PROFILE_ENV)
+ifeq ($(ENGINE),databricks_spark)
+  BASE_ENV := $(BASE_ENV) FF_DBR_TABLE_FORMAT=$(DBR_TABLE_FORMAT)
+endif
+
 RUN_ENV = $(BASE_ENV)
 
 SELECT_FLAGS = --select tag:example:incremental_demo --select tag:$(ENGINE_TAG)

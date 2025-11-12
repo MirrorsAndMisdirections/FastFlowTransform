@@ -5,13 +5,12 @@ from typing import Any
 
 import pytest
 
-from fastflowtransform.testing import (
+from fastflowtransform.testing.base import (
     TestFailure,
     _exec,
     _fail,
     _pretty_sql,
     _scalar,
-    _sql_list,
     accepted_values,
     freshness,
     greater_equal,
@@ -22,6 +21,7 @@ from fastflowtransform.testing import (
     reconcile_equal,
     reconcile_ratio_within,
     row_count_between,
+    sql_list,
     unique,
 )
 
@@ -67,9 +67,9 @@ def test_pretty_sql_sequence():
 
 @pytest.mark.unit
 def test_sql_list_various_types():
-    assert _sql_list([1, 2, 3]) == "1, 2, 3"
-    assert _sql_list(["a", "b"]) == "'a', 'b'"
-    assert _sql_list([None, "O'Reilly"]) == "NULL, 'O''Reilly'"
+    assert sql_list([1, 2, 3]) == "1, 2, 3"
+    assert sql_list(["a", "b"]) == "'a', 'b'"
+    assert sql_list([None, "O'Reilly"]) == "NULL, 'O''Reilly'"
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +241,7 @@ def test_accepted_values_ok():
             return _FakeResult([])
 
     con = FakeCon()
-    assert accepted_values(con, "tbl", "col", values=["a", "b"]) is True
+    accepted_values(con, "tbl", "col", values=["a", "b"])
     assert con.calls == 1
 
 

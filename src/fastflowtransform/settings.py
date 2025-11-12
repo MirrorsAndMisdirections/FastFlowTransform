@@ -16,26 +16,30 @@ from fastflowtransform.errors import ProfileConfigError
 EngineType = Literal["duckdb", "postgres", "bigquery", "databricks_spark", "snowflake_snowpark"]
 
 
-class DuckDBConfig(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+class BaseConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class DuckDBConfig(BaseConfig):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
     path: str = ":memory:"  # file path or ":memory:"
     db_schema: str | None = Field(default=None, alias="schema")
     catalog: str | None = None
 
 
-class PostgresConfig(BaseModel):
+class PostgresConfig(BaseConfig):
     dsn: str | None = None  # e.g. postgresql+psycopg://user:pass@host:5432/db
     db_schema: str = "public"
 
 
-class BigQueryConfig(BaseModel):
+class BigQueryConfig(BaseConfig):
     project: str | None = None
     dataset: str | None = None
     location: str | None = None
     use_bigframes: bool = True
 
 
-class DatabricksSparkConfig(BaseModel):
+class DatabricksSparkConfig(BaseConfig):
     master: str = "local[*]"
     app_name: str = "fastflowtransform"
     extra_conf: dict[str, Any] | None = None
@@ -47,7 +51,7 @@ class DatabricksSparkConfig(BaseModel):
     table_options: dict[str, Any] | None = None
 
 
-class SnowflakeSnowparkConfig(BaseModel):
+class SnowflakeSnowparkConfig(BaseConfig):
     account: str
     user: str
     password: str
@@ -57,27 +61,27 @@ class SnowflakeSnowparkConfig(BaseModel):
     role: str | None = None
 
 
-class DuckDBProfile(BaseModel):
+class DuckDBProfile(BaseConfig):
     engine: Literal["duckdb"]
     duckdb: DuckDBConfig
 
 
-class PostgresProfile(BaseModel):
+class PostgresProfile(BaseConfig):
     engine: Literal["postgres"]
     postgres: PostgresConfig
 
 
-class BigQueryProfile(BaseModel):
+class BigQueryProfile(BaseConfig):
     engine: Literal["bigquery"]
     bigquery: BigQueryConfig
 
 
-class DatabricksSparkProfile(BaseModel):
+class DatabricksSparkProfile(BaseConfig):
     engine: Literal["databricks_spark"]
     databricks_spark: DatabricksSparkConfig
 
 
-class SnowflakeSnowparkProfile(BaseModel):
+class SnowflakeSnowparkProfile(BaseConfig):
     engine: Literal["snowflake_snowpark"]
     snowflake_snowpark: SnowflakeSnowparkConfig
 
@@ -90,12 +94,6 @@ Profile = Annotated[
     | SnowflakeSnowparkProfile,
     Field(discriminator="engine"),
 ]
-
-
-class ProjectConfig(BaseModel):
-    name: str
-    version: str
-    models_dir: str = "models"
 
 
 class EnvSettings(BaseSettings):
@@ -147,12 +145,6 @@ class EnvSettings(BaseSettings):
     HTTP_RATE_LIMIT_RPS: float | None = None  # FF_HTTP_RATE_LIMIT_RPS
     HTTP_OFFLINE: int | None = None  # FF_HTTP_OFFLINE (1/0)
     HTTP_ALLOWED_DOMAINS: str | None = None  # FF_HTTP_ALLOWED_DOMAINS (csv)
-
-
-def load_project_config(project_dir: Path) -> ProjectConfig:
-    cfg_path = project_dir / "project.yml"
-    data = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
-    return ProjectConfig(**data)
 
 
 # ---------- Loader ----------

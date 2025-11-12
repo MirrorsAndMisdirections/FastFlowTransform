@@ -61,3 +61,9 @@ tests:
     column: user_count
     threshold: 0
     tags: [example_basic_demo]
+
+  - type: row_count_between
+    table: mart_users_by_domain
+    min_rows: 1
+    max_rows: 10
+    tags: [example_basic_demo]

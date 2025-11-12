@@ -7,42 +7,38 @@ models:
   storage:
     events_base.ff:
       path: ".local/spark/events_base"
-      format: parquet
+      # format: parquet
 
     fct_events_sql_inline.ff:
       path: ".local/spark/fct_events_sql_inline"
-      format: parquet
+      # format: parquet
 
     fct_events_sql_yaml.ff:
       path: ".local/spark/fct_events_sql_yaml"
-      format: parquet
+      # format: parquet
 
     fct_events_py_incremental.ff:
       path: ".local/spark/fct_events_py_incremental"
-      format: parquet
+      # format: parquet
 
   incremental:
     fct_events_sql_inline.ff:
       unique_key: "event_id"
-      delta_columns: ["updated_at"]
-      mode: "merge"
 
     fct_events_sql_yaml.ff:
       unique_key: "event_id"
-      delta_columns: ["updated_at"]
-      mode: "merge"
-      delta_where: "updated_at > (select coalesce(max(updated_at), '1970-01-01') from {{ this }})"
 
     fct_events_py_incremental.ff:
       unique_key: "event_id"
-      delta_columns: ["updated_at"]
-      mode: "merge"
+
+    fct_events_sql_inline_delta.ff:
+      unique_key: "event_id"
 
 seeds:
   storage:
     seed_events:
       path: ".local/spark/seed_events"
-      format: parquet
+      # format: parquet
 
 tests:
   - type: not_null

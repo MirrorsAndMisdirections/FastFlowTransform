@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>FastFlowTransform - DAG & Mini Docs</title>
+
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+    const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    mermaid.initialize({
+      startOnLoad: true,
+      securityLevel: "loose",
+      theme: prefersDark ? "dark" : "default"
+    });
+  </script>
+
+  <style>
+    :root {
+      --bg: #ffffff;
+      --fg: #0f172a;
+      --muted: #6b7280;
+      --card: #ffffff;
+      --border: #e5e7eb;
+      --chip-sql-bg: #e8f1ff;  --chip-sql-fg: #0a1f44;
+      --chip-py-bg:  #e9fbf1;  --chip-py-fg:  #0b2e1f;
+      --accent: #2563eb;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0b0f1a;
+        --fg: #e5e7eb;
+        --muted: #94a3b8;
+        --card: #111827;
+        --border: #1f2937;
+        --chip-sql-bg: #0e1a2c;  --chip-sql-fg: #93c5fd;
+        --chip-py-bg:  #0f1f15;  --chip-py-fg:  #86efac;
+        --accent: #60a5fa;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 24px; background: var(--bg); color: var(--fg);
+           font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom: 20px; }
+    h1 { font-size: 1.25rem; margin: 0; }
+    .muted { color: var(--muted); }
+
+    .toolbar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .input {
+      display:inline-flex; align-items:center; gap:8px;
+      border:1px solid var(--border); background: var(--card); color: var(--fg);
+      padding:8px 10px; border-radius:10px; min-width: 240px;
+    }
+    .btn {
+      border:1px solid var(--border); background: var(--card); color: var(--fg);
+      padding:8px 12px; border-radius:10px; cursor:pointer;
+    }
+    .btn:hover { border-color: var(--accent); }
+
+    .grid { display:grid; gap:24px; grid-template-columns: 2fr 1fr; }
+    @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+
+    .card { border:1px solid var(--border); background: var(--card); border-radius:14px; padding:16px; }
+    .card h2 { margin:0 0 12px 0; font-size:1rem; }
+
+    .mermaid { overflow:auto; border-radius:12px; }
+    .legend { display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+    .chip { font-size:12px; padding:2px 10px; border-radius:999px; border:1px solid var(--border); }
+    .chip.sql { background: var(--chip-sql-bg); color: var(--chip-sql-fg); }
+    .chip.py  { background: var(--chip-py-bg);  color: var(--chip-py-fg);  }
+
+    .badge { font: 12px/1.6 system-ui, sans-serif; padding: 2px 8px; border-radius: 999px; border: 1px solid transparent; }
+    .badge-table { background:#eef7ff; color:#0a3a77; border-color:#bcd8fb; }
+    .badge-view { background:#eefcf4; color:#0b5d2a; border-color:#bdebcf; }
+    .badge-ephemeral { background:#fff7e8; color:#7a4a00; border-color:#f6db9b; }
+    .badge-sql { background: var(--chip-sql-bg); color: var(--chip-sql-fg); }
+    .badge-py  { background: var(--chip-py-bg);  color: var(--chip-py-fg);  }
+    .subline { display:block; margin-top:2px; font-size:12px; color: var(--muted); line-height:1.35; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+
+    table { width:100%; border-collapse: collapse; }
+    th, td { padding:8px 10px; border-bottom:1px solid var(--border); text-align:left; font-size:13px; }
+    th { background: rgba(127,127,127,.06); }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    .nowrap { white-space: nowrap; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div>
+      <h1>FastFlowTransform - DAG & Mini Docs</h1>
+      <div class="muted">Mermaid renders automatically (light/dark)</div>
+    </div>
+    <div class="toolbar">
+      <label class="input">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M21 21l-4.3-4.3M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z" stroke="currentColor" stroke-width="2"/></svg>
+        <input id="filter" type="search" placeholder="Filter models…" style="border:0; outline:0; background:transparent; color:inherit; width: 220px;">
+      </label>
+      <button id="copyBtn" class="btn" title="Copy Mermaid source">Copy Mermaid</button>
+    </div>
+  </header>
+
+  <div class="grid">
+    <section class="card">
+      <h2>DAG</h2>
+      <div class="legend">
+        <span class="chip sql">SQL</span>
+        <span class="chip py">Python</span>
+        <span class="muted">•</span>
+        <strong>Materialization:</strong>
+        
+          <span class="badge badge-table">table</span>
+        
+          <span class="badge badge-view">view</span>
+        
+          <span class="badge badge-ephemeral">ephemeral</span>
+        
+          <span class="badge badge-incremental">incremental</span>
+        
+      </div>
+      <div class="mermaid" id="dag">flowchart TD
+  classDef sql fill:#e8f1ff,stroke:#5b8def,color:#0a1f44;
+  classDef py  fill:#e9fbf1,stroke:#2bb673,color:#0b2e1f;
+  customers_ff["customers.ff<br/>(customers)"]
+  class customers_ff sql;
+  mart_orders_agg_ff["mart_orders_agg.ff<br/>(mart_orders_agg)"]
+  class mart_orders_agg_ff sql;
+  orders_ff["orders.ff<br/>(orders)"]
+  class orders_ff sql;
+  orders_ff --> mart_orders_agg_ff
+  customers_ff --> mart_orders_agg_ff
+</div>
+    </section>
+
+    <aside class="card">
+      <h2>Models</h2>
+      <table id="models">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Relation</th>
+            <th>Deps</th>
+            <th>Materialized</th>
+          </tr>
+        </thead>
+        <tbody>
+        
+          <tr>
+            <td class="nowrap">
+              
+              <a href="customers.ff.html"
+                 title="customers.ff">
+                customers.ff
+              </a>
+              
+            </td>
+            <td><span class="chip sql">sql</span></td>
+            <td><code>customers</code></td>
+            <td class="muted">–</td>
+            <td>
+              <span class="badge badge-table">
+                table
+              </span>
+            </td>
+          </tr>
+        
+          <tr>
+            <td class="nowrap">
+              
+              <a href="mart_orders_agg.ff.html"
+                 title="mart_orders_agg.ff">
+                mart_orders_agg.ff
+              </a>
+              
+            </td>
+            <td><span class="chip sql">sql</span></td>
+            <td><code>mart_orders_agg</code></td>
+            <td class="muted">orders.ff, customers.ff</td>
+            <td>
+              <span class="badge badge-table">
+                table
+              </span>
+            </td>
+          </tr>
+        
+          <tr>
+            <td class="nowrap">
+              
+              <a href="orders.ff.html"
+                 title="orders.ff">
+                orders.ff
+              </a>
+              
+            </td>
+            <td><span class="chip sql">sql</span></td>
+            <td><code>orders</code></td>
+            <td class="muted">–</td>
+            <td>
+              <span class="badge badge-table">
+                table
+              </span>
+            </td>
+          </tr>
+        
+        </tbody>
+      </table>
+    </aside>
+
+    <section class="card">
+      <h2>Macros</h2>
+      
+        <p>No macros found.</p>
+      
+    </section>
+  </div>
+
+  <script>
+    // Table filter
+    const filter = document.getElementById('filter');
+    const rows = Array.from(document.querySelectorAll('#models tbody tr'));
+    filter?.addEventListener('input', () => {
+      const q = filter.value.trim().toLowerCase();
+      rows.forEach(tr => {
+        const text = tr.innerText.toLowerCase();
+        tr.style.display = text.includes(q) ? '' : 'none';
+      });
+    });
+
+    // Copy Mermaid
+    const copyBtn = document.getElementById('copyBtn');
+    copyBtn?.addEventListener('click', async () => {
+      try {
+        const src = document.getElementById('dag')?.textContent ?? '';
+        await navigator.clipboard.writeText(src.trim());
+        copyBtn.textContent = 'Copied ✓';
+        setTimeout(() => copyBtn.textContent = 'Copy Mermaid', 1200);
+      } catch(e) {
+        copyBtn.textContent = 'Copy failed';
+        setTimeout(() => copyBtn.textContent = 'Copy Mermaid', 1200);
+      }
+    });
+  </script>
+</body>
+</html>

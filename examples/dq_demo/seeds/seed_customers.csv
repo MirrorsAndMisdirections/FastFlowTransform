@@ -1,0 +1,4 @@
+customer_id,name,status,created_at
+1,Alice,active,2025-01-01T10:00:00
+2,Bob,active,2025-01-02T11:00:00
+3,Carol,inactive,2025-01-03T12:00:00

@@ -5,7 +5,7 @@ import contextvars
 import importlib
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -160,13 +160,13 @@ class BaseExecutor[TFrame](ABC):
             env.globals["var"] = _var
 
         # ---- is_incremental() builtin
-        # True iff materialization is 'incremental' AND the target relation already exists.
+        # True iff meta marks the model as incremental AND the target relation exists.
         if "is_incremental" not in env.globals:
 
             def _is_incremental() -> bool:
                 try:
-                    mat = (getattr(node, "meta", {}) or {}).get("materialized", "table")
-                    if mat != "incremental":
+                    meta = getattr(node, "meta", {}) or {}
+                    if not self._meta_is_incremental(meta):
                         return False
                     rel = relation_for(node.name)
                     return bool(self.exists_relation(rel))
@@ -232,12 +232,8 @@ class BaseExecutor[TFrame](ABC):
         On failure, raise ModelExecutionError with a helpful snippet.
         """
         meta = getattr(node, "meta", {}) or {}
-        mat = meta.get("materialized")
-        if not mat and meta.get("incremental"):
-            mat = "incremental"
-
-        if mat == "incremental":
-            # kümmert sich um Rendern, Schema-Sync, Merge/Insert etc.
+        if self._meta_is_incremental(meta):
+            # Delegates to incremental engine: render, schema sync, merge/insert, etc.
             return _ff_incremental.run_or_dispatch(self, node, env)
 
         sql_rendered = self.render_sql(
@@ -492,12 +488,13 @@ class BaseExecutor[TFrame](ABC):
 
         Returns "table" by default, but respects:
             - meta["materialized"]
-            - meta["incremental"] as a shortcut for incremental materialization.
+            - meta["incremental"] (bool or dict) as a shortcut for incremental
+              materialization.
         """
-        mat = meta.get("materialized", "table")
-        if not mat and meta.get("incremental"):
+        if self._meta_is_incremental(meta):
             return "incremental"
-        return mat
+        mat = meta.get("materialized") or "table"
+        return str(mat)
 
     def _materialize_view(self, target: str, out: TFrame, node: Node) -> None:
         """Materialize a Python model as a backing table and expose it as a view."""
@@ -762,6 +759,39 @@ class BaseExecutor[TFrame](ABC):
         Default implementation: No-Op.
         """
         return None
+
+    @staticmethod
+    def _meta_is_incremental(meta: Mapping[str, Any] | None) -> bool:
+        """
+        Return True if the given meta mapping describes an incremental model.
+
+        This mirrors the semantics of ModelConfig.is_incremental_enabled(), but
+        works on a plain mapping to avoid tight coupling to the Pydantic model.
+        """
+        if not meta:
+            return False
+
+        incremental_cfg = meta.get("incremental")
+        materialized = str(meta.get("materialized") or "").lower()
+
+        # Explicit materialized='incremental' always wins.
+        if materialized == "incremental":
+            return True
+
+        # incremental: true / false
+        if isinstance(incremental_cfg, bool):
+            return incremental_cfg
+
+        # incremental: {enabled: bool, ...}
+        if isinstance(incremental_cfg, dict):
+            enabled = incremental_cfg.get("enabled")
+            if isinstance(enabled, bool):
+                return enabled
+            # Default: treat presence of a dict as "enabled" if no explicit flag is set.
+            return True
+
+        # Fallback: any non-empty incremental value is treated as "enabled".
+        return bool(incremental_cfg)
 
     ENGINE_NAME: str = "generic"
 

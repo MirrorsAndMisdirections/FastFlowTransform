@@ -33,23 +33,30 @@ Incremental models solve this by:
 Incremental behaviour is coordinated between three layers:
 
 1. **Model configuration**
+
    You declare that a model is incremental and provide hints:
 
    * Does it append or upsert?
    * What is the **unique key**?
    * Which column(s) indicate freshness (e.g. `updated_at`)?
 
+   This lives in the model’s `config(...)` (SQL) or `meta` (Python) and is validated against a strict schema.
+
 2. **Planner / Core**
+
    FFT looks at:
 
-   * the model’s config (`meta.incremental`),
+   * the model’s incremental config (`incremental={...}`),
    * whether the physical table already exists,
    * CLI flags like `--full-refresh`,
-     and decides whether to:
+
+   and decides whether to:
+
    * run a **full rebuild**, or
    * run an **incremental update** using engine hooks.
 
 3. **Engine executors** (DuckDB, Postgres, Databricks/Spark, …)
+
    Each engine implements a small incremental API:
 
    * `exists_relation(relation)`
@@ -65,22 +72,21 @@ Incremental behaviour is coordinated between three layers:
 
 ## Enabling incremental mode
 
-You enable incremental mode **per model** via the `meta` block.
+You enable incremental mode **per model** via the model config.
 
 ### SQL models
 
-Inside the Jinja `config` block:
+Inside the Jinja `config` block you use a structured `incremental` dictionary:
 
 ```sql
 {{ config(
-    materialized='table',
-    meta={
-        "incremental": {
-            "enabled": true,
-            "unique_key": ["event_id"],
-            "strategy": "merge",          # or "append"
-            "updated_at_column": "updated_at"
-        }
+    materialized='incremental',
+    tags=['example:incremental', 'engine:duckdb'],
+    incremental={
+        "enabled": true,
+        "strategy": "merge",          # or "append", "insert", "full_refresh"
+        "unique_key": ["event_id"],
+        "updated_at_column": "updated_at"
     }
 ) }}
 
@@ -89,18 +95,21 @@ select
   updated_at,
   value
 from some_source
-```
+````
 
 Key points:
 
-* `enabled: true` tells FFT this model supports incremental processing.
+* `materialized='incremental'` tells FFT to use the incremental pipeline.
+* `incremental.enabled: true` declares that this model supports incremental processing.
 * `unique_key` declares one or more columns that uniquely identify a row in the target.
-* `strategy` controls how deltas are applied (see below).
-* `updated_at_column` (or equivalent configuration) tells FFT which column is used for “new vs old” comparisons (usually a timestamp or monotonically increasing surrogate).
+* `strategy` is a hint for how deltas should be applied (append vs merge etc.).
+* `updated_at_column` (or `delta_columns`/`updated_at_columns`) tells FFT which column is used for “new vs old” comparisons (usually a timestamp or monotonically increasing surrogate).
+
+There is **no extra `meta={...}` wrapper** anymore – the fields of `config(...)` are validated directly.
 
 ### Python engine models
 
-For `@engine_model` functions you pass the same information via the `meta` parameter:
+For `@engine_model` functions you pass the same information via the `meta` parameter – but again with **top-level incremental config**, not inside another `meta` key:
 
 ```python
 from fastflowtransform import engine_model
@@ -109,14 +118,15 @@ from fastflowtransform import engine_model
     only="duckdb",
     name="fct_events_py_incremental",
     deps=["events_base.ff"],
-    tags=["incremental"],
+    tags=["incremental", "engine:duckdb"],
     meta={
+        "materialized": "incremental",
         "incremental": {
             "enabled": True,
-            "unique_key": ["event_id"],
             "strategy": "merge",
+            "unique_key": ["event_id"],
             "updated_at_column": "updated_at",
-        }
+        },
     },
 )
 def build(df):
@@ -132,7 +142,7 @@ The **frame you return** (pandas, Spark, etc.) is treated as the *delta dataset*
 
 The core supports at least two conceptual strategies:
 
-### 1. Append / insert-only (`strategy: "append"`)
+### 1. Append / insert-only (`strategy: "append"` / `"insert"`)
 
 Use this when:
 
@@ -170,7 +180,7 @@ Behaviour:
 * For the **first run**, same as full refresh: `create_table_as`.
 * For **later runs**:
 
-  * The SELECT produces a *delta* frame with new/updated rows.
+  * The SELECT (or delta query, see below) produces a *delta* frame with new/updated rows.
   * Executor tries `incremental_merge(relation, select_sql, unique_key)`.
 
 Engine-specific behaviour:
@@ -200,14 +210,14 @@ In all cases, the `unique_key` list is used to match rows between existing table
 
 ## Watermark / delta SQL and default behaviour
 
-To decide **which rows are “new enough”** for an incremental run, FFT uses the configuration you provide (e.g. `updated_at_column`) and the existing table.
+To decide **which rows are “new enough”** for an incremental run, FFT uses the configuration you provide (for example `updated_at_column` or `delta_columns`) plus the existing table.
 
 A typical default pattern is:
 
 ```sql
 where updated_at > (
   select coalesce(max(updated_at), timestamp '1970-01-01 00:00:00')
-  from target_table
+  from {{ this }}
 )
 ```
 
@@ -218,16 +228,45 @@ The exact SQL will vary by engine, but the core idea is:
 
 ### Overriding the delta logic
 
-If the default “`updated_at > max(updated_at)`” is not enough, you can:
+If the default “`updated_at > max(updated_at)`” is not enough, you have a few options:
 
-* configure additional columns for change detection, or
-* provide a custom **delta SELECT** (for example in a model-level meta section or a project-level YAML) that FFT uses as the incremental source, while still delegating the **merge/insert mechanics** to the executor.
+1. **Additional delta columns**
 
-Conceptually:
+   Use `delta_columns` / `updated_at_columns` in `incremental={...}` to indicate multiple fields that drive change detection (especially for Python incremental).
 
-* Your model defines a *base* query (what the full dataset should look like).
-* Optionally, you can define a **delta query** which only returns rows that need to be inserted/updated.
-* The planner uses the delta query on incremental runs.
+2. **Inline delta SQL (`delta_sql`)**
+
+   Provide a custom **delta SELECT** that FFT should use on incremental runs:
+
+   ```sql
+   {{ config(
+       materialized='incremental',
+       incremental={
+         "enabled": true,
+         "strategy": "merge",
+         "unique_key": ["event_id"],
+         "updated_at_column": "updated_at",
+         "delta_sql": "
+           with base as (
+             select event_id, updated_at, value
+             from {{ ref('events_base.ff') }}
+           )
+           select *
+           from base
+           where updated_at > (
+             select coalesce(max(updated_at), timestamp '1970-01-01 00:00:00')
+             from {{ this }}
+           )
+         "
+       }
+   ) }}
+   ```
+
+3. **External delta config (`delta_config`)**
+
+   Keep the base query in the model, but put the delta SQL into a separate YAML file and reference it via `delta_config: "config/incremental/my_model.delta.yml"`.
+
+In all cases, FFT still delegates the **merge/insert mechanics** to the executor; you only control what qualifies as “delta”.
 
 ---
 
@@ -242,9 +281,11 @@ fft run . --env dev --full-refresh
 The logic is:
 
 * If `--full-refresh` is set → **ignore incremental** and call `full_refresh_table`.
-* Otherwise, if model has `meta.incremental.enabled` and the target exists:
+
+* Otherwise, if the model has `incremental.enabled` and the target exists:
 
   * attempt incremental path (`incremental_insert` / `incremental_merge`),
+
 * Otherwise:
 
   * do initial full build via `create_table_as`.
@@ -282,7 +323,7 @@ For DuckDB/Postgres, the simplest implementation may be a no-op initially; more 
 Incremental models work with both:
 
 1. **Managed / catalog tables**, and
-2. **Storage overrides** via `project.yml` / model meta, e.g.:
+2. **Storage overrides** via `project.yml` / model config, e.g.:
 
    ```yaml
    models:
@@ -315,6 +356,13 @@ This keeps:
 
 * a stable location on disk / in the lake,
 * and a proper table in the metastore/catalog.
+
+When the Databricks/Spark executor's `table_format` (or `FF_DBR_TABLE_FORMAT`) resolves to `delta`,
+FastFlowTransform automatically pulls in `delta-spark` and configures both
+`spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension` and
+`spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog` (unless you
+already provided custom values). Install `delta-spark >= 4.0` and you can seed/run Delta-backed
+models without manually adding Spark CLI flags.
 
 ---
 

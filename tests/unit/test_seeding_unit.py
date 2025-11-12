@@ -39,7 +39,7 @@ def test_read_seed_file_unsupported(tmp_path: Path):
 @pytest.mark.unit
 def test_apply_schema_happy():
     df = pd.DataFrame({"id": [1, 2], "name": ["a", "b"], "age": [10, 20]})
-    schema_cfg = {
+    cfg_raw = {
         "dtypes": {
             "users": {
                 "name": "string",
@@ -47,9 +47,9 @@ def test_apply_schema_happy():
             }
         }
     }
+    schema_cfg = seeding.SeedsSchemaConfig.model_validate(cfg_raw)
 
     out = seeding._apply_schema(df, "users", schema_cfg)
-    # 'name' should be string dtype
     assert str(out.dtypes["name"]).startswith("string")
     assert str(out.dtypes["age"]) in ("int64", "Int64")
 
@@ -57,8 +57,9 @@ def test_apply_schema_happy():
 @pytest.mark.unit
 def test_apply_schema_ignores_missing_table_key():
     df = pd.DataFrame({"id": [1]})
-    out = seeding._apply_schema(df, "other", {"dtypes": {"users": {"id": "int64"}}})
-    # unchanged
+    cfg_raw = {"dtypes": {"users": {"id": "int64"}}}
+    schema_cfg = seeding.SeedsSchemaConfig.model_validate(cfg_raw)
+    out = seeding._apply_schema(df, "other", schema_cfg)
     assert out.equals(df)
 
 
@@ -66,9 +67,9 @@ def test_apply_schema_ignores_missing_table_key():
 def test_apply_schema_soft_fails_on_bad_cast():
     df = pd.DataFrame({"id": ["x"]})
     # force bad cast
-    cfg = {"dtypes": {"t": {"id": "int64"}}}
-    out = seeding._apply_schema(df, "t", cfg)
-    # should not raise and should still have the row
+    cfg_raw = {"dtypes": {"t": {"id": "int64"}}}
+    schema_cfg = seeding.SeedsSchemaConfig.model_validate(cfg_raw)
+    out = seeding._apply_schema(df, "t", schema_cfg)
     assert len(out) == 1
 
 
@@ -201,7 +202,7 @@ def test_echo_seed_line(monkeypatch):
 @pytest.mark.unit
 def test_engine_name_from_executor_spark():
     ex = SimpleNamespace(spark=object())
-    assert seeding._engine_name_from_executor(ex) == "spark"
+    assert seeding._engine_name_from_executor(ex) == "databricks_spark"
 
 
 @pytest.mark.unit
@@ -237,7 +238,7 @@ def test_seed_id_nested(tmp_path: Path):
 
 @pytest.mark.unit
 def test_resolve_schema_and_table_by_cfg_priority_engine_override():
-    schema_cfg = {
+    schema_cfg_raw = {
         "targets": {
             "raw/users": {
                 "schema": "raw",
@@ -251,6 +252,8 @@ def test_resolve_schema_and_table_by_cfg_priority_engine_override():
     }
     # executor pretending to be postgres
     ex = SimpleNamespace(engine=SimpleNamespace(dialect=SimpleNamespace(name="postgres")))
+
+    schema_cfg = seeding.SeedsSchemaConfig.model_validate(schema_cfg_raw)
 
     schema, table = seeding._resolve_schema_and_table_by_cfg(
         seed_id="raw/users",

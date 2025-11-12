@@ -10,11 +10,41 @@ from urllib.parse import unquote, urlparse
 from pyspark.sql import DataFrame as SDF, SparkSession
 from pyspark.sql.types import DataType
 
+try:
+    # Enable Delta Lake via delta-spark when available
+    from delta import configure_spark_with_delta_pip
+except Exception:  # pragma: no cover
+    configure_spark_with_delta_pip = None  # type: ignore[assignment]
+
 from fastflowtransform import storage
 from fastflowtransform.core import REGISTRY, Node, relation_for
 from fastflowtransform.errors import ModelExecutionError
 from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
+
+_DELTA_EXTENSION = "io.delta.sql.DeltaSparkSessionExtension"
+_DELTA_CATALOG = "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+
+
+def _csv_tokens(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [part.strip() for part in value.split(",") if part and part.strip()]
+
+
+def _ensure_csv_token(value: str | None, token: str) -> tuple[str | None, bool]:
+    tokens = _csv_tokens(value)
+    if token in tokens:
+        return value, False
+    tokens.append(token)
+    return ",".join(tokens), True
+
+
+def _as_nonempty_str(value: Any | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 class DatabricksSparkExecutor(BaseExecutor[SDF]):
@@ -34,6 +64,7 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         table_format: str | None = "parquet",
         table_options: dict[str, Any] | None = None,
     ):
+        extra_conf = dict(extra_conf or {})
         builder = SparkSession.builder.master(master).appName(app_name)
 
         warehouse_path: Path | None = None
@@ -44,8 +75,9 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
             warehouse_path.mkdir(parents=True, exist_ok=True)
             builder = builder.config("spark.sql.warehouse.dir", str(warehouse_path))
 
-        if catalog:
-            builder = builder.config("spark.sql.catalog.spark_catalog", catalog)
+        catalog_value = _as_nonempty_str(catalog)
+        if catalog_value:
+            builder = builder.config("spark.sql.catalog.spark_catalog", catalog_value)
 
         if extra_conf:
             for key, value in extra_conf.items():
@@ -55,6 +87,28 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         if use_hive_metastore:
             builder = builder.config("spark.sql.catalogImplementation", "hive")
             builder = builder.enableHiveSupport()
+
+        # Apply Delta configuration last, after all Spark configs are set.
+        wants_delta = (table_format or "").strip().lower() == "delta"
+        if wants_delta:
+            if configure_spark_with_delta_pip is None:
+                raise RuntimeError(
+                    "Delta table_format requested for DatabricksSparkExecutor, "
+                    "but 'delta-spark' is not installed. "
+                    "Install it with: pip install delta-spark"
+                )
+            builder = configure_spark_with_delta_pip(builder)
+            ext_key = "spark.sql.extensions"
+            existing_ext = _as_nonempty_str(extra_conf.get(ext_key))
+            merged_ext, changed = _ensure_csv_token(existing_ext, _DELTA_EXTENSION)
+            if changed or existing_ext is None:
+                builder = builder.config(ext_key, merged_ext)
+
+            catalog_key = "spark.sql.catalog.spark_catalog"
+            extra_catalog = _as_nonempty_str(extra_conf.get(catalog_key))
+            catalog_overridden = bool(catalog_value) or bool(extra_catalog)
+            if not catalog_overridden:
+                builder = builder.config(catalog_key, _DELTA_CATALOG)
 
         self.spark = builder.getOrCreate()
         # Lightweight testing shim so tests can call executor.con.execute("SQL")

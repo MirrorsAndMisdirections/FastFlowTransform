@@ -8,21 +8,20 @@ from collections.abc import Callable, Iterable
 from contextlib import suppress
 from pathlib import Path
 from time import perf_counter
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 from urllib.parse import unquote, urlparse
 
 import pandas as pd
-import yaml
 
 from fastflowtransform import storage
+from fastflowtransform.config.seeds import SeedsSchemaConfig, load_seeds_schema
 from fastflowtransform.logging import echo
+from fastflowtransform.settings import EngineType
 
 try:  # Optional Spark dependency
     from pyspark.errors.exceptions.base import AnalysisException as _SparkAnalysisException
 except Exception:  # pragma: no cover - Spark not installed
     _SparkAnalysisException = Exception  # type: ignore
-
-# If you use this in a CLI, your code elsewhere should provide _prepare_context.
 
 
 # ----------------------------- File I/O & Schema (dtypes) -----------------------------
@@ -37,20 +36,26 @@ def _read_seed_file(path: Path) -> pd.DataFrame:
     raise ValueError(f"Unsupported seed file format: {path.name}")
 
 
-def _apply_schema(df: pd.DataFrame, table: str, schema_cfg: dict | None) -> pd.DataFrame:
+def _apply_schema(
+    df: pd.DataFrame,
+    table: str,
+    schema_cfg: SeedsSchemaConfig | None,
+) -> pd.DataFrame:
     """
     Apply optional pandas dtypes from seeds/schema.yml for a given table key.
-    Expected structure:
+
+    The validated configuration is:
+
       dtypes:
         <table_key>:
           col_a: string
           col_b: int64
-    Soft-fails on casting errors to avoid blocking loads.
+
+    Casting errors are swallowed on purpose to avoid blocking seed loads.
     """
     if not schema_cfg:
         return df
-    cfg = schema_cfg.get("dtypes") or {}
-    dtypes: dict[str, str] = cfg.get(table) or {}
+    dtypes: dict[str, str] = schema_cfg.dtypes.get(table) or {}
     if not dtypes:
         return df
 
@@ -218,16 +223,42 @@ class SeedTarget(NamedTuple):
 
 
 def _engine_name_from_executor(executor: Any) -> str:
-    """Infer a human/CFG-facing engine name from the executor object."""
+    """
+    Infer a canonical engine name from the executor object.
+
+    Preference:
+      1) executor.engine_name (BaseExecutor-derived)
+      2) Spark hint → "databricks_spark"
+      3) SQLAlchemy dialect ("postgresql" → "postgres", "bigquery" → "bigquery")
+      4) DuckDB heuristic (executor.con present) → "duckdb"
+      5) "unknown" as last resort
+    """
+    # 1) BaseExecutor-style engine_name
+    engine_name = getattr(executor, "engine_name", None)
+    if isinstance(engine_name, str) and engine_name.strip():
+        return engine_name.strip()
+
+    # 2) Spark-style executor
     if getattr(executor, "spark", None) is not None:
-        return "spark"
+        return "databricks_spark"
+
+    # 3) SQLAlchemy-based executors
     eng = getattr(executor, "engine", None)
     if eng is not None:
-        name = getattr(getattr(eng, "dialect", None), "name", None)
-        if name:
-            return str(name)
+        dialect_name = getattr(getattr(eng, "dialect", None), "name", None)
+        if isinstance(dialect_name, str) and dialect_name:
+            low = dialect_name.lower()
+            if low.startswith("postgres"):
+                return "postgres"
+            if low.startswith("bigquery"):
+                return "bigquery"
+            return low
+
+    # 4) DuckDB-ish: has a .con (DuckDBPyConnection or similar)
     if getattr(executor, "con", None) is not None:
         return "duckdb"
+
+    # 5) Fallback
     return "unknown"
 
 
@@ -246,7 +277,7 @@ def _seed_id(seeds_dir: Path, path: Path) -> str:
 def _resolve_schema_and_table_by_cfg(
     seed_id: str,
     stem: str,
-    schema_cfg: dict | None,
+    schema_cfg: SeedsSchemaConfig | None,
     executor: Any,
     default_schema: str | None,
 ) -> tuple[str | None, str]:
@@ -270,12 +301,14 @@ def _resolve_schema_and_table_by_cfg(
     if not schema_cfg:
         return schema, table
 
-    targets: dict[str, dict] = schema_cfg.get("targets") or {}
+    targets = schema_cfg.targets
     engine = _engine_name_from_executor(executor)
 
     entry = targets.get(seed_id)
     if not entry:
-        entry = targets.get(seed_id.replace("/", "."))  # optional "raw.users" key
+        # Optional "raw.users" style key as a convenience
+        dotted_id = seed_id.replace("/", ".")
+        entry = targets.get(dotted_id)
 
     # stem-based only if present (uniqueness checked by caller)
     if not entry and stem in targets:
@@ -284,9 +317,10 @@ def _resolve_schema_and_table_by_cfg(
     if not entry:
         return schema, table
 
-    table = entry.get("table", table)
-    by_engine = entry.get("schema_by_engine") or {}
-    schema = by_engine.get(engine, entry.get("schema", schema))
+    table = entry.table or table
+    engine = _engine_name_from_executor(executor)
+    engine_key = cast(EngineType, engine)
+    schema = entry.schema_by_engine.get(engine_key) or entry.schema_ or schema
     return schema, table
 
 
@@ -371,16 +405,28 @@ def _handle_sqlalchemy(table: str, df: pd.DataFrame, executor: Any, schema: str 
     return True
 
 
-def _handle_spark(table: str, df: pd.DataFrame, executor: Any, schema: str | None) -> bool:
-    """Versucht Spark/Databricks zu erkennen und zu bedienen."""
-    spark = getattr(executor, "spark", None)
-    if spark is None:
-        return False
+def _spark_ident(name: str) -> str:
+    """Return a Spark-safe identifier (escapes backticks)."""
+    return name.replace("`", "``")
 
-    def _spark_ident(name: str) -> str:
-        return name.replace("`", "``")
 
+def _prepare_spark_target(
+    table: str,
+    schema: str | None,
+    executor: Any,
+    spark: Any,
+) -> tuple[str, str, Any, bool]:
+    """
+    Build Spark target identifiers and detect the table location.
+
+    Returns:
+        target_identifier: unquoted table identifier (db.table or table)
+        target_sql: quoted SQL identifier with backticks
+        target_location: filesystem location (may be None)
+        created_schema: whether a database schema was created implicitly
+    """
     created_schema = False
+
     if schema and not _is_qualified(table):
         spark.sql(f"CREATE DATABASE IF NOT EXISTS `{_spark_ident(schema)}`")
         created_schema = True
@@ -392,6 +438,137 @@ def _handle_spark(table: str, df: pd.DataFrame, executor: Any, schema: str | Non
     target_identifier = ".".join(parts)
     target_sql = ".".join(f"`{_spark_ident(p)}`" for p in parts)
     target_location = _spark_table_location(parts, spark)
+    return target_identifier, target_sql, target_location, created_schema
+
+
+def _write_spark_seed_to_path(
+    spark: Any,
+    target_identifier: str,
+    sdf: Any,
+    storage_meta: dict[str, Any],
+    table_format: str | None,
+    table_options: dict[str, Any],
+) -> str:
+    """Write the seed via a custom storage path configuration."""
+    storage.spark_write_to_path(
+        spark,
+        target_identifier,
+        sdf,
+        storage=storage_meta,
+        default_format=table_format,
+        default_options=table_options,
+    )
+    return "custom path"
+
+
+def _spark_write_table(
+    sdf: Any,
+    target_identifier: str,
+    table_format: str | None,
+    table_options: dict[str, Any],
+) -> None:
+    """Perform the actual Spark saveAsTable call with configured options."""
+    writer = sdf.write.mode("overwrite")
+    if table_format:
+        writer = writer.format(table_format)
+    if table_options:
+        writer = writer.options(**table_options)
+    writer.saveAsTable(target_identifier)
+
+
+def _reset_spark_table_and_location(
+    spark: Any,
+    target_sql: str,
+    target_location: Any,
+) -> str | None:
+    """
+    Drop the Spark table and remove the underlying location if possible.
+
+    Returns:
+        A cleanup hint string (e.g. 'reset location') or None.
+    """
+    with suppress(Exception):
+        spark.sql(f"DROP TABLE IF EXISTS {target_sql}")
+
+    cleanup_hint: str | None = None
+    if target_location and target_location.exists():
+        with suppress(Exception):
+            shutil.rmtree(target_location, ignore_errors=True)
+            cleanup_hint = "reset location"
+    return cleanup_hint
+
+
+def _write_spark_seed_to_table(
+    spark: Any,
+    sdf: Any,
+    target_identifier: str,
+    target_sql: str,
+    target_location: Any,
+    table_format: str | None,
+    table_options: dict[str, Any],
+) -> str | None:
+    """
+    Write the seed as a managed Spark table, handling common location issues.
+
+    Returns:
+        A cleanup hint string describing corrective actions, or None.
+    """
+    cleanup_hint = _reset_spark_table_and_location(spark, target_sql, target_location)
+
+    try:
+        _spark_write_table(sdf, target_identifier, table_format, table_options)
+        return cleanup_hint
+    except _SparkAnalysisException as exc:
+        message = str(exc)
+        if target_location and "LOCATION_ALREADY_EXISTS" in message.upper():
+            # Attempt to fix by resetting the table location and retrying once.
+            with suppress(Exception):
+                shutil.rmtree(target_location, ignore_errors=True)
+            cleanup_hint = "reset location"
+            _spark_write_table(sdf, target_identifier, table_format, table_options)
+            return cleanup_hint
+        raise RuntimeError(f"Spark seed load failed for {target_sql}: {exc}") from exc
+    except Exception as exc:  # pragma: no cover - generic safety net
+        raise RuntimeError(f"Spark seed load failed for {target_sql}: {exc}") from exc
+
+
+def _detect_spark_storage_format(
+    storage_meta: Any,
+    table_format: Any,
+) -> str:
+    """
+    Determine an effective storage format label (e.g. 'delta') from storage
+    metadata or executor configuration.
+    """
+    storage_format = ""
+    if isinstance(storage_meta, dict):
+        raw_fmt = storage_meta.get("format")
+        if isinstance(raw_fmt, str) and raw_fmt.strip():
+            storage_format = raw_fmt.strip().lower()
+
+    if not storage_format and isinstance(table_format, str) and table_format.strip():
+        storage_format = table_format.strip().lower()
+
+    return storage_format
+
+
+def _handle_spark(
+    table: str,
+    df: pd.DataFrame,
+    executor: Any,
+    schema: str | None,
+) -> bool:
+    """Try to detect and handle Spark/Databricks for seeding."""
+    spark = getattr(executor, "spark", None)
+    if spark is None:
+        return False
+
+    target_identifier, target_sql, target_location, created_schema = _prepare_spark_target(
+        table=table,
+        schema=schema,
+        executor=executor,
+        spark=spark,
+    )
 
     table_format = getattr(executor, "spark_table_format", None)
     table_options = getattr(executor, "spark_table_options", None) or {}
@@ -400,54 +577,38 @@ def _handle_spark(table: str, df: pd.DataFrame, executor: Any, schema: str | Non
 
     t0 = perf_counter()
     sdf = spark.createDataFrame(df)
-    cleanup_hint = None
 
+    cleanup_hint: str | None = None
     if storage_meta.get("path"):
-        storage.spark_write_to_path(
-            spark,
-            target_identifier,
-            sdf,
-            storage=storage_meta,
-            default_format=table_format,
-            default_options=table_options,
+        cleanup_hint = _write_spark_seed_to_path(
+            spark=spark,
+            target_identifier=target_identifier,
+            sdf=sdf,
+            storage_meta=storage_meta,
+            table_format=table_format,
+            table_options=table_options,
         )
-        cleanup_hint = "custom path"
     else:
-        with suppress(Exception):
-            spark.sql(f"DROP TABLE IF EXISTS {target_sql}")
-        if target_location and target_location.exists():
-            with suppress(Exception):
-                shutil.rmtree(target_location, ignore_errors=True)
-                cleanup_hint = "reset location"
-
-        def _write() -> None:
-            writer = sdf.write.mode("overwrite")
-            if table_format:
-                writer = writer.format(table_format)
-            if table_options:
-                writer = writer.options(**table_options)
-            writer.saveAsTable(target_identifier)
-
-        try:
-            _write()
-        except _SparkAnalysisException as exc:
-            message = str(exc)
-            if target_location and "LOCATION_ALREADY_EXISTS" in message.upper():
-                with suppress(Exception):
-                    shutil.rmtree(target_location, ignore_errors=True)
-                cleanup_hint = "reset location"
-                _write()
-            else:
-                raise RuntimeError(f"Spark seed load failed for {target_sql}: {exc}") from exc
-        except Exception as exc:
-            raise RuntimeError(f"Spark seed load failed for {target_sql}: {exc}") from exc
+        cleanup_hint = _write_spark_seed_to_table(
+            spark=spark,
+            sdf=sdf,
+            target_identifier=target_identifier,
+            target_sql=target_sql,
+            target_location=target_location,
+            table_format=table_format,
+            table_options=table_options,
+        )
 
     dt_ms = int((perf_counter() - t0) * 1000)
+
+    storage_format = _detect_spark_storage_format(storage_meta, table_format)
+    engine_label = f"spark/{storage_format}" if storage_format else "spark"
+
     _echo_seed_line(
         full_name=target_sql,
         rows=len(df),
         cols=df.shape[1],
-        engine="spark",
+        engine=engine_label,
         ms=dt_ms,
         created_schema=created_schema,
         action="replaced",
@@ -493,18 +654,20 @@ def seed_project(project_dir: Path, executor: Any, default_schema: str | None = 
     """
     Load every seed file under <project>/seeds recursively and materialize it.
 
-    Supports configuration in seeds/schema.yml:
-      - targets:
-          <seed-id>:                 # e.g., "raw/users" (path-based, recommended)
-            schema: <schema-name>    # global target schema
-            table: <table-name>      # optional rename
-            schema_by_engine:        # optional engine overrides
-              postgres: raw
-              duckdb: main
-      - dtypes:
-          <table-key>:
-            column_a: string
-            column_b: int64
+    Supports configuration in seeds/schema.yml (validated via Pydantic):
+
+      targets:
+        <seed-id>:                 # e.g., "raw/users" (path-based, recommended)
+          schema: <schema-name>    # global target schema
+          table: <table-name>      # optional rename
+          schema_by_engine:        # optional engine overrides (EngineType keys)
+            postgres: raw
+            duckdb: main
+
+      dtypes:
+        <table-key>:
+          column_a: string
+          column_b: int64
 
     Resolution priority for (schema, table):
       1) targets[<seed-id>]  (e.g., "raw/users")
@@ -522,10 +685,8 @@ def seed_project(project_dir: Path, executor: Any, default_schema: str | None = 
     if not seeds_dir.exists():
         return 0
 
-    schema_cfg = None
-    schema_file = seeds_dir / "schema.yml"
-    if schema_file.exists():
-        schema_cfg = yaml.safe_load(schema_file.read_text(encoding="utf-8"))
+    # Pydantic-validated seeds/schema.yml (or None if not present)
+    schema_cfg = load_seeds_schema(project_dir)
 
     # Collect seed files recursively to allow folder-based schema conventions.
     paths: list[Path] = [
@@ -554,11 +715,7 @@ def seed_project(project_dir: Path, executor: Any, default_schema: str | None = 
 
         # If schema.yml uses a bare stem while that stem exists multiple times,
         # force disambiguation.
-        if (
-            schema_cfg
-            and (schema_cfg.get("targets") or {}).get(stem)
-            and stem_counts.get(stem, 0) > 1
-        ):
+        if schema_cfg and stem in schema_cfg.targets and stem_counts.get(stem, 0) > 1:
             raise ValueError(
                 f'Seed stem "{stem}" appears multiple times. '
                 f"Please configure using the path-based seed ID "

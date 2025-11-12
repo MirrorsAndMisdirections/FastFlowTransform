@@ -4,20 +4,33 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fastflowtransform"
-version = "0.5.1"
-description = "FastFlowTransform PoC: SQL+Python Models, DAG, DuckDB executor"
+version = "0.5.15"
+description = "ython framework for SQL & Python data transformation, ETL pipelines, and dbt-style data modeling"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [ { name = "Marko Lekic", email = "you@example.com" } ]
 requires-python = ">=3.12"
-keywords = ["data", "etl", "elt", "analytics", "dbt", "streaming", "dag"]
+keywords = [
+  "etl",
+  "data transformation",
+  "sql",
+  "data modeling",
+  "duckdb",
+  "postgres",
+  "bigquery",
+  "spark",
+  "snowflake",
+  "dbt alternative",
+]
 classifiers = [
   "Programming Language :: Python :: 3",
-  "License :: OSI Approved :: Apache Software License",
-  "Operating System :: OS Independent",
-  "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
+  "Topic :: Database",
   "Topic :: Software Development :: Build Tools",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+  "Operating System :: OS Independent",
+  "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = [
   "typer>=0.12",
@@ -37,6 +50,7 @@ dependencies = [
   "snowflake-snowpark-python>=1.40.0",
   "bigframes>=2.24.0",
   "httpx>=0.28.1",
+  "delta-spark>=4.0.0",
 ]
 
 [project.optional-dependencies]
@@ -63,8 +77,10 @@ docs = [
 
 [project.urls]
 Homepage = "https://github.com/MirrorsAndMisdirections/FastFlowTransform"
-Issues = "https://github.com/MirrorsAndMisdirections/FastFlowTransform/issues"
+Documentation = "https://fastflowtransform.com"
 Repository = "https://github.com/MirrorsAndMisdirections/FastFlowTransform.git"
+Source = "https://github.com/MirrorsAndMisdirections/fastflowtransform"
+Issues = "https://github.com/MirrorsAndMisdirections/fastflowtransform/issues"
 
 [project.scripts]
 fft = "fastflowtransform.cli:app"

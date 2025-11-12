@@ -6,7 +6,6 @@ from fastflowtransform.schema_loader import load_schema_tests
 
 
 @pytest.mark.unit
-@pytest.mark.schema
 def test_parse_schema_yaml_column_tests(tmp_path: Path):
     (tmp_path / "models").mkdir(parents=True)
     (tmp_path / "models" / "users_enriched.yml").write_text(

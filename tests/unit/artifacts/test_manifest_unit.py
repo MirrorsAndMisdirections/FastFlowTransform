@@ -8,7 +8,6 @@ from fastflowtransform.core import REGISTRY
 
 
 @pytest.mark.unit
-@pytest.mark.artifacts
 def test_manifest_minimal(tmp_path: Path):
     (tmp_path / "models").mkdir(parents=True)
     (tmp_path / "models" / "m.ff.sql").write_text("select 1 as x", encoding="utf-8")

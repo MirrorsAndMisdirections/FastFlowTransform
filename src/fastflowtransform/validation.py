@@ -7,10 +7,6 @@ import pandas as pd
 
 
 def validate_required_columns(node_name: str, inputs: Any, requires: dict[str, set[str]]) -> None:
-    """
-    inputs: entweder ein DataFrame (bei 1 Dep) oder dict[str, DataFrame] (bei >1 Deps)
-    requires: Mapping physische_relations_name -> set[columns]
-    """
     if not requires:
         return
     errors = []

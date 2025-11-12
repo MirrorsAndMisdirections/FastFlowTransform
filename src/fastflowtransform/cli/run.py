@@ -1,3 +1,4 @@
+# fastflowtransform/cli/run.py
 from __future__ import annotations
 
 import os
@@ -168,10 +169,56 @@ class _RunEngine:
         return f"{namespace}.{rel}"
 
     def format_run_label(self, name: str) -> str:
+        """
+        Build the human-facing label for run logs, e.g.:
+          fct_events_sql_inline.ff [delta] (catalog.schema.fct_events_sql_inline)
+
+        The storage format is resolved from:
+          1) per-model storage config (project.yml → models.storage / meta.storage),
+          2) engine defaults (e.g. Databricks/Spark table_format) as a fallback.
+
+        For database engines like DuckDB/Postgres we intentionally hide the
+        underlying storage format (e.g. 'parquet') to avoid confusing output.
+        """
         qualified = self._qualified_target(name)
+        engine = (self.ctx.profile.engine or "").lower()
+
+        # 1) per-model storage.format from meta (preferred)
+        fmt_from_meta: str | None = None
+        try:
+            node = REGISTRY.get_node(name)
+            meta = getattr(node, "meta", {}) or {}
+            storage_cfg = meta.get("storage") or {}
+            if isinstance(storage_cfg, dict):
+                val = storage_cfg.get("format")
+                if isinstance(val, str) and val.strip():
+                    fmt_from_meta = val.strip()
+        except Exception:
+            fmt_from_meta = None
+
+        fmt: str | None = fmt_from_meta
+
+        # 2) engine-level default format (e.g. Spark table_format) as fallback.
+        # Only meaningful for Spark-like engines.
+        if fmt is None and engine in {"databricks_spark", "spark"}:
+            try:
+                executor, _, _ = self.shared
+                default_fmt = getattr(executor, "spark_table_format", None)
+                if isinstance(default_fmt, str) and default_fmt.strip():
+                    fmt = default_fmt.strip()
+            except Exception:
+                fmt = None
+
+        # For database engines (DuckDB/Postgres), we do not show a format suffix
+        # at all to avoid misleading '[parquet]' labels.
+        if engine in {"duckdb", "postgres", "postgresql"}:
+            fmt_suffix = ""
+        else:
+            fmt_suffix = f" [{fmt}]" if fmt else ""
+
         if qualified:
-            return f"{name} ({qualified})"
-        return name
+            return f"{name}{fmt_suffix} ({qualified})"
+        return f"{name}{fmt_suffix}"
 
     def run_node(self, name: str) -> None:
         node = REGISTRY.nodes[name]
@@ -391,7 +438,7 @@ def _run_schedule(engine_, lvls, jobs, keep_going, ctx):
         on_error=None,
         logger=logq,
         engine_abbr=_abbr(ctx.profile.engine),
-        name_width=88,
+        name_width=100,
         name_formatter=engine_.format_run_label,
     )
 

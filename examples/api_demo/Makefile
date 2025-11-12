@@ -108,7 +108,7 @@ demo-open:
 	fi
 
 demo: clean
-	@echo "== 🚀 R1 Demo (DuckDB) =="
+	@echo "== 🚀 API Demo (DuckDB) =="
 	@echo "Profile=$(PROFILE_ENV)  DB=$(DB)  PROJECT=$(PROJECT)"
 	+$(MAKE) seed
 	+$(MAKE) run

@@ -16,7 +16,6 @@ import fastflowtransform.cli.sync_db_comments_cmd as mod
 
 
 @pytest.mark.unit
-@pytest.mark.cli
 def test_strip_html_for_comment_removes_tags_and_collapses_spaces():
     html = "<p>Hello <b>World</b></p>  <br>   again"
     out = mod._strip_html_for_comment(html)
@@ -24,19 +23,16 @@ def test_strip_html_for_comment_removes_tags_and_collapses_spaces():
 
 
 @pytest.mark.unit
-@pytest.mark.cli
 def test_strip_html_for_comment_none():
     assert mod._strip_html_for_comment(None) == ""
 
 
 @pytest.mark.unit
-@pytest.mark.cli
 def test_pg_quote_ident_escapes_quotes():
     assert mod._pg_quote_ident('my"table') == '"my""table"'
 
 
 @pytest.mark.unit
-@pytest.mark.cli
 @pytest.mark.parametrize(
     "schema,relation,expected",
     [
@@ -50,7 +46,6 @@ def test_pg_fq_table(schema, relation, expected):
 
 
 @pytest.mark.unit
-@pytest.mark.cli
 def test_sql_literal_escapes_single_quotes():
     assert mod._sql_literal("O'Reilly") == "'O''Reilly'"
 
@@ -61,7 +56,6 @@ def test_sql_literal_escapes_single_quotes():
 
 
 @pytest.mark.unit
-@pytest.mark.cli
 def test_sync_comments_postgres_dry_run(capsys):
     intents = [
         {"kind": "table", "relation": "users", "text": "Users table"},
@@ -77,7 +71,6 @@ def test_sync_comments_postgres_dry_run(capsys):
 
 
 @pytest.mark.unit
-@pytest.mark.cli
 def test_sync_comments_postgres_executes_on_engine(capsys):
     # fake sqlalchemy engine
     fake_conn = MagicMock()
@@ -107,7 +100,6 @@ def test_sync_comments_postgres_executes_on_engine(capsys):
 
 
 @pytest.mark.unit
-@pytest.mark.cli
 def test_sync_comments_snowflake_dry_run(capsys):
     intents = [
         {"kind": "table", "relation": "MY_DB.MY_TBL", "text": "Some table"},
@@ -123,7 +115,6 @@ def test_sync_comments_snowflake_dry_run(capsys):
 
 
 @pytest.mark.unit
-@pytest.mark.cli
 def test_sync_comments_snowflake_with_session():
     fake_session = MagicMock()
     fake_exec = SimpleNamespace(session=fake_session)
@@ -143,7 +134,6 @@ def test_sync_comments_snowflake_with_session():
 
 
 @pytest.mark.unit
-@pytest.mark.cli
 def test_sync_comments_snowflake_with_execute_method():
     exec_mock = SimpleNamespace(execute=MagicMock())
 
@@ -162,7 +152,6 @@ def test_sync_comments_snowflake_with_execute_method():
 
 
 @pytest.mark.unit
-@pytest.mark.cli
 def test_sync_db_comments_no_intents_exits(monkeypatch):
     """
     Fall: es gibt gar keine Descriptions -> sofort Exit(0) mit gelb.
@@ -188,7 +177,6 @@ def test_sync_db_comments_no_intents_exits(monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.cli
 def test_sync_db_comments_postgres_path(monkeypatch):
     # 1) Kontext vorbereiten
     fake_exec = MagicMock()
@@ -246,7 +234,6 @@ def test_sync_db_comments_postgres_path(monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.cli
 def test_sync_db_comments_snowflake_path(monkeypatch):
     fake_exec = MagicMock()
     fake_ctx = SimpleNamespace(
@@ -292,7 +279,6 @@ def test_sync_db_comments_snowflake_path(monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.cli
 def test_sync_db_comments_unsupported_engine(monkeypatch, capsys):
     fake_exec = MagicMock()
     fake_ctx = SimpleNamespace(

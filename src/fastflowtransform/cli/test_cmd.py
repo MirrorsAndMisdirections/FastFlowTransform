@@ -11,7 +11,6 @@ from typing import Any
 import typer
 import yaml
 
-from fastflowtransform import testing
 from fastflowtransform.cli.bootstrap import _get_test_con, _prepare_context
 from fastflowtransform.cli.options import (
     EngineOpt,
@@ -27,7 +26,7 @@ from fastflowtransform.dag import topo_sort
 from fastflowtransform.errors import ModelExecutionError
 from fastflowtransform.logging import echo
 from fastflowtransform.schema_loader import Severity, TestSpec, load_schema_tests
-from fastflowtransform.test_registry import TESTS
+from fastflowtransform.testing.registry import TESTS
 
 
 @dataclass
@@ -117,11 +116,11 @@ def _apply_legacy_tag_filter(
     legacy_tag = tokens[0]
 
     def has_tag(t: Any) -> bool:
-        # Dict (altes Format)
+        # Dict (old format)
         if isinstance(t, dict):
             tags = t.get("tags") or []
             return (legacy_tag in tags) if isinstance(tags, list) else (legacy_tag == tags)
-        # TestSpec (neues Schema)
+        # TestSpec (new Schema)
         if isinstance(t, TestSpec):
             return legacy_tag in (t.tags or [])
         return False
@@ -164,13 +163,9 @@ def _run_dq_tests(con: Any, tests: Iterable[Any]) -> list[DQResult]:
                     raise typer.BadParameter("Missing or invalid 'table' in test config")
                 display_table = table_for_exec
 
-        # Dispatch via registry if available; otherwise fallback to legacy map
+        # Dispatch via registry
         t0 = time.perf_counter()
-        if kind in TESTS:
-            ok, msg, example = TESTS[kind](con, table_for_exec, col, params)
-        else:
-            ok, msg = _exec_test_kind(con, kind, params, table_for_exec, col)
-            example = None
+        ok, msg, example = TESTS[kind](con, table_for_exec, col, params)
         ms = int((time.perf_counter() - t0) * 1000)
 
         # Build short parameter display for the summary line
@@ -190,69 +185,6 @@ def _run_dq_tests(con: Any, tests: Iterable[Any]) -> list[DQResult]:
             )
         )
     return results
-
-
-def _exec_test_kind(con: Any, kind: str, t: dict, table: Any, col: Any) -> tuple[bool, str | None]:
-    # Guard for column-required tests in legacy path
-    def _need_col() -> str:
-        if not isinstance(col, str) or not col:
-            raise typer.BadParameter(f"Test '{kind}' requires a non-empty 'column' parameter")
-        return col
-
-    try_map = {
-        "not_null": lambda: testing.not_null(con, table, _need_col()),
-        "unique": lambda: testing.unique(con, table, _need_col()),
-        "greater_equal": lambda: testing.greater_equal(
-            con, table, _need_col(), t.get("threshold", 0)
-        ),
-        "non_negative_sum": lambda: testing.non_negative_sum(con, table, _need_col()),
-        "row_count_between": lambda: testing.row_count_between(
-            con, table, t.get("min", 1), t.get("max")
-        ),
-        "freshness": lambda: testing.freshness(con, table, _need_col(), t["max_delay_minutes"]),
-        "accepted_values": lambda: testing.accepted_values(
-            con, table, col, values=t.get("values", []), where=t.get("where")
-        ),
-        "reconcile_equal": lambda: testing.reconcile_equal(
-            con,
-            t["left"],
-            t["right"],
-            abs_tolerance=t.get("abs_tolerance"),
-            rel_tolerance_pct=t.get("rel_tolerance_pct"),
-        ),
-        "reconcile_ratio_within": lambda: testing.reconcile_ratio_within(
-            con,
-            t["left"],
-            t["right"],
-            min_ratio=t["min_ratio"],
-            max_ratio=t["max_ratio"],
-        ),
-        "reconcile_diff_within": lambda: testing.reconcile_diff_within(
-            con,
-            t["left"],
-            t["right"],
-            max_abs_diff=t["max_abs_diff"],
-        ),
-        "reconcile_coverage": lambda: testing.reconcile_coverage(
-            con,
-            t["source"],
-            t["target"],
-            source_where=t.get("source_where"),
-            target_where=t.get("target_where"),
-        ),
-    }
-
-    fn = try_map.get(kind)
-    if fn is None:
-        raise typer.BadParameter(f"Unknown test type: {kind}")
-
-    try:
-        fn()
-        return True, None
-    except testing.TestFailure as e:
-        return False, str(e)
-    except Exception as e:
-        return False, f"Unexpected error: {e.__class__.__name__}: {e}"
 
 
 def _print_summary(results: list[DQResult]) -> None:
@@ -318,7 +250,6 @@ def test(
     select: SelectOpt = None,
     skip_build: SkipBuildOpt = False,
 ) -> None:
-    # _ensure_logging()
     ctx = _prepare_context(project, env_name, engine, vars)
     tokens, pred = _compile_selector(select)
     has_model_matches = any(pred(node) for node in REGISTRY.nodes.values())
