@@ -13,7 +13,6 @@ def test_python_model_materialized_as_view(tmp_path: Path, monkeypatch):
     # Arrange: minimal project
     m = tmp_path / "models"
     m.mkdir()
-    (tmp_path / "sources.yml").write_text("{}", encoding="utf-8")
 
     # Seed base table via SQL model
     (m / "base.ff.sql").write_text("select 1 as id, 'x@gmail.com' as email;", encoding="utf-8")

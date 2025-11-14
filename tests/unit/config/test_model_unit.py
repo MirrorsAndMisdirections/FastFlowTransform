@@ -37,14 +37,22 @@ def test_validate_model_meta_rejects_unknown_keys():
 
 @pytest.mark.unit
 def test_validate_model_meta_incremental_bool_and_dict_variants():
-    # incremental: true
-    cfg_bool = validate_model_meta({"incremental": True})
+    # incremental: true + minimal hints (freshness + unique key)
+    cfg_bool = validate_model_meta(
+        {
+            "incremental": True,
+            "updated_at": "updated_at",
+            "unique_key": ["id"],
+        }
+    )
     assert isinstance(cfg_bool, ModelConfig)
     assert cfg_bool.is_incremental_enabled() is True
     assert isinstance(cfg_bool.incremental, IncrementalConfig)
     assert cfg_bool.incremental.enabled is True
+    assert cfg_bool.updated_at == "updated_at"
+    assert cfg_bool.unique_key == ["id"]
 
-    # incremental: {enabled: False, ...}
+    # incremental: {enabled: False, ...} → allowed without hints
     cfg_dict = validate_model_meta(
         {
             "incremental": {

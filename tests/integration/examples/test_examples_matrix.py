@@ -19,10 +19,22 @@ def _run_cmd(cmd: list[str], cwd: Path, extra_env: dict[str, str] | None = None)
         raise CalledProcessError(proc.returncode, cmd, proc.stdout, proc.stderr)
 
 
-ENGINE_PARAMS = [
-    pytest.param("duckdb", marks=pytest.mark.duckdb, id="duckdb"),
-    pytest.param("postgres", marks=pytest.mark.postgres, id="postgres"),
-    pytest.param("databricks_spark", marks=pytest.mark.databricks_spark, id="databricks_spark"),
+ENGINE_MARKS = {
+    "duckdb": pytest.mark.duckdb,
+    "postgres": pytest.mark.postgres,
+    "databricks_spark": pytest.mark.databricks_spark,
+}
+
+# build only the actually-supported (example, engine) combinations
+EXAMPLE_ENGINE_PARAMS = [
+    pytest.param(
+        example,
+        engine,
+        id=f"{example.name}[{engine}]",
+        marks=ENGINE_MARKS[engine],
+    )
+    for example in EXAMPLES
+    for engine in example.env_by_engine
 ]
 
 ENGINE_ENV_FIXTURE = {
@@ -33,12 +45,9 @@ ENGINE_ENV_FIXTURE = {
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("engine", ENGINE_PARAMS)
-@pytest.mark.parametrize("example", EXAMPLES, ids=lambda e: e.name)
+@pytest.mark.example
+@pytest.mark.parametrize("example,engine", EXAMPLE_ENGINE_PARAMS)
 def test_examples_with_all_engines(example, engine, request):
-    if engine not in example.env_by_engine:
-        pytest.skip(f"{example.name} does not support engine={engine}")
-
     fixture_name = ENGINE_ENV_FIXTURE[engine]
     engine_env: dict[str, str] = request.getfixturevalue(fixture_name)
 

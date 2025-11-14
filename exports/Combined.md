@@ -28,10 +28,15 @@ Welcome! This page is your starting point for FastFlowTransform docs. Pick the t
 - [Sources Declaration](./Sources.md)
 - [Project Configuration](./Project_Config.md)
 - [State Selection (changed & results)](./State_Selection.md)
-- [Basic Demo Overview](./examples/Basic_Demo.md)
-- [API Demo](./examples/API_Demo.md)
+- [Basic Demo](./examples/Basic_Demo.md)
+- [Materializations Demo](./examples/Materializations_Demo.md)
+- [Data Quality Tests Demo](./examples/DQ_Demo.md)
+- [Macros Demo](./examples/Macros_Demo.md)
+- [Cache Demo](./examples/Cache_Demo.md)
 - [Environment Matrix Demo](./examples/Environment_Matrix.md)
-- [Incremental & Delta demo](examples/Incremental_Demo.md)
+- [Incremental & Delta Demo](examples/Incremental_Demo.md)
+- [Local Engine Setup](./examples/Local_Engine_Setup.md)
+- [API Demo](./examples/API_Demo.md)
 - [Developer Guide](./Technical_Overview.md#part-ii-architecture-internals)
 
 ## Table of Contents
@@ -1357,12 +1362,12 @@ Return to the [Docs Hub](./index.md) or switch to the [User/Developer Guide](./T
 
 <!-- >>> FILE: Cache_and_Parallelism.md >>> -->
 
-### 🆕 `docs/Cache_and_Parallelism.md`
+# Parallelism & Cache
 
-````markdown
-# Parallelism & Cache (FastFlowTransform v0.3)
+**TL;DR:** FastFlowTransform executes models in parallel DAG levels and uses deterministic
+fingerprints to skip unchanged nodes — while a separate HTTP cache accelerates API models.
 
-FastFlowTransform 0.3 introduces a level-wise parallel scheduler and a build cache driven by stable fingerprints. This document explains **how parallel execution works**, **when nodes are skipped**, the exact **fingerprint formula**, and the **meta table** written after successful builds.
+FastFlowTransform introduces a level-wise parallel scheduler and a build cache driven by stable fingerprints. This document explains **how parallel execution works**, **when nodes are skipped**, the exact **fingerprint formula**, and the **meta table** written after successful builds.
 
 ---
 
@@ -1393,7 +1398,7 @@ fft run . --env dev --jobs 4
 
 # Keep tasks in the same level running even if one fails
 fft run . --env dev --jobs 4 --keep-going
-````
+```
 
 ---
 
@@ -1418,6 +1423,23 @@ A node is skipped iff:
 2. The **physical relation exists** on the target engine.
 
 If the relation was dropped externally, FastFlowTransform will **rebuild** even if the fingerprint matches.
+
+### HTTP Response Cache
+
+In addition to the build cache, FastFlowTransform provides an **HTTP response cache** for API models using
+`fastflowtransform.api.http.get_df(...)`.
+
+- **Purpose:** Avoid redundant API calls and support offline mode.
+- **Location:** Controlled by `FF_HTTP_CACHE_DIR` (e.g. `.local/http-cache`).
+- **Controls (environment):**
+  - `FF_HTTP_ALLOWED_DOMAINS`: comma-separated list of hosts allowed to cache.
+  - `FF_HTTP_MAX_RPS`, `FF_HTTP_MAX_RETRIES`, `FF_HTTP_TIMEOUT`: rate limiting & retry policy.
+  - `FF_HTTP_OFFLINE=1`: run in offline mode — serve only from cache, no network calls.
+- **CLI visibility:** Each run writes HTTP stats (`requests`, `cache_hits`, `bytes`, `used_offline`)
+  to `.fastflowtransform/target/run_results.json`.
+- **Makefile helpers:** see `make api-show-http` in the API demo to inspect HTTP cache usage.
+
+> This cache is independent from the build cache; it stores API responses, not SQL or fingerprints.
 
 ---
 
@@ -1446,6 +1468,10 @@ Fingerprints are stable hashes that change on any relevant input:
 * Same inputs ⇒ same hash.
 * Minimal change in SQL/function ⇒ different hash.
 * Dependency changes propagate downstream.
+
+> **Note:** The active engine and profile name are part of the fingerprint.
+> Switching from `duckdb` to `postgres` automatically invalidates the cache, so cross-engine runs
+> never reuse outdated fingerprints.
 
 ---
 
@@ -2717,6 +2743,608 @@ Failures include the generated SQL (where available) to simplify debugging. Use 
 
 
 
+<!-- >>> FILE: CLI_Guide.md >>> -->
+
+# CLI Guide
+
+FastFlowTransform’s CLI is the entry point for seeding data, running DAGs, generating docs, syncing metadata, and executing quality tests. This guide summarizes the day-to-day commands and how they fit together. See `src/fastflowtransform/cli.py` for Typer definitions.
+
+## Core Commands
+
+| Command | Purpose |
+|---------|---------|
+| `fft seed <project> [--env dev]` | Materialize CSV/Parquet seeds into the configured engine. |
+| `fft run <project> [--env dev]` | Execute the DAG (obeys cache + parallel flags). |
+| `fft dag <project> --html` | Render the DAG graph/site for quick inspection. |
+| `fft docgen <project> --out site/docs` | Generate the full documentation bundle (graph + model pages + optional JSON). |
+| `fft test <project> [--env dev]` | Run schema/data-quality tests defined in `project.yml` or schema YAML files. |
+| `fft utest <project>` | Execute unit tests defined under `tests/unit/*.yml`. |
+| `fft sync-db-comments <project>` | Push model/column descriptions into Postgres or Snowflake comments. |
+
+Use `--select` to scope `run`, `dag`, or `test` commands (e.g. `state:modified`, `tag:finance`, `result:error`). Environment overrides rely on the selected profile in `profiles.yml` or the `FF_*` variables.
+
+## HTTP/API Helpers
+
+Python models can make HTTP calls via `fastflowtransform.api.http`. When you need examples, head over to `docs/Api_Models.md` for `get_json`, `get_df`, pagination helpers, caching, and offline modes.
+
+## DAG & Documentation
+
+- Narrow the graph with `fft dag ... --select <pattern>` (for example `state:modified` or `tag:finance`). Combined with `--html` this produces a focused mini-site under `<project>/docs/index.html`.
+- Control schema introspection via `--with-schema/--no-schema`. Use `--no-schema` when the executor should avoid fetching column metadata (for example, BigQuery without sufficient permissions).
+- `fft docgen` renders the DAG, model pages, and an optional JSON manifest in one command. Append `--open-source` to open `index.html` in your default browser after rendering.
+
+## Sync Database Comments
+
+`fft sync-db-comments <project> --env <env>` pushes model and column descriptions from project YAML or Markdown into database comments. The command currently supports Postgres and Snowflake Snowpark:
+
+- Start with `--dry-run` to review the generated `COMMENT` statements.
+- Postgres honors `profiles.yml -> postgres.db_schema` (and any `FF_PG_SCHEMA` override).
+- Snowflake reuses the session or connection exposed by the executor.
+
+If no descriptions are found, the command exits without making changes.
+
+
+
+<!-- >>> FILE: Auto_Docs.md >>> -->
+
+# Auto-Docs & Lineage
+
+FastFlowTransform can generate a lightweight documentation site (DAG + model detail pages) plus an optional JSON manifest for external tooling.
+
+## Commands
+
+```bash
+# Classic
+fft dag . --env dev --html
+
+# Convenience wrapper (loads schema + descriptions + lineage, can emit JSON)
+fft docgen . --env dev --out site/docs --emit-json site/docs/docs_manifest.json
+```
+
+Add `--open-source` if you want the default browser to open the rendered `index.html` immediately.
+
+## Descriptions
+
+Descriptions can be provided in YAML (`project.yml`) and/or Markdown files. Markdown has higher priority.
+
+YAML in `project.yml`:
+
+```yaml
+docs:
+  models:
+    users.ff:
+      description: "Raw users table imported from CRM."
+      columns:
+        id: "Primary key."
+        email: "User email address."
+    users_enriched:
+      description: "Adds gmail flag."
+      columns:
+        is_gmail: "True if email ends with @gmail.com"
+```
+
+Markdown overrides YAML when present:
+
+```
+<project>/docs/models/<model>.md
+<project>/docs/columns/<relation>/<column>.md
+```
+
+Optional front matter is ignored for now (title/tags may be used later).
+
+## Column Lineage
+
+- SQL models: expressions like `col`, `alias AS out`, `upper(u.email) AS email_upper)` are parsed; `u` must come from a `FROM ... AS u` clause that resolves to a relation. Functions mark lineage as *transformed*.
+- Python (pandas) models: simple patterns like `rename`, `out["x"] = df["y"]`, `assign(x=...)` are recognized.
+- Override hints in YAML when the heuristic is insufficient:
+
+```yaml
+docs:
+  models:
+    mart_orders_enriched:
+      lineage:
+        email_upper:
+          from: [{ table: users, column: email }]
+          transformed: true
+```
+
+## JSON Manifest
+
+The optional manifest (via `--emit-json`) includes models, relations, descriptions, columns (with nullable/dtype), and lineage per column—useful for custom doc portals or CI checks.
+
+## Notes
+
+- Schema introspection currently supports DuckDB and Postgres. For other engines, the Columns card may be empty.
+- Lineage is optional; when uncertain, entries fall back to “unknown” and never fail doc generation.
+
+
+
+<!-- >>> FILE: Logging.md >>> -->
+
+# Logging & Verbosity
+
+FastFlowTransform exposes uniform logging controls across all CLI commands plus a dedicated SQL debug channel for tracing rendered SQL, dependency loading, and auxiliary queries.
+
+## CLI Flags
+
+- `-q` / `--quiet` → only errors (`ERROR`)
+- *(default)* → concise warnings (`WARNING`)
+- `-v` / `--verbose` → progress/info (`INFO`)
+- `-vv` → full debug (`DEBUG`) including SQL debug output
+
+`-vv` automatically flips on the SQL debug channel (same effect as `FFT_SQL_DEBUG=1`).
+
+## SQL Debug Channel
+
+Enable it to inspect Python-model inputs, dependency columns, and helper SQL emitted by data-quality checks:
+
+```bash
+# full debug (recommended)
+fft run . -vv
+
+# equivalent using the env var (legacy behaviour retained)
+FFT_SQL_DEBUG=1 fft run .
+```
+
+## Usage Patterns
+
+```bash
+fft run . -q     # quiet (errors only)
+fft run .        # default (concise)
+fft run . -v     # verbose progress (model names, executor info)
+fft run . -vv    # full debug + SQL channel
+```
+
+## Parallel Logging UX
+
+- Each node emits start/end lines with duration, truncated name, and engine abbreviation (DUCK/PG/BQ/…).
+- Output remains line-stable via a thread-safe log queue; per-level summaries trail each run.
+- Failures still surface the familiar “error block” per node for quick diagnosis.
+
+**Notes**
+
+- SQL debug output routes through the `fastflowtransform.sql` logger; use `-vv` or `FFT_SQL_DEBUG=1` to reveal it.
+- Existing projects do not need changes: the environment variable keeps working even without `-vv`.
+
+
+
+<!-- >>> FILE: Unit_Tests.md >>> -->
+
+# Model Unit Tests (`fft utest`)
+
+`fft utest` executes a single model in isolation, loading only the inputs you provide and comparing the result to an expected dataset. It works for SQL and Python models and runs against DuckDB or Postgres by default.
+
+## Cache Modes
+
+`fft utest --cache {off|ro|rw}` (default: `off`)
+
+- `off`: deterministic, never skips.
+- `ro`: skip on cache hit; on miss, build but **do not write** cache.
+- `rw`: skip on hit; on miss, build **and write** fingerprint.
+
+Notes:
+
+- UTests key the cache with `profile="utest"`.
+- Fingerprints include case inputs (CSV content hash / inline rows), so changing inputs invalidates the cache.
+- `--reuse-meta` is currently a reserved flag: exposed in the CLI, acts as a no-op today, and will enable future meta-table optimizations.
+
+## Why Use UTests?
+
+- Fast feedback on transformation logic without full DAG runs.
+- Small, reproducible fixtures (rows inline or external CSV).
+- Engine-agnostic: swap DuckDB/Postgres to spot dialect differences.
+
+## Folder Layout
+
+Specs live under `<project>/tests/unit/*.yml` relative to the project root (the directory passed to the CLI that contains `models/`):
+
+```
+your-project/
+├── models/
+│   ├── users.ff.sql
+│   ├── users_enriched.ff.py
+│   └── mart_users.ff.sql
+└── tests/
+    └── unit/
+        ├── users_enriched.yml
+        └── mart_users.yml
+```
+
+## YAML DSL (with `defaults`)
+
+Each file targets one logical node (the DAG name). Defaults are deep-merged into every case so you can share inputs/expectations and override per scenario.
+
+```yaml
+# tests/unit/users_enriched.yml
+model: users_enriched
+
+defaults:
+  inputs:
+    users:
+      rows:
+        - {id: 1, email: "a@example.com"}
+        - {id: 2, email: "b@gmail.com"}
+  expect:
+    relation: users_enriched
+    order_by: [id]
+
+cases:
+  - name: basic_gmail_flag
+    expect:
+      rows:
+        - {id: 1, email: "a@example.com", is_gmail: false}
+        - {id: 2, email: "b@gmail.com",   is_gmail: true}
+
+  - name: override_inputs
+    inputs:
+      users:
+        rows:
+          - {id: 3, email: "c@hotmail.com"}
+          - {id: 4, email: "d@gmail.com"}
+    expect:
+      rows:
+        - {id: 3, email: "c@hotmail.com", is_gmail: false}
+        - {id: 4, email: "d@gmail.com",   is_gmail: true}
+```
+
+SQL models use the file stem (including `.ff`) as `model`. Provide expected relation names that match the materialized table/view:
+
+```yaml
+# tests/unit/mart_users.yml
+model: mart_users.ff
+
+defaults:
+  inputs:
+    users_enriched:
+      rows:
+        - {id: 1, email: "a@example.com", is_gmail: false}
+        - {id: 2, email: "b@gmail.com",   is_gmail: true}
+  expect:
+    relation: mart_users
+    order_by: [id]
+
+cases:
+  - name: passthrough_columns
+    expect:
+      rows:
+        - {id: 1, email: "a@example.com", is_gmail: false}
+        - {id: 2, email: "b@gmail.com",   is_gmail: true}
+```
+
+For multi-dependency models, include every physical relation name (what `relation_for(dep)` returns):
+
+```yaml
+model: mart_orders_enriched
+defaults:
+  inputs:
+    users_enriched:
+      rows:
+        - {id: 1, email: "x@gmail.com", is_gmail: true}
+    orders:
+      rows:
+        - {order_id: 10, user_id: 1, amount: 19.9}
+        - {order_id: 11, user_id: 1, amount: -1.0}
+cases:
+  - name: join_and_flag
+    expect:
+      any_order: true
+      rows:
+        - {order_id: 10, user_id: 1, email: "x@gmail.com", is_gmail: true, amount: 19.9, valid_amt: true}
+        - {order_id: 11, user_id: 1, email: "x@gmail.com", is_gmail: true, amount: -1.0, valid_amt: false}
+```
+
+## Input Formats
+
+- `rows`: inline dictionaries per row.
+- `csv`: reference a CSV file (relative paths allowed).
+
+Keys under `inputs` are physical relations; use `relation_for('users.ff')` if unsure.
+
+## Expected Output & Comparison
+
+- `relation`: actual table/view name produced by the model (defaults to `relation_for(model)`).
+- Ordering: `order_by: [...]` or `any_order: true`.
+- Columns: `ignore_columns: [...]`, `subset: true`.
+- Numeric tolerance: `approx: true` or `approx: { col: 1e-9, other_col: 0.01 }`
+  (numbers can be plain `1e-9` or quoted; they are cast to float).
+
+## Running UTests
+
+```bash
+fft utest .                      # discover all specs
+fft utest . --env dev            # use a specific profile
+fft utest . --model users_enriched
+fft utest . --model mart_orders_enriched --case join_and_flag
+fft utest . --path tests/unit/users_enriched.yml
+```
+
+Override the executor for all specs (ensure credentials/DSNs are set):
+
+```bash
+export FF_PG_DSN="postgresql+psycopg://postgres:postgres@localhost:5432/ffdb"
+export FF_PG_SCHEMA="public"
+fft utest . --engine postgres
+```
+
+Executor precedence (highest → lowest): CLI `--engine`, YAML `engine:` (optional), `profiles.yml`, environment overrides.
+
+## Design Notes
+
+- Only the target model runs; supply all upstream relations the model expects.
+- `defaults` deep-merge: dicts merge, lists/scalars overwrite.
+- Results compare as DataFrames with configurable order, subsets, ignored columns, and numeric tolerances.
+- Exit codes: `0` for success, `2` when at least one case fails (compact CSV-style diff is printed).
+
+## CI Example
+
+```yaml
+name: utests
+on: [push, pull_request]
+jobs:
+  duckdb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -e .
+      - run: fft utest . --env dev
+```
+
+For Postgres, add a service container and run `fft utest . --engine postgres` with `FF_PG_DSN` / `FF_PG_SCHEMA`.
+
+
+
+<!-- >>> FILE: Troubleshooting.md >>> -->
+
+# Troubleshooting & Error Codes
+
+Use this checklist when FastFlowTransform commands misbehave. Each item points to the quickest fix plus the relevant CLI options.
+
+## Quick Fixes
+
+- **DuckDB seeds not visible** → ensure `FF_DUCKDB_PATH` (or the profile path) is identical for `seed`, `run`, `dag`, and `test`. If you configure `FF_DUCKDB_SCHEMA` / `FF_DUCKDB_CATALOG`, keep them consistent across commands so unqualified references resolve to the right namespace.
+- **Postgres connection refused** → confirm `FF_PG_DSN`, container status (`docker ps`), and that port `5432` is open.
+- **BigQuery permissions** → set `GOOGLE_APPLICATION_CREDENTIALS` and match dataset/location to your profile.
+- **HTML docs missing** → run `fft dag <project> --html` and open `<project>/docs/index.html`.
+- **Unexpected test failures** → inspect rendered SQL in CLI output, refine selection via `--select`, refresh seeds if needed.
+- **Dependency table not found in utests** → provide all physical upstream relations in the YAML spec.
+
+## Error Codes
+
+| Type                      | Class/Source              | Exit | Notes                                                   |
+|---------------------------|---------------------------|------|---------------------------------------------------------|
+| Missing dependency        | `DependencyNotFoundError` | 1    | Per-node list; tips for `ref()` / names                |
+| Cycle in DAG              | `ModelCycleError`         | 1    | “Cycle detected among nodes: …”                        |
+| Model execution (KeyError)| `cli.py` → formatted block| 1    | Inspect columns, use `relation_for(dep)` as keys       |
+| Data quality failures     | `cli test` → summary      | 2    | Totals section prints passed/failed counts             |
+| Unknown/unexpected        | generic                   | 99   | Optional trace via `FFT_TRACE=1`                       |
+
+Error types map to the classes documented in `docs/Technical_Overview.md#core-modules` and the CLI source.
+
+
+
+<!-- >>> FILE: examples/Basic_Demo.md >>> -->
+
+# Basic Demo Project
+
+The `examples/basic_demo` project shows the smallest end-to-end FastFlowTransform pipeline. It combines one seed, a staging model, and a final mart while staying portable across DuckDB, Postgres, and Databricks Spark.
+
+## Why it exists
+- **Start small** – demonstrate the minimum folder structure (`seeds/`, `models/`, `profiles.yml`) needed to run `fft`.
+- **Engine parity** – prove that a single project can target multiple engines by swapping profiles.
+- **Understand outputs** – show where documentation and manifests land after a run.
+
+Use it as a sandbox before adding your own sources, macros, or Python models.
+
+## Project layout
+
+| Path | Purpose |
+|------|---------|
+| `seeds/seed_users.csv` | Sample CRM-style user data. `fft seed` materializes it as `crm.users`. |
+| `models/staging/users_clean.ff.sql` | Normalizes emails, casts types, and tags the model for all engines. |
+| `models/marts/mart_users_by_domain.ff.sql` | Aggregates users per email domain and records the first/last signup dates. |
+| `models/engines/*/mart_latest_signup.ff.py` | Engine-specific Python models (pandas for DuckDB/Postgres, PySpark for Databricks) selecting the most recent signup per domain from the staging view. |
+| `profiles.yml` | Declares `dev_duckdb`, `dev_postgres`, and `dev_databricks` profiles driven by environment variables. |
+| `.env.dev_*` | Template environment files you can `source` per engine. |
+| `Makefile` | One command (`make demo ENGINE=…`) to seed, run, document, test, and preview results. |
+
+## Running the demo
+
+1. `cd examples/basic_demo`
+2. Choose an engine and export its environment variables:
+   ```bash
+   set -a; source .env.dev_duckdb; set +a
+   # swap to .env.dev_postgres or .env.dev_databricks for other engines
+   ```
+3. Execute the full flow:
+   ```bash
+   make demo ENGINE=duckdb
+   ```
+   The Makefile runs `fft seed`, `fft run`, `fft dag`, `fft test`, and `fft show basic_demo.mart_users_by_domain`. To preview the Python mart, run `make show ENGINE=duckdb SHOW_MODEL=mart_latest_signup` (or swap `ENGINE` as needed).
+4. Inspect artifacts:
+   - `.fastflowtransform/target/manifest.json` and `run_results.json`
+   - `site/dag/index.html` for the rendered model graph
+   - CLI output from `fft show` displaying the aggregated mart
+
+The demo also enables baseline data quality checks in `project.yml`. Running `fft test` (or `make test`) verifies that primary keys remain unique/not-null across `seed_users`, `users_clean`, `mart_users_by_domain`, and the Python mart, while ensuring aggregate metrics such as `user_count` never drop below zero and each domain appears only once in `mart_latest_signup`.
+
+## Next steps
+
+- Add more CSVs under `seeds/` and declare them in `sources.yml`.
+- Create additional staging models so marts can reuse normalized data.
+- Introduce Python models or macros mirroring how the API demo scales up.
+- Update `.env.dev_*` with real credentials once you connect to shared databases.
+
+
+
+<!-- >>> FILE: examples/Materializations_Demo.md >>> -->
+
+# Materializations Demo
+
+> This example shows how different **materializations** (`view`, `table`, `incremental`, `ephemeral`) behave in FastFlowTransform.
+
+The demo models are located under:
+```
+
+examples/materializations_demo/models/
+
+````
+
+Each model type demonstrates how FastFlowTransform builds, caches, or executes models differently depending on its `materialized:` configuration.
+
+---
+
+## 🧩 1. View Models
+
+A **view** model is always re-created from scratch each run.  
+It defines a virtual relation that doesn’t store data permanently — ideal for lightweight transformations.
+
+```sql
+{{ config(materialized='view') }}
+
+select
+    order_id,
+    customer_id,
+    total_amount,
+    order_date
+from {{ ref('stg_orders') }}
+````
+
+**Characteristics**
+
+* Rebuilt each run (no persisted data)
+* Useful for staging, joins, and intermediate logic
+* Fast and always up-to-date with upstreams
+* Cannot store or cache incremental state
+
+---
+
+## 🧱 2. Table Models
+
+A **table** model materializes into a physical table on the target engine.
+
+```sql
+{{ config(materialized='table') }}
+
+select *
+from {{ ref('fct_orders_view') }}
+```
+
+**Characteristics**
+
+* Fully rebuilt every run
+* Good for final curated datasets or small tables
+* Overwrites previous contents (atomic replace)
+* Compatible with all engines (DuckDB, Postgres, BigQuery, etc.)
+
+---
+
+## ⚡ 3. Incremental Models
+
+An **incremental** model stores state and only updates changed records on subsequent runs.
+
+```sql
+{{ config(
+    materialized='incremental',
+    incremental={
+        "enabled": true,
+        "unique_key": "order_id",
+        "updated_at_column": "updated_at",
+        "delta_sql": "select * from {{ ref('stg_orders') }} where updated_at > (select max(updated_at) from {{ this }})"
+    }
+) }}
+```
+
+**Characteristics**
+
+* Persists data between runs
+* Only merges new or changed rows
+* Significantly faster for large tables
+* Requires `unique_key` and (optionally) an `updated_at_column`
+* Schema changes can be managed via:
+
+  * `on_schema_change: "ignore"`
+  * `on_schema_change: "append_new_columns"`
+  * `on_schema_change: "sync_all_columns"`
+
+**Behavior example:**
+
+| Run | Operation   | Rows affected |
+| --- | ----------- | ------------- |
+| 1   | full load   | 10,000        |
+| 2   | merge delta | 120           |
+| 3   | merge delta | 45            |
+
+---
+
+## 🧮 4. Ephemeral Models
+
+An **ephemeral** model exists only during query compilation.
+It never creates a physical table or view — it’s inlined wherever it’s referenced.
+
+```sql
+{{ config(materialized='ephemeral') }}
+
+select
+    order_id,
+    total_amount * 0.1 as tax_amount
+from {{ ref('fct_orders_inc') }}
+```
+
+**Characteristics**
+
+* Inlined into parent queries
+* Reduces I/O overhead (no temporary tables)
+* Ideal for lightweight reusable SQL snippets
+* Not visible in the warehouse after execution
+
+---
+
+## 🔗 5. Combined Example DAG
+
+In the demo, these models are connected as follows:
+
+```text
+stg_orders
+   ↓
+fct_orders_view (view)
+   ↓
+fct_orders_tbl (table)
+   ↓
+fct_orders_inc (incremental)
+   ↓
+fct_orders_ephemeral (ephemeral)
+```
+
+This DAG demonstrates:
+
+* How **data flows** between materializations
+* Which ones persist or recompute data
+* How incremental models can feed downstream table or ephemeral models
+
+---
+
+## 🧭 When to Use Each Type
+
+| Materialization | Persists? | Performance         | Recommended Use Case                      |
+| --------------- | --------- | ------------------- | ----------------------------------------- |
+| `view`          | ❌ No      | ⚡ Fast rebuild      | Intermediate or temporary transformations |
+| `table`         | ✅ Yes     | ⚖️ Moderate         | Final outputs or smaller datasets         |
+| `incremental`   | ✅ Yes     | 🚀 High (on deltas) | Large, frequently updated fact tables     |
+| `ephemeral`     | ❌ No      | ⚡ Fast inline       | Reusable SQL snippets or shared logic     |
+
+---
+
+## 🧠 Tips
+
+* You can set default materializations in `project.yml` under `models.materialized`.
+* Override per model using `{{ config(materialized='...') }}`.
+* For incremental models, ensure **unique keys** and **delta logic** are consistent across runs.
+* Test behavior locally using the DuckDB engine before deploying to a warehouse.
+
+
+
 <!-- >>> FILE: examples/Environment_Matrix.md >>> -->
 
 # Environment Matrix (DuckDB-only) — Example
@@ -2950,178 +3578,855 @@ rm -rf examples/env_matrix/.fastflowtransform
 
 
 
-<!-- >>> FILE: examples/Basic_Demo.md >>> -->
+<!-- >>> FILE: examples/DQ_Demo.md >>> -->
 
-# Basic Demo Project
+# Data Quality Demo Project
 
-The `examples/basic_demo` project shows the smallest end-to-end FastFlowTransform pipeline. It combines one seed, a staging model, and a final mart while staying portable across DuckDB, Postgres, and Databricks Spark.
+The **Data Quality Demo** shows how to use **all built-in FFT data quality tests** on a small, understandable model:
 
-## Why it exists
-- **Start small** – demonstrate the minimum folder structure (`seeds/`, `models/`, `profiles.yml`) needed to run `fft`.
-- **Engine parity** – prove that a single project can target multiple engines by swapping profiles.
-- **Understand outputs** – show where documentation and manifests land after a run.
+* Column checks:
 
-Use it as a sandbox before adding your own sources, macros, or Python models.
+  * `not_null`
+  * `unique`
+  * `accepted_values`
+  * `greater_equal`
+  * `non_negative_sum`
+  * `row_count_between`
+  * `freshness`
+* Cross-table reconciliations:
 
-## Project layout
+  * `reconcile_equal`
+  * `reconcile_ratio_within`
+  * `reconcile_diff_within`
+  * `reconcile_coverage`
 
-| Path | Purpose |
-|------|---------|
-| `seeds/seed_users.csv` | Sample CRM-style user data. `fft seed` materializes it as `crm.users`. |
-| `models/staging/users_clean.ff.sql` | Normalizes emails, casts types, and tags the model for all engines. |
-| `models/marts/mart_users_by_domain.ff.sql` | Aggregates users per email domain and records the first/last signup dates. |
-| `models/engines/*/mart_latest_signup.ff.py` | Engine-specific Python models (pandas for DuckDB/Postgres, PySpark for Databricks) selecting the most recent signup per domain from the staging view. |
-| `profiles.yml` | Declares `dev_duckdb`, `dev_postgres`, and `dev_databricks` profiles driven by environment variables. |
-| `.env.dev_*` | Template environment files you can `source` per engine. |
-| `Makefile` | One command (`make demo ENGINE=…`) to seed, run, document, test, and preview results. |
+It uses a simple **customers / orders / mart** setup so you can see exactly what each test does and how it fails when something goes wrong.
+
+---
+
+## What this example demonstrates
+
+1. **Basic column checks** on staging tables
+   Ensure IDs are present and unique, amounts are non-negative, and status values are valid.
+
+2. **Freshness** on a timestamp column
+   Check that the most recent order in your mart is not “too old”, using `last_order_ts`.
+
+3. **Row count sanity checks**
+   Guard against empty tables and unexpectedly large row counts.
+
+4. **Cross-table reconciliations** between staging and mart
+   Verify that sums and counts match between `orders` and the aggregated `mart_orders_agg`, and that every customer has a corresponding mart row.
+
+5. **Tagged tests and selective execution**
+   All tests are tagged (e.g. `example:dq_demo`, `reconcile`) so you can run exactly the subset you care about.
+
+---
+
+## Project layout (example)
+
+```text
+examples/dq_demo/
+  .env
+  .env.dev_duckdb
+  .env.dev_postgres
+  .env.dev_databricks
+  Makefile                  # optional, convenience wrapper around fft commands
+  profiles.yml
+  project.yml
+  sources.yml
+
+  seeds/
+    customers.csv
+    orders.csv
+
+  models/
+    staging/
+      customers.ff.sql
+      orders.ff.sql
+    marts/
+      mart_orders_agg.ff.sql
+```
+
+### Seeds
+
+* `seeds/customers.csv`
+  Simple customer dimension (e.g. `customer_id`, `name`, `status`).
+
+* `seeds/orders.csv`
+  Order fact data (e.g. `order_id`, `customer_id`, `amount`, `order_ts` as a string).
+
+### Models
+
+**1. Staging: `customers.ff.sql`**
+
+* Materialized as a table.
+* Casts IDs and other fields into proper types.
+* Used as the “clean” customer dimension for downstream checks.
+
+**2. Staging: `orders.ff.sql`**
+
+* Materialized as a table.
+* Casts fields to proper types so DQ tests work reliably:
+
+  ```sql
+  {{ config(
+      materialized='table',
+      tags=[
+          'example:dq_demo',
+          'scope:staging',
+          'engine:duckdb',
+          'engine:postgres',
+          'engine:databricks_spark'
+      ],
+  ) }}
+
+  select
+    cast(order_id    as int)        as order_id,
+    cast(customer_id as int)        as customer_id,
+    cast(amount      as double)     as amount,
+    cast(order_ts    as timestamp)  as order_ts
+  from {{ source('crm', 'orders') }};
+  ```
+
+  This is important for:
+
+  * numeric checks (`greater_equal`, `non_negative_sum`)
+  * timestamp-based `freshness` checks
+
+**3. Mart: `mart_orders_agg.ff.sql`**
+
+Aggregates orders per customer and prepares data for reconciliation + freshness:
+
+```sql
+{{ config(
+    materialized='table',
+    tags=[
+        'example:dq_demo',
+        'scope:mart',
+        'engine:duckdb',
+        'engine:postgres',
+        'engine:databricks_spark'
+    ],
+) }}
+
+-- Aggregate orders per customer for DQ & reconciliation tests
+with base as (
+  select
+    o.order_id,
+    o.customer_id,
+    -- Ensure numeric and timestamp types for downstream DQ checks
+    cast(o.amount   as double)    as amount,
+    cast(o.order_ts as timestamp) as order_ts,
+    c.name   as customer_name,
+    c.status as customer_status
+  from {{ ref('orders.ff') }} o
+  join {{ ref('customers.ff') }} c
+    on o.customer_id = c.customer_id
+)
+select
+  customer_id,
+  customer_name,
+  customer_status as status,
+  count(*)        as order_count,
+  sum(amount)     as total_amount,
+  min(order_ts)   as first_order_ts,
+  max(order_ts)   as last_order_ts
+from base
+group by customer_id, customer_name, customer_status;
+```
+
+The important columns for DQ tests are:
+
+* `status` → used for `accepted_values`
+* `order_count` and `total_amount` → used for numeric and reconciliation tests
+* `last_order_ts` → used for `freshness`
+
+---
+
+## Data quality configuration (`project.yml`)
+
+All tests live under `project.yml → tests:`.
+This example uses the tag `example:dq_demo` for easy selection.
+
+### Column-level checks
+
+```yaml
+tests:
+  # 1) IDs must be present and unique
+  - type: not_null
+    table: customers
+    column: customer_id
+    tags: [example:dq_demo, batch]
+
+  - type: unique
+    table: customers
+    column: customer_id
+    tags: [example:dq_demo, batch]
+
+  # 2) Order amounts must be >= 0
+  - type: greater_equal
+    table: orders
+    column: amount
+    threshold: 0
+    tags: [example:dq_demo, batch]
+
+  # 3) Total sum of amounts must not be negative
+  - type: non_negative_sum
+    table: orders
+    column: amount
+    tags: [example:dq_demo, batch]
+
+  # 4) Customer status values must be within a known set
+  - type: accepted_values
+    table: mart_orders_agg
+    column: status
+    values: ["active", "churned", "prospect"]
+    severity: warn         # show as warning, not hard failure
+    tags: [example:dq_demo, batch]
+
+  # 5) Row count sanity check on mart
+  - type: row_count_between
+    table: mart_orders_agg
+    min_rows: 1
+    max_rows: 100000
+    tags: [example:dq_demo, batch]
+
+  # 6) Freshness: last order in the mart must not be "too old"
+  - type: freshness
+    table: mart_orders_agg
+    column: last_order_ts
+    max_delay_minutes: 100000000
+    tags: [example:dq_demo, batch]
+```
+
+### Cross-table reconciliations
+
+```yaml
+  # 7) Reconcile total revenue between orders and mart
+  - type: reconcile_equal
+    name: total_amount_orders_vs_mart
+    tags: [example:dq_demo, reconcile]
+    left:
+      table: orders
+      expr: "sum(amount)"
+    right:
+      table: mart_orders_agg
+      expr: "sum(total_amount)"
+    abs_tolerance: 0.01
+
+  # 8) Ratio of sums should be ~1 (within tight bounds)
+  - type: reconcile_ratio_within
+    name: total_amount_ratio
+    tags: [example:dq_demo, reconcile]
+    left:
+      table: orders
+      expr: "sum(amount)"
+    right:
+      table: mart_orders_agg
+      expr: "sum(total_amount)"
+    min_ratio: 0.999
+    max_ratio: 1.001
+
+  # 9) Row count diff between orders and mart should be bounded
+  - type: reconcile_diff_within
+    name: order_count_diff
+    tags: [example:dq_demo, reconcile]
+    left:
+      table: orders
+      expr: "count(*)"
+    right:
+      table: mart_orders_agg
+      expr: "sum(order_count)"
+    max_abs_diff: 0
+
+  # 10) Coverage: every customer should appear in the mart
+  - type: reconcile_coverage
+    name: customers_covered_in_mart
+    tags: [example:dq_demo, reconcile]
+    source:
+      table: customers
+      key: "customer_id"
+    target:
+      table: mart_orders_agg
+      key: "customer_id"
+```
+
+This set of tests touches **all available test types** and ties directly back to the simple data model.
+
+---
 
 ## Running the demo
 
-1. `cd examples/basic_demo`
-2. Choose an engine and export its environment variables:
-   ```bash
-   set -a; source .env.dev_duckdb; set +a
-   # swap to .env.dev_postgres or .env.dev_databricks for other engines
-   ```
-3. Execute the full flow:
-   ```bash
-   make demo ENGINE=duckdb
-   ```
-   The Makefile runs `fft seed`, `fft run`, `fft dag`, `fft test`, and `fft show basic_demo.mart_users_by_domain`. To preview the Python mart, run `make show ENGINE=duckdb SHOW_MODEL=mart_latest_signup` (or swap `ENGINE` as needed).
-4. Inspect artifacts:
-   - `.fastflowtransform/target/manifest.json` and `run_results.json`
-   - `site/dag/index.html` for the rendered model graph
-   - CLI output from `fft show` displaying the aggregated mart
+Assuming you are in the repo root and using DuckDB as a starting point:
 
-The demo also enables baseline data quality checks in `project.yml`. Running `fft test` (or `make test`) verifies that primary keys remain unique/not-null across `seed_users`, `users_clean`, `mart_users_by_domain`, and the Python mart, while ensuring aggregate metrics such as `user_count` never drop below zero and each domain appears only once in `mart_latest_signup`.
+### 1. Seed the data
 
-## Next steps
-
-- Add more CSVs under `seeds/` and declare them in `sources.yml`.
-- Create additional staging models so marts can reuse normalized data.
-- Introduce Python models or macros mirroring how the API demo scales up.
-- Update `.env.dev_*` with real credentials once you connect to shared databases.
-
-
-
-<!-- >>> FILE: examples/API_Demo.md >>> -->
-
-# API Demo Project
-
-The `examples/api_demo` scenario demonstrates how FastFlowTransform blends local data, external APIs, and multiple execution engines. It highlights:
-
-- **Hybrid data model**: joins a local seed (`crm.users`) with live user data from JSONPlaceholder.
-- **Multiple environments**: switch between DuckDB, Postgres, and Databricks Spark using `profiles.yml` + `.env.*`.
-- **HTTP integration**: compare the built-in FastFlowTransform HTTP client (`api_users_http`) with a plain `requests` implementation (`api_users_requests`).
-- **Offline caching & telemetry**: inspect HTTP snapshots via `run_results.json`.
-- **Engine-aware registration**: scope Python models via `engine_model` and SQL models via `config(engines=[...])` so only the active engine’s nodes load.
-
-## Data Model
-
-1. **Seed staging** – `models/common/users.ff.sql`
-   ```sql
-   {{ config(
-       materialized='table',
-       tags=[
-           'example:api_demo',
-           'scope:common',
-           'kind:seed-consumer',
-           'engine:duckdb',
-           'engine:postgres',
-           'engine:databricks_spark'
-       ]
-   ) }}
-   select id, email
-   from {{ source('crm', 'users') }};
-   ```
-   Consumes `sources.yml → crm.users` (seeded from `seeds/seed_users.csv`).
-
-2. **API enrichment** – two Python implementations under `models/engines/duckdb/`:
-   - `api_users_http.ff.py` uses the built-in HTTP wrapper (`fastflowtransform.api.http.get_df`) with cache/offline support.
-   - `api_users_requests.ff.py` uses raw `requests` for maximum flexibility.
-   - Wrap engine-specific callables with `engine_model(only="duckdb", ...)` to skip registration when another engine is selected.
-
-3. **Mart join** – `models/common/mart_users_join.ff.sql`
-   ```sql
-   {{ config(engines=['duckdb','postgres','databricks_spark']) }}
-   {% set api_users_model = var('api_users_model', 'api_users_http') %}
-   {% set api_users_refs = {
-       'api_users_http': ref('api_users_http'),
-       'api_users_requests': ref('api_users_requests')
-   } %}
-   {% set api_users_relation = api_users_refs.get(api_users_model, api_users_refs['api_users_http']) %}
-   with a as (
-     select u.id as user_id, u.email from {{ ref('users.ff') }} u
-   ),
-   b as (
-     select * from {{ api_users_relation }}
-   )
-   select ...
-   ```
-   Ties everything together and exposes the `var('api_users_model')` hook to choose the HTTP implementation while still keeping literal `ref('…')` calls in the template (required for DAG detection). `config(engines=[...])` keeps the SQL node registered only for the engines you list, preventing duplicate names across engine-specific folders.
-
-   > **Warning:** The DAG builder only detects dependencies from literal `ref('model_name')` strings. A pure `ref(api_users_model)` (without the mapping shown above) compiles, but the graph would miss the edge to `api_users_http`/`api_users_requests`.
-
-## Profiles & Secrets
-
-`profiles.yml` defines per-engine profiles that reference environment variables:
-
-```yaml
-dev_duckdb:
-  engine: duckdb
-  duckdb:
-    path: "{{ env('FF_DUCKDB_PATH', '.local/api_demo.duckdb') }}"
-
-dev_postgres:
-  engine: postgres
-  postgres:
-    dsn: "{{ env('FF_PG_DSN') }}"
-    db_schema: "{{ env('FF_PG_SCHEMA', 'public') }}"
+```bash
+fft seed examples/dq_demo --env dev_duckdb
 ```
 
-`.env.dev_*` files supply the actual values. `_load_dotenv_layered()` loads them in priority order: repo `.env` → project `.env` → `.env.<env>` → shell overrides (highest priority). Secrets stay out of version control.
+This reads `seeds/customers.csv` and `seeds/orders.csv` and materializes them as tables referenced by `sources.yml`.
 
+### 2. Run the models
 
-## Makefile Workflow
-
-`Makefile` chooses the profile via `ENGINE` (`duckdb`/`postgres`/`databricks_spark`) and wraps the main commands:
-
-```make
-ENGINE ?= duckdb
-
-ifeq ($(ENGINE),duckdb)
-  PROFILE_ENV = dev_duckdb
-endif
-...
-
-seed:
-	uv run fft seed "$(PROJECT)" --env $(PROFILE_ENV)
-run:
-	env FFT_ACTIVE_ENV=$(PROFILE_ENV) ... uv run fft run ...
+```bash
+fft run examples/dq_demo --env dev_duckdb
 ```
 
-Common targets:
+This builds:
 
-| Target                   | Description |
-|--------------------------|-------------|
-| `make ENGINE=duckdb seed`| Materialize seeds into DuckDB. |
-| `make ENGINE=postgres run`| Execute the full pipeline against Postgres. |
-| `make dag`               | Render documentation (`site/dag/`). |
-| `make api-run`           | Run only API models (uses HTTP cache). |
-| `make api-offline`       | Force offline mode (`FF_HTTP_OFFLINE=1`). |
-| `make api-show-http`     | Display HTTP snapshot metrics via `jq`. |
+* `customers` (staging)
+* `orders` (staging)
+* `mart_orders_agg` (mart)
 
-HTTP tuning parameters (`FF_HTTP_ALLOWED_DOMAINS`, cache dir, timeouts) live in `.env` and are appended via `HTTP_ENV` when running commands.
+### 3. Run all DQ tests
 
-## End-to-End Demo
+```bash
+fft test examples/dq_demo --env dev_duckdb --select tag:example:dq_demo
+```
 
-1. **Select engine**: `make ENGINE=duckdb` (default). Set `ENGINE=postgres` or `ENGINE=databricks_spark` to switch.
-2. **Seed data**: `make seed`
-3. **Run pipeline**: `make run`
-4. **Explore docs**: `make dag` → open `examples/api_demo/site/dag/index.html`
-5. **Inspect HTTP usage**: `make api-show-http`
+You should see a summary like:
 
-This example demonstrates multi-engine configuration, environment-driven secrets, and API enrichment within FastFlowTransform.
+```text
+Data Quality Summary
+────────────────────
+✅ not_null           customers.customer_id
+✅ unique             customers.customer_id
+✅ greater_equal      orders.amount
+✅ non_negative_sum   orders.amount
+❕ accepted_values    mart_orders_agg.status
+✅ row_count_between  mart_orders_agg
+✅ freshness          mart_orders_agg.last_order_ts
+✅ reconcile_equal    total_amount_orders_vs_mart
+✅ reconcile_ratio_within total_amount_ratio
+✅ reconcile_diff_within  order_count_diff
+✅ reconcile_coverage customers_covered_in_mart
+
+Totals
+──────
+✓ passed: 10
+! warnings: 1
+```
+
+(Exact output will differ, but you’ll see pass/failed/warned checks listed.)
+
+### 4. Run only reconciliation tests
+
+```bash
+fft test examples/dq_demo --env dev_duckdb --select tag:reconcile
+```
+
+This executes just the cross-table checks, which is handy when you’re iterating on a mart.
+
+---
+
+## Things to experiment with
+
+To understand the tests better, intentionally break the data and re-run `fft test`:
+
+* Set one `customers.customer_id` to `NULL` → watch `not_null` fail.
+* Duplicate a `customer_id` → watch `unique` fail.
+* Put a negative `amount` in `orders.csv` → `greater_equal` and `non_negative_sum` fail.
+* Add a new `status` value (e.g. `"paused"`) → `accepted_values` warns.
+* Drop a customer from `mart_orders_agg` manually (or filter it out in SQL) → `reconcile_coverage` fails.
+* Change an amount in the mart only → reconciliation tests fail.
+
+This makes it very clear what each test guards against.
+
+---
+
+## Summary
+
+The Data Quality Demo is designed to be:
+
+* **Small and readable** – customers, orders, and a single mart.
+* **Complete** – exercises every built-in FFT DQ test type.
+* **Practical** – real-world patterns like:
+
+  * typing in staging models,
+  * testing freshness on a mart timestamp,
+  * reconciling sums and row counts across tables.
+
+Once you’re comfortable with this example, you can copy the patterns into your real project: start with staging-level checks, then layer in reconciliations and freshness on your most important marts.
+
+
+
+<!-- >>> FILE: examples/Macros_Demo.md >>> -->
+
+# Macros Demo
+
+**Goal:** Showcase **SQL Jinja macros** and **Python render-time macros** working together across engines (DuckDB, Postgres, Databricks Spark).
+You’ll see reusable SQL helpers, engine-aware SQL generation, and Python functions exposed as Jinja globals/filters.
+
+---
+
+## Directory structure
+
+```text
+examples/macros_demo/
+  .env
+  .env.dev_databricks
+  .env.dev_duckdb
+  .env.dev_postgres
+  Makefile
+  profiles.yml
+  project.yml
+  sources.yml
+  seeds/
+    seed_users.csv
+    seed_orders.csv
+  models/
+    macros/
+      utils.sql
+      star.sql
+    macros_py/
+      helpers.py
+    common/
+      stg_users.ff.sql
+      stg_orders.ff.sql
+      dim_users.ff.sql
+      fct_user_sales.ff.sql
+    engines/
+      duckdb/
+        py_example.ff.py
+      postgres/
+        py_example.ff.py
+      databricks_spark/
+        py_example.ff.py
+```
+
+---
+
+## What this demo shows
+
+* **SQL Jinja macros** (`models/macros/*.sql`)
+
+  * `email_domain(expr)` – derive email domain
+  * `safe_cast_amount(expr)` – engine-aware numeric cast
+  * `coalesce_any(expr, default)` – small convenience
+  * `default_country()` – pull a default from `project.yml → vars`
+  * `star_except(relation, exclude_cols)` – select all except listed columns (falls back to `*` if columns unknown)
+* **Python macros** (`models/macros_py/helpers.py`)
+
+  * `slugify(str)` – URL-friendly slug
+  * `mask_email(email)` – redact local part
+  * `csv_values(rows, cols)` – inline small lookup tables via SQL `VALUES(...)`
+* **Usage from models**
+
+  * `stg_users` uses SQL + Python macros at render time
+  * `stg_orders` uses engine-aware casting
+  * `dim_users` builds a tiny inline lookup via `csv_values(...)`
+  * `fct_user_sales` aggregates across staged models
+
+---
+
+## Prerequisites
+
+* A working FFT installation (CLI `fft` available)
+* For Postgres/Databricks: valid local env and drivers
+* The core must expose these Jinja globals (already done in the FFT core):
+
+  * `var(name, default)`, `env(name, default)`, `engine(default)`
+    (Used by profiles/macros to read vars and detect engine.)
+
+---
+
+## Seeds
+
+Two tiny CSVs materialized via `fft seed`:
+
+* `seed_users.csv` — `id,email,country`
+* `seed_orders.csv` — `order_id,customer_id,amount,order_ts`
+
+`profiles.yml` and `project.yml` give minimal storage and connection configs.
+
+---
+
+## How to run
+
+From repo root:
+
+```bash
+cd examples/macros_demo
+
+# Choose engine: duckdb (default) | postgres | databricks_spark
+make ENGINE=duckdb demo
+# or
+make ENGINE=postgres demo
+# or
+make ENGINE=databricks_spark demo
+```
+
+The `demo` target runs:
+
+1. `fft seed` — loads CSVs
+2. `fft run` — builds models using macros
+3. `fft dag --html` — writes DAG HTML to `site/dag/index.html`
+4. `fft test` — runs example tests
+5. Prints artifact paths and tries to open the DAG
+
+---
+
+## Key files (highlights)
+
+### SQL macros – `models/macros/utils.sql`
+
+```jinja
+{%- macro email_domain(expr) -%}
+  lower(split_part({{ expr }}, '@', 2))
+{%- endmacro -%}
+
+{%- macro safe_cast_amount(expr) -%}
+{%- set e = engine('duckdb') -%}
+{%- if e in ['duckdb', 'postgres', 'databricks_spark'] -%}
+  cast({{ expr }} as double)
+{%- else -%}
+  cast({{ expr }} as double)
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro coalesce_any(expr, default) -%}
+  coalesce({{ expr }}, {{ default }})
+{%- endmacro -%}
+
+{%- macro default_country() -%}
+  '{{ var("default_country", "DE") }}'
+{%- endmacro -%}
+```
+
+### SQL macros – `models/macros/star.sql`
+
+```jinja
+{%- macro star_except(relation, exclude_cols) -%}
+{%- set excl = exclude_cols | map('lower') | list -%}
+{%- set cols = adapter_columns(relation) -%}
+{%- if cols and cols|length > 0 -%}
+  {{- (cols | reject('in', excl) | map('string') | join(', ')) -}}
+{%- else -%}
+  *
+{%- endif -%}
+{%- endmacro -%}
+```
+
+> Note: If the executor can’t describe columns for `relation`, this macro falls back to `*`.
+
+### Python macros – `models/macros_py/helpers.py`
+
+```python
+def slugify(value: str) -> str: ...
+def mask_email(email: str) -> str: ...
+def csv_values(rows: list[dict], cols: list[str]) -> str: ...
+```
+
+Exposed as Jinja globals/filters at **render time** (not runtime SQL UDFs).
+
+---
+
+## Models using macros
+
+### `stg_users.ff.sql` (Jinja + Python macro usage)
+
+* Coalesces missing country with `default_country()`
+* Adds `email_domain(...)`
+* Embeds a `slugify(var('site_name', ...))` literal into SQL
+
+```jinja
+with src as (
+  select
+    cast(id as int) as user_id,
+    lower(email)     as email,
+    {{ coalesce_any("country", default_country()) }} as country
+  from {{ source('crm', 'users') }}
+)
+select
+  user_id,
+  email,
+  {{ email_domain("email") }} as email_domain,
+  country,
+  '{{ slugify(var("site_name", "My Site")) }}' as site_slug
+from src;
+```
+
+### `stg_orders.ff.sql` (engine-aware types)
+
+```jinja
+select
+  cast(order_id as int)     as order_id,
+  cast(customer_id as int)  as user_id,
+  {{ safe_cast_amount("amount") }} as amount,
+  cast(order_ts as timestamp) as order_ts
+from {{ source('sales', 'orders') }};
+```
+
+### `dim_users.ff.sql` (inline lookup via Python macro)
+
+```jinja
+labels as (
+  select * from (values {{ csv_values(
+      [
+        {"domain":"example.com", "label":"internal"},
+        {"domain":"gmail.com",   "label":"consumer"},
+      ],
+      ["domain","label"]
+  ) }}) as t(domain, label)
+)
+```
+
+### `fct_user_sales.ff.sql` (final aggregation)
+
+Joins `stg_orders` with `dim_users` and aggregates.
+
+---
+
+## Tests (examples)
+
+Declared in `project.yml`:
+
+* `not_null(dim_users.user_id)`
+* `row_count_between(fct_user_sales, min_rows=1)`
+
+Run with:
+
+```bash
+fft test examples/macros_demo --env dev_duckdb --select tag:example:macros_demo
+```
+
+---
+
+## Troubleshooting
+
+* **`jinja2.exceptions.UndefinedError: 'var'/'env'/'engine' is undefined`**
+  Ensure your core’s Jinja environment registers these globals before loading templates:
+
+  ```python
+  env.globals.update(var=..., env=..., engine=...)
+  ```
+* **Engine differences (types & functions):**
+  Always branch in macros (`engine(...)`) when types or functions differ.
+* **`adapter_columns(...)` returns none:**
+  The `star_except` macro will fallback to `*`. For strict behavior, replace with static column lists per engine.
+
+---
+
+## Extending this demo
+
+* Add more helpers to `helpers.py` (e.g., `render_json(obj)`, `join_csv(list)`).
+* Create reusable macro libraries under `models/macros/` (date handling, SCD helpers, etc.).
+* Use `var(...)` to parameterize behavior per environment or profile.
+
+---
+
+Happy macro-ing!
+
+
+
+<!-- >>> FILE: examples/Cache_Demo.md >>> -->
+
+# 🧠 Cache & Parallelism Demo
+
+This example demonstrates FastFlowTransform’s **build cache**, **fingerprint logic**, **parallel scheduler**, and **HTTP response caching**.
+It’s a compact playground to visualize **when nodes are skipped**, **what triggers rebuilds**, and **how caching accelerates iterative runs**.
+
+---
+
+## 🗂 Directory Structure
+
+```text
+cache_demo/
+  .env.dev_duckdb
+  Makefile
+  profiles.yml
+  project.yml
+  sources.yml
+  models/
+    seeds_consumers/
+      stg_users.ff.sql
+      stg_orders.ff.sql
+    marts/
+      mart_user_orders.ff.sql
+    python/
+      py_constants.ff.py
+    http/
+      http_users.ff.py
+  seeds/
+    seed_users.csv
+    seed_orders.csv
+  README.md
+```
+
+---
+
+## ⚙️ Overview
+
+This demo showcases several FastFlowTransform features:
+
+| Feature                    | Demonstrated by                                 |
+| -------------------------- | ----------------------------------------------- |
+| Level-wise parallelism     | Multiple models running concurrently (`--jobs`) |
+| Deterministic fingerprints | Build cache skipping unchanged nodes            |
+| Upstream invalidation      | Seed → staging → mart rebuilds                  |
+| Environment invalidation   | Any `FF_*` change triggers rebuild              |
+| Python model caching       | Fingerprints derived from function source       |
+| HTTP response caching      | Persistent API result cache with offline mode   |
+
+---
+
+## ⚡ Quickstart
+
+```bash
+cd examples/cache_demo
+make cache_first       # builds all nodes, writes cache
+make cache_second      # no-op run (everything skipped)
+make change_sql        # touch a model -> rebuilds dependent mart
+make change_seed       # change seed -> rebuilds staging + mart
+make change_env        # set FF_* env -> invalidates cache globally
+make change_py         # edit py_constants.ff.py -> rebuilds that model
+make run_parallel      # runs entire DAG with 4 workers per level
+```
+
+Inspect results:
+
+* `.fastflowtransform/target/run_results.json` – fingerprints, results, timings, HTTP stats
+* `site/dag/index.html` – DAG visualization
+* `.local/http-cache/` – persisted API responses
+
+---
+
+## 🧩 Model Summary
+
+| Model                     | Kind   | Purpose                     | Notes                                |
+| ------------------------- | ------ | --------------------------- | ------------------------------------ |
+| `stg_users.ff.sql`        | SQL    | Load & normalize users seed | Rebuilds if seed changes             |
+| `stg_orders.ff.sql`       | SQL    | Load orders seed            | Builds as a view                     |
+| `mart_user_orders.ff.sql` | SQL    | Join staging tables         | Rebuilds if any staging changes      |
+| `py_constants.ff.py`      | Python | Simple constant DataFrame   | Fingerprint based on function source |
+| `http_users.ff.py`        | Python | HTTP fetch with cache       | Uses `get_df()` and offline cache    |
+
+---
+
+## 🌐 HTTP Response Cache
+
+The `http_users.ff.py` model demonstrates the built-in HTTP cache:
+
+* **First run:** downloads `https://jsonplaceholder.typicode.com/users`
+* **Subsequent runs:** reuse cached responses from `.local/http-cache`
+* **Offline mode:** works with `FF_HTTP_OFFLINE=1`
+
+```bash
+make http_first        # warms HTTP cache
+make http_offline      # reuses cached response, no network access
+make http_cache_clear  # deletes cache directory
+```
+
+You can inspect HTTP usage in the `run_results.json` file:
+
+```bash
+jq -r '.results[] | select(.http!=null)
+  | "\(.name): requests=\(.http.requests) cache_hits=\(.http.cache_hits) offline=\(.http.used_offline)"' \
+  .fastflowtransform/target/run_results.json
+```
+
+---
+
+## ⚙️ Cache Logic Recap
+
+FastFlowTransform caches model fingerprints and skips nodes when:
+
+1. **Fingerprints match** (SQL text, Python source, vars, engine, env, deps).
+2. The **physical relation exists** in the database.
+
+Changing *any* of the following invalidates the cache:
+
+* SQL/Jinja content
+* Python model code
+* `sources.yml`
+* `FF_*` environment variables
+* Seed file contents
+* Engine or profile name
+
+You can control cache behavior via CLI:
+
+```bash
+--cache=off   # always build
+--cache=rw    # default; skip on match; write cache
+--cache=ro    # read-only; skip on hit, build on miss
+--cache=wo    # always build, always write
+```
+
+---
+
+## 🧮 Parallel Scheduler
+
+FastFlowTransform executes models **level-wise**:
+
+* Each level contains nodes whose dependencies are fully satisfied.
+* Up to `--jobs` nodes per level run concurrently.
+* Logs are serialized for clean output.
+
+Example:
+
+```bash
+fft run . --env dev_duckdb --jobs 4
+```
+
+---
+
+## 🧪 Example Experiments
+
+| Scenario                  | Command                                | Expected behavior               |
+| ------------------------- | -------------------------------------- | ------------------------------- |
+| First full run            | `make cache_first`                     | All models build, cache written |
+| No-op run                 | `make cache_second`                    | All skipped (no rebuilds)       |
+| Modify SQL                | `make change_sql`                      | Downstream mart rebuilds        |
+| Add seed row              | `make change_seed`                     | Staging + mart rebuild          |
+| Change env                | `make change_env`                      | All nodes rebuild               |
+| Edit Python constant      | `make change_py`                       | Only that Python model rebuilds |
+| Warm & offline HTTP cache | `make http_first && make http_offline` | HTTP cache reused, no network   |
+
+---
+
+## 🧩 DAG Example
+
+After the first run, generate the DAG visualization:
+
+```bash
+make dag
+open site/dag/index.html
+```
+
+You’ll see:
+
+```
+seed_users   → stg_users.ff
+seed_orders  → stg_orders.ff
+(stg_users + stg_orders) → mart_user_orders.ff
+py_constants
+http_users
+```
+
+* `py_constants` runs independently (parallel)
+* `mart_user_orders.ff` depends on both staging nodes
+
+---
+
+## 🧰 Tips
+
+* **Inspect fingerprints:** stored in `.fastflowtransform/target/manifest.json`
+* **Audit table:** `_ff_meta` table in the engine stores build metadata
+* **Clear cache:** delete `.fastflowtransform/` or use `make clean`
+* **Parallel debugging:** use `--keep-going` to continue unaffected levels
+
+---
+
+## ✅ Takeaways
+
+* FFT’s build cache uses stable fingerprints to skip unchanged nodes.
+* Fingerprints propagate downstream, ensuring correctness.
+* The HTTP cache supports deterministic, offline API pipelines.
+* Parallel execution accelerates runs without breaking dependencies.
+
+Together, these features make iterative development **fast, reliable, and reproducible**.
 
 
 
@@ -3144,7 +4449,7 @@ The example lives under:
 examples/incremental_demo/
 ````
 
-Suggested directory structure (mirrors the `api_demo` example):
+Directory structure:
 
 ```text
 incremental_demo/
@@ -3172,10 +4477,6 @@ incremental_demo/
         fct_events_py_incremental.ff.py
       databricks_spark/
         fct_events_py_incremental.ff.py
-
-  config/
-    incremental/
-      fct_events_sql_yaml.delta.yml
 ```
 
 *Your actual filenames may differ slightly; the concepts are the same.*
@@ -3191,10 +4492,10 @@ The demo revolves around a tiny `events` dataset and three different ways to bui
    * `models/common/fct_events_sql_inline.ff.sql`
    * All incremental logic (how to find “new/changed” rows) is defined directly in the model’s `config(meta=...)` block.
 
-2. **SQL incremental model with external YAML delta config**
+2. **SQL incremental model with YAML config in `project.yml`**
 
    * `models/common/fct_events_sql_yaml.ff.sql`
-   * The base SELECT lives in the model, but the incremental *delta* SELECT is stored in a separate YAML file under `config/incremental/…`.
+   * The base SELECT lives in the model, but all incremental hints (`incremental.enabled`, `unique_key`, `updated_at_column`, …) are configured in `project.yml → models.incremental`.
 
 3. **Python incremental model**
 
@@ -3279,19 +4580,35 @@ All three incremental models share the same core idea:
   * **External YAML** (referenced from the model)
   * **Python** (engine-specific model that returns the delta dataset)
 
-The exact `meta` keys depend on your implementation, but conceptually they look like:
+There are two ways to express this in the demo:
+
+1. **Inline on the model** (used by `fct_events_sql_inline.ff.sql`), via `config(...)`:
 
 ```jinja
 {{ config(
-    materialized='table',
+    materialized='incremental',
+    unique_key='event_id',
+    incremental={'updated_at_column': 'updated_at'},
     tags=['example:incremental_demo'],
-    meta={
-      'incremental': True,
-      'unique_key': ['event_id'],
-      'updated_at': 'updated_at',
-      # plus engine- or strategy-specific options
-    },
 ) }}
+```
+
+2. **As an overlay in `project.yml`** (used by `fct_events_sql_yaml.ff.sql` and the Python model):
+
+```yaml
+models:
+  incremental:
+    fct_events_sql_yaml.ff:
+      unique_key: "event_id"
+      incremental:
+        enabled: true
+        updated_at_column: "updated_at"
+
+    fct_events_py_incremental.ff:
+      unique_key: "event_id"
+      incremental:
+        enabled: true
+        updated_at_column: "updated_at"
 ```
 
 The incremental engine then uses these `meta` fields to decide whether to:
@@ -3309,50 +4626,39 @@ File:
 models/common/fct_events_sql_inline.ff.sql
 ```
 
-In this variant, the *delta* (the rows to insert/merge) is defined as SQL directly in the model `config(...)` block. The model body usually just defines the **full canonical SELECT**, while the `meta.delta.sql` (or similar) tells the engine how to restrict it to “new” rows.
-
-Conceptually:
+In this variant, both *incremental configuration* and the *delta filter* live directly in the model:
 
 ```jinja
 {{ config(
-    materialized='table',
+    materialized='incremental',
+    unique_key='event_id',
+    incremental={'updated_at_column': 'updated_at'},
     tags=[
         'example:incremental_demo',
+        'scope:common',
         'kind:incremental',
+        'inc:type:inline-sql',
         'engine:duckdb',
         'engine:postgres',
         'engine:databricks_spark',
     ],
-    meta={
-        'incremental': True,
-        'unique_key': ['event_id'],
-        'updated_at': 'updated_at',
-        'delta': {
-            'sql': "
-              with base as (
-                select event_id, updated_at, value
-                from {{ ref('events_base') }}
-              )
-              select
-                event_id,
-                updated_at,
-                value
-              from base
-              where updated_at > (
-                select coalesce(max(updated_at), timestamp '1970-01-01 00:00:00')
-                from {{ this }}
-              )
-            "
-        },
-    },
 ) }}
 
--- canonical full-select form (used for docs / full-refresh fallbacks)
+with base as (
+  select *
+  from {{ ref('events_base.ff') }}
+)
 select
   event_id,
   updated_at,
   value
-from {{ ref('events_base') }};
+from base
+{% if is_incremental() %}
+where updated_at > (
+  select coalesce(max(updated_at), timestamp '1970-01-01 00:00:00')
+  from {{ this }}
+)
+{% endif %};
 ```
 
 On the **first run**, the engine sees no existing relation, so it materializes the full `select ... from events_base`.
@@ -3368,61 +4674,63 @@ On subsequent runs, the engine evaluates the `delta.sql` snippet and:
 
 File:
 
-* Model: `models/common/fct_events_sql_yaml.ff.sql`
-* Delta config: `config/incremental/fct_events_sql_yaml.delta.yml`
+```text
+models/common/fct_events_sql_yaml.ff.sql
+```
 
-This variant keeps the model body minimal and moves the delta logic out into a YAML file to keep SQL cleaner or to share the same delta definition across environments.
-
-Example model (conceptually):
+Here the model body only defines the **canonical SELECT** and does *not* contain any incremental hints:
 
 ```jinja
 {{ config(
-    materialized='table',
+    materialized='incremental',
     tags=[
         'example:incremental_demo',
+        'scope:common',
         'kind:incremental',
+        'inc:type:yaml-config',
         'engine:duckdb',
         'engine:postgres',
         'engine:databricks_spark',
     ],
-    meta={
-        'incremental': True,
-        'unique_key': ['event_id'],
-        'updated_at': 'updated_at',
-        'delta_config': 'config/incremental/fct_events_sql_yaml.delta.yml',
-    },
 ) }}
 
+with base as (
+  select *
+  from {{ ref('events_base.ff') }}
+)
 select
   event_id,
   updated_at,
   value
-from {{ ref('events_base') }};
+from base;
 ```
 
-The corresponding YAML might hold the same delta query as above, e.g.:
+All incremental behaviour for this model is driven by `project.yml`:
 
 ```yaml
-# config/incremental/fct_events_sql_yaml.delta.yml
-sql: |
-  with base as (
-    select event_id, updated_at, value
-    from {{ ref('events_base') }}
-  )
-  select
-    event_id,
-    updated_at,
-    value
-  from base
-  where updated_at > (
-    select coalesce(max(updated_at), timestamp '1970-01-01 00:00:00')
-    from {{ this }}
-  )
+models:
+  incremental:
+    fct_events_sql_yaml.ff:
+      unique_key: "event_id"
+      incremental:
+        enabled: true
+        updated_at_column: "updated_at"
 ```
 
-The engine reads this file, extracts `sql`, and uses it as the **delta SELECT**.
+The registry merges this overlay into the model at load time, so the incremental runtime
+sees effectively the same config as for the inline model (`unique_key` + `updated_at_column`) –
+only the **source of truth** is different.
 
 ---
+
+### Inline vs YAML config at a glance
+
+| Model                       | Where is incremental configured?        | What lives in the SQL file?                    |
+|----------------------------|-----------------------------------------|-----------------------------------------------|
+| `fct_events_sql_inline.ff` | Inline in `config(...)` on the model   | Full SELECT **+** `is_incremental()` filter   |
+| `fct_events_sql_yaml.ff`   | `project.yml → models.incremental`     | Full SELECT only (no incremental hints)       |
+
+Both end up with the same runtime meta, only the **location of config** differs.
 
 ## 3) Python incremental model
 
@@ -3785,6 +5093,127 @@ This way, the incremental demo appears alongside your existing API demo and othe
 
 
 
+<!-- >>> FILE: examples/API_Demo.md >>> -->
+
+# API Demo Project
+
+The `examples/api_demo` scenario demonstrates how FastFlowTransform blends local data, external APIs, and multiple execution engines. It highlights:
+
+- **Hybrid data model**: joins a local seed (`crm.users`) with live user data from JSONPlaceholder.
+- **Multiple environments**: switch between DuckDB, Postgres, and Databricks Spark using `profiles.yml` + `.env.*`.
+- **HTTP integration**: compare the built-in FastFlowTransform HTTP client (`api_users_http`) with a plain `requests` implementation (`api_users_requests`).
+- **Offline caching & telemetry**: inspect HTTP snapshots via `run_results.json`.
+- **Engine-aware registration**: scope Python models via `engine_model` and SQL models via `config(engines=[...])` so only the active engine’s nodes load.
+
+## Data Model
+
+1. **Seed staging** – `models/common/users.ff.sql`
+   ```sql
+   {{ config(
+       materialized='table',
+       tags=[
+           'example:api_demo',
+           'scope:common',
+           'kind:seed-consumer',
+           'engine:duckdb',
+           'engine:postgres',
+           'engine:databricks_spark'
+       ]
+   ) }}
+   select id, email
+   from {{ source('crm', 'users') }};
+   ```
+   Consumes `sources.yml → crm.users` (seeded from `seeds/seed_users.csv`).
+
+2. **API enrichment** – two Python implementations under `models/engines/duckdb/`:
+   - `api_users_http.ff.py` uses the built-in HTTP wrapper (`fastflowtransform.api.http.get_df`) with cache/offline support.
+   - `api_users_requests.ff.py` uses raw `requests` for maximum flexibility.
+   - Wrap engine-specific callables with `engine_model(only="duckdb", ...)` to skip registration when another engine is selected.
+
+3. **Mart join** – `models/common/mart_users_join.ff.sql`
+   ```sql
+   {{ config(engines=['duckdb','postgres','databricks_spark']) }}
+   {% set api_users_model = var('api_users_model', 'api_users_http') %}
+   {% set api_users_refs = {
+       'api_users_http': ref('api_users_http'),
+       'api_users_requests': ref('api_users_requests')
+   } %}
+   {% set api_users_relation = api_users_refs.get(api_users_model, api_users_refs['api_users_http']) %}
+   with a as (
+     select u.id as user_id, u.email from {{ ref('users.ff') }} u
+   ),
+   b as (
+     select * from {{ api_users_relation }}
+   )
+   select ...
+   ```
+   Ties everything together and exposes the `var('api_users_model')` hook to choose the HTTP implementation while still keeping literal `ref('…')` calls in the template (required for DAG detection). `config(engines=[...])` keeps the SQL node registered only for the engines you list, preventing duplicate names across engine-specific folders.
+
+   > **Warning:** The DAG builder only detects dependencies from literal `ref('model_name')` strings. A pure `ref(api_users_model)` (without the mapping shown above) compiles, but the graph would miss the edge to `api_users_http`/`api_users_requests`.
+
+## Profiles & Secrets
+
+`profiles.yml` defines per-engine profiles that reference environment variables:
+
+```yaml
+dev_duckdb:
+  engine: duckdb
+  duckdb:
+    path: "{{ env('FF_DUCKDB_PATH', '.local/api_demo.duckdb') }}"
+
+dev_postgres:
+  engine: postgres
+  postgres:
+    dsn: "{{ env('FF_PG_DSN') }}"
+    db_schema: "{{ env('FF_PG_SCHEMA', 'public') }}"
+```
+
+`.env.dev_*` files supply the actual values. `_load_dotenv_layered()` loads them in priority order: repo `.env` → project `.env` → `.env.<env>` → shell overrides (highest priority). Secrets stay out of version control.
+
+
+## Makefile Workflow
+
+`Makefile` chooses the profile via `ENGINE` (`duckdb`/`postgres`/`databricks_spark`) and wraps the main commands:
+
+```make
+ENGINE ?= duckdb
+
+ifeq ($(ENGINE),duckdb)
+  PROFILE_ENV = dev_duckdb
+endif
+...
+
+seed:
+	uv run fft seed "$(PROJECT)" --env $(PROFILE_ENV)
+run:
+	env FFT_ACTIVE_ENV=$(PROFILE_ENV) ... uv run fft run ...
+```
+
+Common targets:
+
+| Target                   | Description |
+|--------------------------|-------------|
+| `make ENGINE=duckdb seed`| Materialize seeds into DuckDB. |
+| `make ENGINE=postgres run`| Execute the full pipeline against Postgres. |
+| `make dag`               | Render documentation (`site/dag/`). |
+| `make api-run`           | Run only API models (uses HTTP cache). |
+| `make api-offline`       | Force offline mode (`FF_HTTP_OFFLINE=1`). |
+| `make api-show-http`     | Display HTTP snapshot metrics via `jq`. |
+
+HTTP tuning parameters (`FF_HTTP_ALLOWED_DOMAINS`, cache dir, timeouts) live in `.env` and are appended via `HTTP_ENV` when running commands.
+
+## End-to-End Demo
+
+1. **Select engine**: `make ENGINE=duckdb` (default). Set `ENGINE=postgres` or `ENGINE=databricks_spark` to switch.
+2. **Seed data**: `make seed`
+3. **Run pipeline**: `make run`
+4. **Explore docs**: `make dag` → open `examples/api_demo/site/dag/index.html`
+5. **Inspect HTTP usage**: `make api-show-http`
+
+This example demonstrates multi-engine configuration, environment-driven secrets, and API enrichment within FastFlowTransform.
+
+
+
 <!-- >>> FILE: examples/Local_Engine_Setup.md >>> -->
 
 ## Local Engine Setup
@@ -3828,384 +5257,3 @@ This way, the incremental demo appears alongside your existing API demo and othe
 # License
 
 --8<-- "License.md"
-
-
-
-<!-- >>> FILE: Auto_Docs.md >>> -->
-
-# Auto-Docs & Lineage
-
-FastFlowTransform can generate a lightweight documentation site (DAG + model detail pages) plus an optional JSON manifest for external tooling.
-
-## Commands
-
-```bash
-# Classic
-fft dag . --env dev --html
-
-# Convenience wrapper (loads schema + descriptions + lineage, can emit JSON)
-fft docgen . --env dev --out site/docs --emit-json site/docs/docs_manifest.json
-```
-
-Add `--open-source` if you want the default browser to open the rendered `index.html` immediately.
-
-## Descriptions
-
-Descriptions can be provided in YAML (`project.yml`) and/or Markdown files. Markdown has higher priority.
-
-YAML in `project.yml`:
-
-```yaml
-docs:
-  models:
-    users.ff:
-      description: "Raw users table imported from CRM."
-      columns:
-        id: "Primary key."
-        email: "User email address."
-    users_enriched:
-      description: "Adds gmail flag."
-      columns:
-        is_gmail: "True if email ends with @gmail.com"
-```
-
-Markdown overrides YAML when present:
-
-```
-<project>/docs/models/<model>.md
-<project>/docs/columns/<relation>/<column>.md
-```
-
-Optional front matter is ignored for now (title/tags may be used later).
-
-## Column Lineage
-
-- SQL models: expressions like `col`, `alias AS out`, `upper(u.email) AS email_upper)` are parsed; `u` must come from a `FROM ... AS u` clause that resolves to a relation. Functions mark lineage as *transformed*.
-- Python (pandas) models: simple patterns like `rename`, `out["x"] = df["y"]`, `assign(x=...)` are recognized.
-- Override hints in YAML when the heuristic is insufficient:
-
-```yaml
-docs:
-  models:
-    mart_orders_enriched:
-      lineage:
-        email_upper:
-          from: [{ table: users, column: email }]
-          transformed: true
-```
-
-## JSON Manifest
-
-The optional manifest (via `--emit-json`) includes models, relations, descriptions, columns (with nullable/dtype), and lineage per column—useful for custom doc portals or CI checks.
-
-## Notes
-
-- Schema introspection currently supports DuckDB and Postgres. For other engines, the Columns card may be empty.
-- Lineage is optional; when uncertain, entries fall back to “unknown” and never fail doc generation.
-
-
-
-<!-- >>> FILE: CLI_Guide.md >>> -->
-
-# CLI Guide
-
-FastFlowTransform’s CLI is the entry point for seeding data, running DAGs, generating docs, syncing metadata, and executing quality tests. This guide summarizes the day-to-day commands and how they fit together. See `src/fastflowtransform/cli.py` for Typer definitions.
-
-## Core Commands
-
-| Command | Purpose |
-|---------|---------|
-| `fft seed <project> [--env dev]` | Materialize CSV/Parquet seeds into the configured engine. |
-| `fft run <project> [--env dev]` | Execute the DAG (obeys cache + parallel flags). |
-| `fft dag <project> --html` | Render the DAG graph/site for quick inspection. |
-| `fft docgen <project> --out site/docs` | Generate the full documentation bundle (graph + model pages + optional JSON). |
-| `fft test <project> [--env dev]` | Run schema/data-quality tests defined in `project.yml` or schema YAML files. |
-| `fft utest <project>` | Execute unit tests defined under `tests/unit/*.yml`. |
-| `fft sync-db-comments <project>` | Push model/column descriptions into Postgres or Snowflake comments. |
-
-Use `--select` to scope `run`, `dag`, or `test` commands (e.g. `state:modified`, `tag:finance`, `result:error`). Environment overrides rely on the selected profile in `profiles.yml` or the `FF_*` variables.
-
-## HTTP/API Helpers
-
-Python models can make HTTP calls via `fastflowtransform.api.http`. When you need examples, head over to `docs/Api_Models.md` for `get_json`, `get_df`, pagination helpers, caching, and offline modes.
-
-## DAG & Documentation
-
-- Narrow the graph with `fft dag ... --select <pattern>` (for example `state:modified` or `tag:finance`). Combined with `--html` this produces a focused mini-site under `<project>/docs/index.html`.
-- Control schema introspection via `--with-schema/--no-schema`. Use `--no-schema` when the executor should avoid fetching column metadata (for example, BigQuery without sufficient permissions).
-- `fft docgen` renders the DAG, model pages, and an optional JSON manifest in one command. Append `--open-source` to open `index.html` in your default browser after rendering.
-
-## Sync Database Comments
-
-`fft sync-db-comments <project> --env <env>` pushes model and column descriptions from project YAML or Markdown into database comments. The command currently supports Postgres and Snowflake Snowpark:
-
-- Start with `--dry-run` to review the generated `COMMENT` statements.
-- Postgres honors `profiles.yml -> postgres.db_schema` (and any `FF_PG_SCHEMA` override).
-- Snowflake reuses the session or connection exposed by the executor.
-
-If no descriptions are found, the command exits without making changes.
-
-
-
-<!-- >>> FILE: Logging.md >>> -->
-
-# Logging & Verbosity
-
-FastFlowTransform exposes uniform logging controls across all CLI commands plus a dedicated SQL debug channel for tracing rendered SQL, dependency loading, and auxiliary queries.
-
-## CLI Flags
-
-- `-q` / `--quiet` → only errors (`ERROR`)
-- *(default)* → concise warnings (`WARNING`)
-- `-v` / `--verbose` → progress/info (`INFO`)
-- `-vv` → full debug (`DEBUG`) including SQL debug output
-
-`-vv` automatically flips on the SQL debug channel (same effect as `FFT_SQL_DEBUG=1`).
-
-## SQL Debug Channel
-
-Enable it to inspect Python-model inputs, dependency columns, and helper SQL emitted by data-quality checks:
-
-```bash
-# full debug (recommended)
-fft run . -vv
-
-# equivalent using the env var (legacy behaviour retained)
-FFT_SQL_DEBUG=1 fft run .
-```
-
-## Usage Patterns
-
-```bash
-fft run . -q     # quiet (errors only)
-fft run .        # default (concise)
-fft run . -v     # verbose progress (model names, executor info)
-fft run . -vv    # full debug + SQL channel
-```
-
-## Parallel Logging UX
-
-- Each node emits start/end lines with duration, truncated name, and engine abbreviation (DUCK/PG/BQ/…).
-- Output remains line-stable via a thread-safe log queue; per-level summaries trail each run.
-- Failures still surface the familiar “error block” per node for quick diagnosis.
-
-**Notes**
-
-- SQL debug output routes through the `fastflowtransform.sql` logger; use `-vv` or `FFT_SQL_DEBUG=1` to reveal it.
-- Existing projects do not need changes: the environment variable keeps working even without `-vv`.
-
-
-
-<!-- >>> FILE: Troubleshooting.md >>> -->
-
-# Troubleshooting & Error Codes
-
-Use this checklist when FastFlowTransform commands misbehave. Each item points to the quickest fix plus the relevant CLI options.
-
-## Quick Fixes
-
-- **DuckDB seeds not visible** → ensure `FF_DUCKDB_PATH` (or the profile path) is identical for `seed`, `run`, `dag`, and `test`. If you configure `FF_DUCKDB_SCHEMA` / `FF_DUCKDB_CATALOG`, keep them consistent across commands so unqualified references resolve to the right namespace.
-- **Postgres connection refused** → confirm `FF_PG_DSN`, container status (`docker ps`), and that port `5432` is open.
-- **BigQuery permissions** → set `GOOGLE_APPLICATION_CREDENTIALS` and match dataset/location to your profile.
-- **HTML docs missing** → run `fft dag <project> --html` and open `<project>/docs/index.html`.
-- **Unexpected test failures** → inspect rendered SQL in CLI output, refine selection via `--select`, refresh seeds if needed.
-- **Dependency table not found in utests** → provide all physical upstream relations in the YAML spec.
-
-## Error Codes
-
-| Type                      | Class/Source              | Exit | Notes                                                   |
-|---------------------------|---------------------------|------|---------------------------------------------------------|
-| Missing dependency        | `DependencyNotFoundError` | 1    | Per-node list; tips for `ref()` / names                |
-| Cycle in DAG              | `ModelCycleError`         | 1    | “Cycle detected among nodes: …”                        |
-| Model execution (KeyError)| `cli.py` → formatted block| 1    | Inspect columns, use `relation_for(dep)` as keys       |
-| Data quality failures     | `cli test` → summary      | 2    | Totals section prints passed/failed counts             |
-| Unknown/unexpected        | generic                   | 99   | Optional trace via `FFT_TRACE=1`                       |
-
-Error types map to the classes documented in `docs/Technical_Overview.md#core-modules` and the CLI source.
-
-
-
-<!-- >>> FILE: Unit_Tests.md >>> -->
-
-# Model Unit Tests (`fft utest`)
-
-`fft utest` executes a single model in isolation, loading only the inputs you provide and comparing the result to an expected dataset. It works for SQL and Python models and runs against DuckDB or Postgres by default.
-
-## Cache Modes
-
-`fft utest --cache {off|ro|rw}` (default: `off`)
-
-- `off`: deterministic, never skips.
-- `ro`: skip on cache hit; on miss, build but **do not write** cache.
-- `rw`: skip on hit; on miss, build **and write** fingerprint.
-
-Notes:
-
-- UTests key the cache with `profile="utest"`.
-- Fingerprints include case inputs (CSV content hash / inline rows), so changing inputs invalidates the cache.
-- `--reuse-meta` is currently a reserved flag: exposed in the CLI, acts as a no-op today, and will enable future meta-table optimizations.
-
-## Why Use UTests?
-
-- Fast feedback on transformation logic without full DAG runs.
-- Small, reproducible fixtures (rows inline or external CSV).
-- Engine-agnostic: swap DuckDB/Postgres to spot dialect differences.
-
-## Folder Layout
-
-Specs live under `<project>/tests/unit/*.yml` relative to the project root (the directory passed to the CLI that contains `models/`):
-
-```
-your-project/
-├── models/
-│   ├── users.ff.sql
-│   ├── users_enriched.ff.py
-│   └── mart_users.ff.sql
-└── tests/
-    └── unit/
-        ├── users_enriched.yml
-        └── mart_users.yml
-```
-
-## YAML DSL (with `defaults`)
-
-Each file targets one logical node (the DAG name). Defaults are deep-merged into every case so you can share inputs/expectations and override per scenario.
-
-```yaml
-# tests/unit/users_enriched.yml
-model: users_enriched
-
-defaults:
-  inputs:
-    users:
-      rows:
-        - {id: 1, email: "a@example.com"}
-        - {id: 2, email: "b@gmail.com"}
-  expect:
-    relation: users_enriched
-    order_by: [id]
-
-cases:
-  - name: basic_gmail_flag
-    expect:
-      rows:
-        - {id: 1, email: "a@example.com", is_gmail: false}
-        - {id: 2, email: "b@gmail.com",   is_gmail: true}
-
-  - name: override_inputs
-    inputs:
-      users:
-        rows:
-          - {id: 3, email: "c@hotmail.com"}
-          - {id: 4, email: "d@gmail.com"}
-    expect:
-      rows:
-        - {id: 3, email: "c@hotmail.com", is_gmail: false}
-        - {id: 4, email: "d@gmail.com",   is_gmail: true}
-```
-
-SQL models use the file stem (including `.ff`) as `model`. Provide expected relation names that match the materialized table/view:
-
-```yaml
-# tests/unit/mart_users.yml
-model: mart_users.ff
-
-defaults:
-  inputs:
-    users_enriched:
-      rows:
-        - {id: 1, email: "a@example.com", is_gmail: false}
-        - {id: 2, email: "b@gmail.com",   is_gmail: true}
-  expect:
-    relation: mart_users
-    order_by: [id]
-
-cases:
-  - name: passthrough_columns
-    expect:
-      rows:
-        - {id: 1, email: "a@example.com", is_gmail: false}
-        - {id: 2, email: "b@gmail.com",   is_gmail: true}
-```
-
-For multi-dependency models, include every physical relation name (what `relation_for(dep)` returns):
-
-```yaml
-model: mart_orders_enriched
-defaults:
-  inputs:
-    users_enriched:
-      rows:
-        - {id: 1, email: "x@gmail.com", is_gmail: true}
-    orders:
-      rows:
-        - {order_id: 10, user_id: 1, amount: 19.9}
-        - {order_id: 11, user_id: 1, amount: -1.0}
-cases:
-  - name: join_and_flag
-    expect:
-      any_order: true
-      rows:
-        - {order_id: 10, user_id: 1, email: "x@gmail.com", is_gmail: true, amount: 19.9, valid_amt: true}
-        - {order_id: 11, user_id: 1, email: "x@gmail.com", is_gmail: true, amount: -1.0, valid_amt: false}
-```
-
-## Input Formats
-
-- `rows`: inline dictionaries per row.
-- `csv`: reference a CSV file (relative paths allowed).
-
-Keys under `inputs` are physical relations; use `relation_for('users.ff')` if unsure.
-
-## Expected Output & Comparison
-
-- `relation`: actual table/view name produced by the model (defaults to `relation_for(model)`).
-- Ordering: `order_by: [...]` or `any_order: true`.
-- Columns: `ignore_columns: [...]`, `subset: true`.
-- Numeric tolerance: `approx: true` or `approx: { col: 1e-9, other_col: 0.01 }`
-  (numbers can be plain `1e-9` or quoted; they are cast to float).
-
-## Running UTests
-
-```bash
-fft utest .                      # discover all specs
-fft utest . --env dev            # use a specific profile
-fft utest . --model users_enriched
-fft utest . --model mart_orders_enriched --case join_and_flag
-fft utest . --path tests/unit/users_enriched.yml
-```
-
-Override the executor for all specs (ensure credentials/DSNs are set):
-
-```bash
-export FF_PG_DSN="postgresql+psycopg://postgres:postgres@localhost:5432/ffdb"
-export FF_PG_SCHEMA="public"
-fft utest . --engine postgres
-```
-
-Executor precedence (highest → lowest): CLI `--engine`, YAML `engine:` (optional), `profiles.yml`, environment overrides.
-
-## Design Notes
-
-- Only the target model runs; supply all upstream relations the model expects.
-- `defaults` deep-merge: dicts merge, lists/scalars overwrite.
-- Results compare as DataFrames with configurable order, subsets, ignored columns, and numeric tolerances.
-- Exit codes: `0` for success, `2` when at least one case fails (compact CSV-style diff is printed).
-
-## CI Example
-
-```yaml
-name: utests
-on: [push, pull_request]
-jobs:
-  duckdb:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
-      - run: pip install -e .
-      - run: fft utest . --env dev
-```
-
-For Postgres, add a service container and run `fft utest . --engine postgres` with `FF_PG_DSN` / `FF_PG_SCHEMA`.

@@ -320,17 +320,26 @@ class ReconcileKeySide(BaseModel):
 
 class ReconcileEqualTestConfig(BaseProjectTestConfig):
     """
-    reconcile_equal test: compare two scalar expressions with optional tolerances.
+    `reconcile_equal` test: compare two scalar expressions with optional tolerances.
 
-    Parameters (from project.yml):
-      - left / right:
-          table: str
-          expr:  str
-          where: optional
-      - abs_tolerance: float, optional     # max absolute difference
-      - rel_tolerance_pct: float, optional # max relative diff in percent
+    Attributes:
+        left (ReconcileExprSide): Left-hand expression (`table`, `expr`, optional `where`).
+        right (ReconcileExprSide): Right-hand expression.
+        abs_tolerance (float | None): Maximum absolute difference allowed.
+        rel_tolerance_pct (float | None): Maximum relative difference (percent).
 
-    The top-level `table`/`column` fields are optional and used only for display.
+    Notes:
+        The top-level `table`/`column` fields are optional and only used for display in summaries.
+
+    Example (YAML):
+
+    ```yaml
+    - type: reconcile_equal
+      left:  { table: a_tbl, expr: "sum(x)" }
+      right: { table: b_tbl, expr: "sum(y)", where: "dt >= current_date - interval '7 days'" }
+      abs_tolerance: 0.01
+      rel_tolerance_pct: 1.0
+    ```
     """
 
     type: Literal["reconcile_equal"]
@@ -344,12 +353,23 @@ class ReconcileEqualTestConfig(BaseProjectTestConfig):
 
 class ReconcileRatioWithinTestConfig(BaseProjectTestConfig):
     """
-    reconcile_ratio_within test: constrain the ratio left/right within [min_ratio, max_ratio].
+    `reconcile_ratio_within` test: constrain the ratio `left/right` within `[min_ratio, max_ratio]`.
 
-    Parameters:
-      - left / right: ReconcileExprSide
-      - min_ratio: float
-      - max_ratio: float
+    Attributes:
+        left (ReconcileExprSide): Left-hand expression.
+        right (ReconcileExprSide): Right-hand expression.
+        min_ratio (float): Minimum allowed ratio.
+        max_ratio (float): Maximum allowed ratio.
+
+    Example (YAML):
+
+    ```yaml
+    - type: reconcile_ratio_within
+      left:  { table: orders, expr: "sum(amount)" }
+      right: { table: payments, expr: "sum(value)" }
+      min_ratio: 0.98
+      max_ratio: 1.02
+    ```
     """
 
     type: Literal["reconcile_ratio_within"]
@@ -363,11 +383,21 @@ class ReconcileRatioWithinTestConfig(BaseProjectTestConfig):
 
 class ReconcileDiffWithinTestConfig(BaseProjectTestConfig):
     """
-    reconcile_diff_within test: limit the absolute difference between two aggregates.
+    `reconcile_diff_within` test: limit the absolute difference between two aggregates.
 
-    Parameters:
-      - left / right: ReconcileExprSide
-      - max_abs_diff: float
+    Attributes:
+        left (ReconcileExprSide): Left-hand expression.
+        right (ReconcileExprSide): Right-hand expression.
+        max_abs_diff (float): Maximum allowed absolute difference.
+
+    Example (YAML):
+
+    ```yaml
+    - type: reconcile_diff_within
+      left:  { table: a, expr: "count(*)" }
+      right: { table: b, expr: "count(*)" }
+      max_abs_diff: 10
+    ```
     """
 
     type: Literal["reconcile_diff_within"]
@@ -380,17 +410,23 @@ class ReconcileDiffWithinTestConfig(BaseProjectTestConfig):
 
 class ReconcileCoverageTestConfig(BaseProjectTestConfig):
     """
-    reconcile_coverage test: ensure all keys from source exist in target.
+    `reconcile_coverage` test: ensure all keys from `source` exist in `target`.
 
-    Parameters:
-      - source:
-          table: str
-          key:   str
-      - target:
-          table: str
-          key:   str
-      - source_where: optional filter on source
-      - target_where: optional filter on target
+    Attributes:
+        source (ReconcileKeySide): Source side (`table`, `key`).
+        target (ReconcileKeySide): Target side (`table`, `key`).
+        source_where (str | None): Optional filter predicate applied to the source.
+        target_where (str | None): Optional filter predicate applied to the target.
+
+    Example (YAML):
+
+    ```yaml
+    - type: reconcile_coverage
+      source: { table: crm_users, key: "user_id" }
+      target: { table: fact_orders, key: "user_id" }
+      source_where: "status = 'active'"
+      target_where: "dt >= current_date - interval '30 days'"
+    ```
     """
 
     type: Literal["reconcile_coverage"]

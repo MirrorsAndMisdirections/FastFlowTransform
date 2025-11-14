@@ -2,7 +2,6 @@ version: 2
 
 sources:
   - name: crm
-    description: Seeded CRM-style data for the demo.
     tables:
       - name: users
         identifier: seed_users

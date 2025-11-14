@@ -1,0 +1,11 @@
+version: 2
+
+sources:
+  - name: crm
+    tables:
+      - name: users
+        identifier: seed_users
+  - name: sales
+    tables:
+      - name: orders
+        identifier: seed_orders

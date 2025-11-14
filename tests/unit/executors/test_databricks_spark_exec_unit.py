@@ -13,6 +13,7 @@ from fastflowtransform.executors.databricks_spark_exec import (
     _SparkConnShim,
     _split_db_table,
 )
+from fastflowtransform.table_formats.spark_iceberg import IcebergFormatHandler
 
 
 def _config_values(fake_builder, key: str) -> list[str]:
@@ -21,6 +22,22 @@ def _config_values(fake_builder, key: str) -> list[str]:
         for call in fake_builder.config.call_args_list
         if call.args and call.args[0] == key
     ]
+
+
+@pytest.mark.unit
+@pytest.mark.databricks_spark
+def test_non_delta_respects_explicit_catalog(exec_factory):
+    _, fake_builder, _ = exec_factory(table_format="parquet", catalog="unity_catalog")
+    catalog_values = _config_values(fake_builder, "spark.sql.catalog.spark_catalog")
+    assert catalog_values[-1] == "unity_catalog"
+
+
+@pytest.mark.unit
+@pytest.mark.databricks_spark
+def test_non_delta_leaves_catalog_unset(exec_factory):
+    _, fake_builder, _ = exec_factory(table_format="parquet")
+    catalog_values = _config_values(fake_builder, "spark.sql.catalog.spark_catalog")
+    assert catalog_values == []
 
 
 @pytest.mark.unit
@@ -99,6 +116,20 @@ def test_delta_format_respects_extra_conf_catalog(exec_factory):
 
     catalog_values = _config_values(fake_builder, "spark.sql.catalog.spark_catalog")
     assert catalog_values == ["ext_catalog"]
+
+
+@pytest.mark.unit
+@pytest.mark.databricks_spark
+def test_delta_format_errors_when_delta_missing(exec_factory):
+    def _passthrough(builder, extra_packages=None):
+        return builder
+
+    with (
+        patch.object(mod, "configure_spark_with_delta_pip", _passthrough),
+        patch.object(mod, "_has_delta", return_value=False),
+        pytest.raises(RuntimeError),
+    ):
+        exec_factory(table_format="delta")
 
 
 @pytest.mark.unit
@@ -198,24 +229,24 @@ def test__materialize_relation_uses_save_table_when_no_path(exec_minimal):
 
 @pytest.mark.unit
 @pytest.mark.databricks_spark
-def test__materialize_relation_uses_write_to_storage_path(exec_minimal, tmp_path):
-    """Executor should delegate to _write_to_storage_path when storage meta has a path."""
+def test__materialize_relation_with_path_delegates_to_save(exec_minimal, tmp_path):
+    """Executor should still call _save_df_as_table even if storage meta defines a path."""
     df = MagicMock()
     node = Node(name="dummy", kind="python", path=Path("."))
+    storage_meta = {"path": str(tmp_path), "format": "parquet"}
 
-    exec_minimal._storage_meta = MagicMock(
-        return_value={"path": str(tmp_path), "format": "parquet"}
-    )
+    exec_minimal._storage_meta = MagicMock(return_value=storage_meta)
+    exec_minimal._save_df_as_table = MagicMock()
     exec_minimal._write_to_storage_path = MagicMock()
 
     exec_minimal._materialize_relation("default.unit_tbl", df, node)
 
-    exec_minimal._write_to_storage_path.assert_called_once()
-    exec_minimal._write_to_storage_path.assert_called_with(
+    exec_minimal._save_df_as_table.assert_called_once_with(
         "default.unit_tbl",
         df,
-        {"path": str(tmp_path), "format": "parquet"},
+        storage=storage_meta,
     )
+    exec_minimal._write_to_storage_path.assert_not_called()
 
 
 @pytest.mark.unit
@@ -321,14 +352,6 @@ def test_materialize_relation_rejects_non_frame(exec_minimal, monkeypatch):
     node = Node(name="x", kind="python", path=Path("."))
     with pytest.raises(TypeError, match="Spark model must return a Spark DataFrame"):
         exec_minimal._materialize_relation("tbl", object(), node)
-
-
-@pytest.mark.unit
-@pytest.mark.databricks_spark
-def test_exists_relation_qualified(exec_minimal):
-    exec_minimal.spark.catalog._jcatalog.tableExists.return_value = True
-    assert exec_minimal.exists_relation("default.my_tbl") is True
-    exec_minimal.spark.catalog._jcatalog.tableExists.assert_called_with("default", "my_tbl")
 
 
 @pytest.mark.unit
@@ -442,11 +465,31 @@ def test_storage_meta_registry_scan_then_global(exec_minimal, monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.databricks_spark
-def test_format_relation_for_ref(exec_minimal):
+def test_format_relation_for_ref_iceberg(exec_minimal):
+    exec_minimal.spark_table_format = "iceberg"
+    exec_minimal.database = "demo"
+    exec_minimal.spark.catalog.currentDatabase.return_value = "demo"
+    exec_minimal._format_handler = IcebergFormatHandler(exec_minimal.spark)
+
     with patch("fastflowtransform.executors.databricks_spark_exec.relation_for") as rel_for:
-        rel_for.return_value = "real_table"
-        out = exec_minimal._format_relation_for_ref("users.ff")
-    assert out == "`real_table`"
+        rel_for.return_value = "events_base"
+        out = exec_minimal._format_relation_for_ref("events_base.ff")
+
+    assert out == "`iceberg`.`demo`.`events_base`"
+
+
+@pytest.mark.unit
+@pytest.mark.databricks_spark
+def test_this_identifier_iceberg(exec_minimal):
+    exec_minimal.spark_table_format = "iceberg"
+    exec_minimal.database = "demo"
+    exec_minimal.spark.catalog.currentDatabase.return_value = "demo"
+    exec_minimal._format_handler = IcebergFormatHandler(exec_minimal.spark)
+
+    node = Node(name="fct_events_sql_inline.ff", kind="sql", path=Path("."))
+    ident = exec_minimal._this_identifier(node)
+
+    assert ident == "`iceberg`.`demo`.`fct_events_sql_inline`"
 
 
 @pytest.mark.unit
@@ -474,6 +517,27 @@ def test_save_df_as_table_respects_storage_path(exec_minimal):
 
 @pytest.mark.unit
 @pytest.mark.databricks_spark
+def test_save_df_as_table_iceberg_ignores_storage_path(exec_minimal):
+    df = MagicMock()
+    exec_minimal.spark_table_format = "iceberg"
+    handler = MagicMock()
+    handler.table_format = "iceberg"
+    handler.allows_unmanaged_paths.return_value = False
+    exec_minimal._format_handler = handler
+    exec_minimal._write_to_storage_path = MagicMock()
+
+    exec_minimal._save_df_as_table(
+        "ice_tbl",
+        df,
+        storage={"path": "/tmp/ignored"},
+    )
+
+    exec_minimal._write_to_storage_path.assert_not_called()
+    handler.save_df_as_table.assert_called_once_with("ice_tbl", df)
+
+
+@pytest.mark.unit
+@pytest.mark.databricks_spark
 def test_create_or_replace_table_happy_path_calls_save(exec_minimal):
     # spark.sql soll NICHT werfen, sondern ein DF liefern
     fake_df = MagicMock()
@@ -492,3 +556,17 @@ def test_create_or_replace_table_happy_path_calls_save(exec_minimal):
 
     exec_minimal.spark.sql.assert_called_with("SELECT 1 AS id")
     exec_minimal._save_df_as_table.assert_called_once_with("target_tbl", fake_df, storage=ANY)
+
+
+@pytest.mark.unit
+@pytest.mark.databricks_spark
+def test_read_relation_iceberg_qualifies(exec_minimal):
+    exec_minimal.spark_table_format = "iceberg"
+    exec_minimal.database = "demo"
+    exec_minimal.spark.catalog.currentDatabase.return_value = "demo"
+    exec_minimal._format_handler = IcebergFormatHandler(exec_minimal.spark)
+
+    node = Node(name="model", kind="sql", path=Path("."))
+    exec_minimal._read_relation("events_base", node, deps=[])
+
+    exec_minimal.spark.table.assert_called_with("iceberg.demo.events_base")

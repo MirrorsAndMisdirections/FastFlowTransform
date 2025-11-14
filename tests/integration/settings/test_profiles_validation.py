@@ -117,6 +117,18 @@ def _write_profiles(tmp_path: Path, yaml_text: str) -> None:
             True,
             "Snowflake profile missing:",
         ),
+        (
+            "missing_profile_without_default",
+            """
+            dev:
+              engine: duckdb
+              duckdb:
+                path: ":memory:"
+            """,
+            {},
+            True,
+            "Profile 'prod' not found in profiles.yml",
+        ),
     ],
 )
 def test_profiles_validation(
@@ -135,17 +147,18 @@ def test_profiles_validation(
         monkeypatch.delenv(key, raising=False)
 
     env = EnvSettings(**env_kwargs)
+    requested_env = "prod" if case_name == "missing_profile_without_default" else "dev"
 
     if expect_error:
         with pytest.raises(ProfileConfigError) as exc:
-            resolve_profile(tmp_path, "dev", env)
+            resolve_profile(tmp_path, requested_env, env)
         msg = str(exc.value)
         # single-line hint (no embedded newlines)
         assert "\n" not in msg, f"{case_name}: error message must be single-line"
         if expect_substring:
             assert expect_substring in msg, f"{case_name}: expected hint not found:\n{msg}"
     else:
-        prof = resolve_profile(tmp_path, "dev", env)
+        prof = resolve_profile(tmp_path, requested_env, env)
         # sanity: returns the right engine type
         assert prof.engine in {
             "duckdb",

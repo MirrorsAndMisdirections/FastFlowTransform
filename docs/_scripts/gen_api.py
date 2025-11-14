@@ -2,6 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 import mkdocs_gen_files
+from collections import defaultdict
 
 # -------------------------------------------------------------------
 # Configuration
@@ -96,11 +97,54 @@ for path in sorted(pkg_root.rglob("*.py")):
         f.write("      filters:\n")
         f.write('        - "!^_"\n')
 
-# Generate index page
+# Generate index page (paths relative to the reference/ directory)
 index_path = "reference/index.md"
 with mkdocs_gen_files.open(index_path, "w") as f:
     f.write("# API Reference\n\n")
     f.write("> Auto-generated per module\n\n")
     for module, doc_file in generated_files:
         rel = Path(doc_file).relative_to("reference").as_posix()
+        # IMPORTANT: link without 'reference/' prefix
         f.write(f"- [{module}]({rel})\n")
+
+# -------------------------------------------------------------------
+# Generate reference/SUMMARY.md for mkdocs-literate-nav
+# -------------------------------------------------------------------
+# This builds a *structured* nav. If you prefer a flat list, you can
+# just copy the loop used for index.md above instead.
+reference_root = Path("reference")
+
+# Build a tree: level-1 = top-level package (fastflowtransform),
+# level-2 = immediate subpackage/module, then files underneath.
+tree: dict[str, list[tuple[str, str]]] = defaultdict(list)
+for module, doc_file in generated_files:
+    rel = Path(doc_file).relative_to("reference")
+    parts = module.split(".")
+    # Expect modules like "fastflowtransform", "fastflowtransform.api.http", ...
+    group = parts[1] if len(parts) > 1 else parts[0]  # e.g. "api", "config", "executors"
+    tree[group].append((module, rel.as_posix()))
+
+# Sort groups and entries for stable nav
+for k in list(tree.keys()):
+    tree[k].sort(key=lambda x: x[0])
+
+with mkdocs_gen_files.open("reference/SUMMARY.md", "w") as f:
+    f.write("# API Reference\n\n")
+    # Link to the overview page
+    f.write("- [Overview](index.md)\n")
+    # Grouped subsections
+    for group in sorted(tree.keys()):
+        items = tree[group]
+        if not items:
+            # Safety: never emit an empty section (would break literate-nav)
+            continue
+        if len(items) == 1:
+            # For single-item groups, emit a direct link (no section header)
+            module, rel = items[0]
+            f.write(f"- [{module}]({rel})\n")
+            continue
+        # Section header (no link)
+        f.write(f"- {group}\n")
+        for module, rel in items:
+            # Nested items MUST be indented by 4 spaces for literate-nav
+            f.write(f"    - [{module}]({rel})\n")

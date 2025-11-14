@@ -120,12 +120,12 @@ jobs:
           echo "Running integration tests for engine=${{ matrix.engine }}"
           case "${{ matrix.engine }}" in
             duckdb)
-              uv run pytest -m "integration and duckdb" --maxfail=1 -q
+              uv run pytest -m "integration and duckdb" --maxfail=1 -q tests
               ;;
             postgres)
-              uv run pytest -m "integration and postgres" --maxfail=1 -q
+              uv run pytest -m "integration and postgres" --maxfail=1 -q tests
               ;;
             databricks_spark)
-              uv run pytest -m "integration and databricks_spark" --maxfail=1 -q
+              uv run pytest -m "integration and databricks_spark" --maxfail=1 -q tests
               ;;
           esac

@@ -1,0 +1,40 @@
+name: macros_demo
+version: "0.1"
+
+vars:
+  # used by macros and examples
+  default_country: "DE"
+
+models:
+  storage:
+    stg_users:
+      path: ".local/spark/stg_users"
+      format: parquet
+    stg_orders:
+      path: ".local/spark/stg_orders"
+      format: parquet
+    dim_users.ff:
+      path: ".local/spark/dim_users"
+      format: parquet
+    fct_user_sales.ff:
+      path: ".local/spark/fct_user_sales"
+      format: parquet
+
+seeds:
+  storage:
+    seed_users:
+      path: ".local/spark/seed_users"
+      format: parquet
+    seed_orders:
+      path: ".local/spark/seed_orders"
+      format: parquet
+
+tests:
+  - type: not_null
+    table: dim_users
+    column: user_id
+    tags: [batch]
+  - type: row_count_between
+    table: fct_user_sales
+    min_rows: 1
+    tags: [batch]

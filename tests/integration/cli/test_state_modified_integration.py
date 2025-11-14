@@ -10,7 +10,6 @@ from fastflowtransform.cli import app
 @pytest.mark.integration
 def test_state_modified_and_plus(tmp_path: Path):
     (tmp_path / "models").mkdir(parents=True)
-    (tmp_path / "sources.yml").write_text("{}", encoding="utf-8")
     (tmp_path / "models" / "a.ff.sql").write_text("select 1 as x", encoding="utf-8")
     (tmp_path / "models" / "b.ff.sql").write_text(
         "select * from {{ ref('a.ff') }}", encoding="utf-8"

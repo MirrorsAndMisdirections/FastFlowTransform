@@ -13,8 +13,6 @@ def test_materializations_and_ephemeral_inlining_duckdb(tmp_path: Path):
     # Arrange: minimal project with 3 models (table/view/ephemeral) + consumer
     models = tmp_path / "models"
     models.mkdir(parents=True, exist_ok=True)
-    # empty sources.yml so source(...) is available if needed
-    (tmp_path / "sources.yml").write_text("{}", encoding="utf-8")
 
     # Base model (default: table)
     (models / "base.ff.sql").write_text(

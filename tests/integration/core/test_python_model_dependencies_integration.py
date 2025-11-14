@@ -12,16 +12,15 @@ def test_python_model_dep_loading_single_and_multi(tmp_path):
     ex = DuckExecutor()
     con = ex.con
 
-    # seed zwei Tabellen
+    # seed two tables
     con.execute("create table users as select 1::int as id, 'a@example.com'::varchar as email")
     con.execute("create table orders as select 1::int as user_id, 10.0::double as order_value")
 
-    # registriere zwei Python-Modelle in REGISTRY (vereinfachtes Setup)
     def one(df: pd.DataFrame) -> pd.DataFrame:
         return df.assign(flag=True)
 
-    def multi(dfs: dict[str, pd.DataFrame]) -> pd.DataFrame:
-        return dfs["orders"].merge(dfs["users"], left_on="user_id", right_on="id")
+    def multi(orders: pd.DataFrame, users: pd.DataFrame) -> pd.DataFrame:
+        return orders.merge(users, left_on="user_id", right_on="id")
 
     REGISTRY.py_funcs["u1"] = one
     REGISTRY.py_funcs["m1"] = multi

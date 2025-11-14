@@ -15,12 +15,11 @@ def test_python_model_tags_propagate_to_node(tmp_path: Path, monkeypatch) -> Non
 
     model_file = models_dir / "py_tagged.ff.py"
     model_file.write_text(
-        (
-            "from fastflowtransform import model\n\n"
-            "@model(name='py_tagged', tags=['example', 'demo'], materialized='view')\n"
-            "def build(df=None):\n"
-            "    return df\n"
-        ),
+        "from fastflowtransform import model\n"
+        "import pandas as pd\n\n"
+        "@model(name='py_tagged', tags=['example', 'demo'], materialized='view')\n"
+        "def build():\n"
+        "    return pd.DataFrame()\n",
         encoding="utf-8",
     )
 

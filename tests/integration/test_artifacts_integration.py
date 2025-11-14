@@ -21,7 +21,11 @@ def test_artifacts_all_written(tmp_path: Path):
     (tmp_path / "models" / "m.ff.sql").write_text(
         "create or replace table m as select 1 as id", encoding="utf-8"
     )
-    (tmp_path / "sources.yml").write_text("{}", encoding="utf-8")
+    (tmp_path / "sources.yml").write_text(
+        "version: 2\nsources: []\n",
+        encoding="utf-8",
+    )
+
     REGISTRY.load_project(tmp_path)
     env = REGISTRY.get_env()
     ex = DuckExecutor(":memory:")

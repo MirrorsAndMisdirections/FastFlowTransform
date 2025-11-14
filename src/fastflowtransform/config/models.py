@@ -287,6 +287,69 @@ class ModelConfig(BaseModel):
             return False
         return bool(self.incremental.enabled)
 
+    # ----------------------------------------------------------------------
+    # Cross-field guardrails (fail fast with clear messages)
+    # ----------------------------------------------------------------------
+    @model_validator(mode="after")
+    def _validate_incremental_requirements(self) -> ModelConfig:
+        """
+        Enforce combinations that must hold for incremental materializations.
+
+        Rules:
+          1) If materialized == 'incremental', incremental must be effectively enabled.
+          2) If incremental is enabled, at least one freshness/delta hint must exist:
+             - updated_at / updated_at_column / updated_at_columns / timestamp_columns
+               OR delta_sql OR delta_python.
+          3) If both updated_at and updated_at_column are provided, they must match.
+          4) (Opinionated) Require unique_key when incremental is enabled
+             to avoid accidental cartesian merges. Relax if your executor permits.
+        """
+        is_mat_inc = self.materialized == "incremental"
+        is_inc_enabled = self.is_incremental_enabled()
+
+        # 1) Require incremental block when materialized='incremental'
+        if is_mat_inc and not is_inc_enabled:
+            raise ValueError(
+                "materialized='incremental' requires an enabled incremental configuration. "
+                "Either set `incremental: true` or provide a "
+                "structured `incremental: { enabled: true, ... }`."
+            )
+
+        # 2) If incremental is enabled, ensure at least one delta/freshness hint
+        if is_inc_enabled:
+            has_time_hints = any(
+                [
+                    bool(self.updated_at),
+                    bool(self.updated_at_column),
+                    bool(self.updated_at_columns),
+                    bool(self.timestamp_columns),
+                ]
+            )
+            has_delta_hints = any([bool(self.delta_sql), bool(self.delta_python)])
+            if not (has_time_hints or has_delta_hints):
+                raise ValueError(
+                    "incremental.enabled=True but no delta/freshness hints were provided. "
+                    "Please set one of: updated_at / updated_at_column / updated_at_columns / "
+                    "timestamp_columns, or provide delta_sql / delta_python."
+                )
+
+        # 3) If both notations are present, they must agree
+        if self.updated_at and self.updated_at_column and self.updated_at != self.updated_at_column:
+            raise ValueError(
+                f"updated_at ('{self.updated_at}') and "
+                f"updated_at_column ('{self.updated_at_column}') "
+                "refer to different columns. Use one or make them identical."
+            )
+
+        # 4) (Opinionated) Require unique_key when incremental is enabled
+        if is_inc_enabled and not (self.unique_key or self.primary_key):
+            raise ValueError(
+                "incremental.enabled=True requires a unique_key (or primary_key) to be set "
+                "for safe merges. Example: unique_key: ['id']"
+            )
+
+        return self
+
 
 # ---------------------------------------------------------------------------
 # Helper: validate & normalize raw meta dict
@@ -319,3 +382,25 @@ def validate_model_meta(meta: Mapping[str, Any] | None) -> ModelConfig:
         raise TypeError("meta.incremental must be a bool, a mapping or null")
 
     return ModelConfig.model_validate(data)
+
+
+def validate_model_meta_strict(
+    meta: Mapping[str, Any] | None,
+    *,
+    model_name: str | None = None,
+    file_path: str | None = None,
+) -> ModelConfig:
+    """
+    Like validate_model_meta(), but wraps exceptions with model/file context for clearer errors.
+    Callers in the loader should prefer this, so a bad config never silently disables a model.
+    """
+    try:
+        return validate_model_meta(meta)
+    except Exception as e:
+        ctx = []
+        if model_name:
+            ctx.append(f"model '{model_name}'")
+        if file_path:
+            ctx.append(f"{file_path}")
+        prefix = f"Invalid model config ({', '.join(ctx)})" if ctx else "Invalid model config"
+        raise TypeError(f"{prefix}: {e}") from e

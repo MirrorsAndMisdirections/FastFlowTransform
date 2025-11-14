@@ -204,7 +204,7 @@ class BaseExecutor[TFrame](ABC):
 
         # expose 'this' to the template: Proxy-Objekt, das wie String wirkt
         this_obj = _ThisProxy(
-            relation_for(node.name),
+            self._this_identifier(node),
             (getattr(node, "meta", {}) or {}).get("materialized", "table"),
             getattr(self, "schema", None) or getattr(self, "dataset", None),
             getattr(self, "database", None) or getattr(self, "project", None),
@@ -397,7 +397,7 @@ class BaseExecutor[TFrame](ABC):
             ref=lambda n: self._resolve_ref(n, env),
             source=self._resolve_source,
             this=_ThisProxy(
-                relation_for(node.name),
+                self._this_identifier(node),
                 (getattr(node, "meta", {}) or {}).get("materialized", "table"),
                 getattr(self, "schema", None) or getattr(self, "dataset", None),
                 getattr(self, "database", None) or getattr(self, "project", None),
@@ -416,12 +416,17 @@ class BaseExecutor[TFrame](ABC):
 
         self._reset_http_ctx(node)
 
-        arg = self._build_python_args(node, deps)
+        # arg = self._build_python_args(node, deps)
+        args, argmap = self._build_python_inputs(node, deps)
         requires = REGISTRY.py_requires.get(node.name, {})
+        # if deps:
+        #     self._validate_required(node.name, arg, requires)
         if deps:
-            self._validate_required(node.name, arg, requires)
+            # Required-columns check works against the mapping
+            self._validate_required(node.name, argmap, requires)
 
-        out = self._execute_python_func(func, arg, node)
+        # out = self._execute_python_func(func, arg, node)
+        out = self._execute_python_func(func, args, node)
 
         target = relation_for(node.name)
         meta = getattr(node, "meta", {}) or {}
@@ -445,37 +450,33 @@ class BaseExecutor[TFrame](ABC):
         with suppress(Exception):
             _http_ctx.reset_for_node(node.name)
 
-    def _build_python_args(self, node: Node, deps: list[str]) -> Any:
+    def _build_python_inputs(
+        self, node: Node, deps: list[str]
+    ) -> tuple[list[TFrame], dict[str, TFrame]]:
         """
         Load input frames for the Python model.
-
         Returns:
-            - None if there are no dependencies,
-            - a single TFrame if there is exactly one dependency,
-            - a dict[name, TFrame] for multiple dependencies.
+            - args:  positional argument list in the order of `deps`
+            - argmap: mapping {relation_name -> frame} for validation
         """
-        if not deps:
-            return None
-
-        if len(deps) == 1:
-            rel = relation_for(deps[0])
-            df_in: TFrame = self._read_relation(rel, node, deps)
-            return df_in
-
-        frames: dict[str, TFrame] = {}
-        for dep in deps:
+        args: list[TFrame] = []
+        argmap: dict[str, TFrame] = {}
+        for dep in deps or []:
             rel = relation_for(dep)
-            frames[rel] = self._read_relation(rel, node, deps)
-        return frames
+            df = self._read_relation(rel, node, deps)
+            args.append(df)
+            argmap[rel] = df
+        return args, argmap
 
     def _execute_python_func(
         self,
         func: Callable[[Any], Any],
-        arg: Any,
+        args: Any,
         node: Node,
     ) -> TFrame:
         """Execute the Python function and ensure it returns a valid frame."""
-        raw = func(arg)
+        # raw = func(arg)
+        raw = func(*args)
         if not self._is_frame(raw):
             raise TypeError(
                 f"Python-Modell '{node.name}' muss {self._frame_name()} DataFrame zurückgeben."
@@ -656,6 +657,28 @@ class BaseExecutor[TFrame](ABC):
         ...
 
     # ---------- Resolution helpers ----------
+    def _this_identifier(self, node: Node) -> str:
+        """
+        Physical identifier backing {{ this }} in SQL templates.
+
+        Engines may override to inject catalog/schema qualification.
+        """
+        return relation_for(node.name)
+
+    def _format_test_table(self, table: str | None) -> str | None:
+        """
+        Format table identifiers for data-quality tests (fft test).
+
+        Default behavior normalizes '.ff' suffixes only; engines can override
+        to add catalog/schema qualification.
+        """
+        if not isinstance(table, str):
+            return table
+        stripped = table.strip()
+        if not stripped:
+            return stripped
+        return relation_for(stripped) if stripped.endswith(".ff") else stripped
+
     def _resolve_ref(self, name: str, env: Environment) -> str:
         dep = REGISTRY.get_node(name) if hasattr(REGISTRY, "get_node") else REGISTRY.nodes[name]
         if dep.meta.get("materialized") == "ephemeral":

@@ -146,7 +146,10 @@ def exec_factory():
             # make .config(...) chainable
             fake_builder.config.return_value = fake_builder
             fake_builder.enableHiveSupport.return_value = fake_builder
-            fake_spark = MagicMock()
+            fake_conf = MagicMock()
+            fake_sc_conf = MagicMock()
+            fake_sc = MagicMock(getConf=MagicMock(return_value=fake_sc_conf))
+            fake_spark = MagicMock(conf=fake_conf, sparkContext=fake_sc)
             fake_builder.getOrCreate.return_value = fake_spark
 
             ex = DatabricksSparkExecutor(**kwargs)
@@ -167,6 +170,28 @@ def spark_exec(spark_tmpdir: Path) -> DatabricksSparkExecutor:
         app_name="fft-it",
         warehouse_dir=str(spark_tmpdir),
         database="default",
+    )
+
+
+@pytest.fixture(scope="session")
+def spark_exec_delta(spark_tmpdir):
+    try:
+        pass
+    except Exception:
+        pytest.skip("delta-spark is not installed; skipping Delta tests")
+
+    extra_conf = {
+        "spark.ui.enabled": "false",
+        "spark.sql.shuffle.partitions": "1",
+    }
+
+    return DatabricksSparkExecutor(
+        master="local[*]",
+        app_name="fft-it-delta",
+        warehouse_dir=str(spark_tmpdir),
+        database=os.getenv("FF_DBR_DATABASE", "default"),
+        extra_conf=extra_conf,
+        table_format="delta",  # executor will configure Delta & verify it
     )
 
 

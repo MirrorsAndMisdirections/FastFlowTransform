@@ -1,5 +1,5 @@
-site_name: FastFlowTransform
-site_description: Documentation for the FastFlowTransform project
+site_name: "FastFlowTransform – SQL & Python data transformation framework"
+site_description: "Open-source Python framework for SQL & Python data modeling, ETL pipelines, and data quality tests on DuckDB, Postgres, BigQuery, Databricks and Snowflake."
 site_url: https://MirrorsAndMisdirections.github.io/FastFlowTransform/
 repo_url: https://github.com/MirrorsAndMisdirections/FastFlowTransform
 repo_name: MirrorsAndMisdirections/FastFlowTransform
@@ -32,11 +32,19 @@ nav:
   - State Selection: State_Selection.md
   - YAML Tests: YAML_Tests.md
   - Data Quality Tests: Data_Quality_Tests.md
-  - API Reference: reference/index.md
+  - API Reference: reference/
+  - CLI Guide: CLI_Guide.md
+  - Auto Docs: Auto_Docs.md
+  - Logging: Logging.md
+  - Unit Tests: Unit_Tests.md
+  - Troubleshooting: Troubleshooting.md
   - Examples:
       - Basic Demo: examples/Basic_Demo.md
+      - Materializations Demo: examples/Materializations_Demo.md
       - Environment Matrix: examples/Environment_Matrix.md
       - Data Quality Tests Demo: examples/DQ_Demo.md
+      - Macros Demo: examples/Macros_Demo.md
+      - Cache Demo: examples/Cache_Demo.md
       - Incremental Demo: examples/Incremental_Demo.md
       - API Demo: examples/API_Demo.md
       - Local Engine Setup: examples/Local_Engine_Setup.md
@@ -64,6 +72,7 @@ plugins:
   - gen-files:
       scripts:
         - docs/_scripts/gen_api.py
+  - literate-nav
   - mkdocstrings:
       handlers:
         python:

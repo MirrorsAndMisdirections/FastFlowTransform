@@ -15,9 +15,9 @@ from typing import Any
 import yaml
 from jinja2 import Environment
 
-from .core import REGISTRY, relation_for
-from .dag import topo_sort
-from .meta import relation_exists as _relation_exists_engine
+from fastflowtransform.core import REGISTRY, relation_for
+from fastflowtransform.dag import topo_sort
+from fastflowtransform.meta import relation_exists as _relation_exists_engine
 
 
 @dataclass

@@ -9,7 +9,7 @@ UV ?= uv
 # Engine selector (duckdb|postgres|databricks_spark)
 ENGINE ?= duckdb
 
-# For Databricks Spark: control table format (parquet|delta)
+# For Databricks Spark: control table format (parquet|delta|iceberg)
 DBR_TABLE_FORMAT ?= parquet
 
 UNAME_S := $(shell uname -s)
@@ -28,8 +28,18 @@ ifeq ($(ENGINE),postgres)
   ENGINE_TAG = engine:postgres
 endif
 ifeq ($(ENGINE),databricks_spark)
-  PROFILE_ENV = dev_databricks
   ENGINE_TAG = engine:databricks_spark
+  # Choose profile based on table format so we can have separate configs:
+  # - dev_databricks_delta   (Delta Lake)
+  # - dev_databricks_iceberg (Iceberg)
+  # - dev_databricks         (generic / parquet)
+  ifeq ($(DBR_TABLE_FORMAT),delta)
+    PROFILE_ENV = dev_databricks_delta
+  else ifeq ($(DBR_TABLE_FORMAT),iceberg)
+    PROFILE_ENV = dev_databricks_iceberg
+  else
+    PROFILE_ENV = dev_databricks_delta
+  endif
 endif
 
 BASE_ENV = FFT_ACTIVE_ENV=$(PROFILE_ENV)
@@ -90,7 +100,7 @@ demo-open:
 
 demo: clean
 	@echo "== 🚀 Incremental Demo ($(ENGINE)) =="
-	@echo "Profile=$(PROFILE_ENV)  DB=$(DB)  PROJECT=$(PROJECT)"
+	@echo "Profile=$(PROFILE_ENV)  DB=$(DB)  PROJECT=$(PROJECT)  DBR_TABLE_FORMAT=$(DBR_TABLE_FORMAT)"
 	+$(MAKE) seed
 	+$(MAKE) run_full
 	@echo

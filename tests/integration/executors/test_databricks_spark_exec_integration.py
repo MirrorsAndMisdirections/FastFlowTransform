@@ -31,8 +31,8 @@ def test_incremental_insert_integration(spark_exec: DatabricksSparkExecutor):
 
 @pytest.mark.integration
 @pytest.mark.databricks_spark
-def test_incremental_merge_integration(spark_exec: DatabricksSparkExecutor):
-    spark_exec.create_table_as("it_merge", "SELECT 1 AS id, 'old' AS v")
+def test_incremental_merge_fallback_without_delta(spark_exec: DatabricksSparkExecutor):
+    spark_exec.create_table_as("it_merge_fallback", "SELECT 1 AS id, 'old' AS v")
     sql = """
     SELECT * FROM (
         SELECT 1 AS id, 'new' AS v
@@ -40,8 +40,10 @@ def test_incremental_merge_integration(spark_exec: DatabricksSparkExecutor):
         SELECT 2 AS id, 'other' AS v
     ) s
     """
-    spark_exec.incremental_merge("it_merge", sql, unique_key=["id"])
-    rows = {(r["id"], r["v"]) for r in spark_exec.spark.sql("SELECT * FROM it_merge").collect()}
+    spark_exec.incremental_merge("it_merge_fallback", sql, unique_key=["id"])
+    rows = {
+        (r["id"], r["v"]) for r in spark_exec.spark.sql("SELECT * FROM it_merge_fallback").collect()
+    }
     assert rows == {(1, "new"), (2, "other")}
 
 

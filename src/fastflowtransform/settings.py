@@ -182,10 +182,17 @@ def _render_profiles_template(text: str, project_dir: Path) -> str:
 # ---------- Resolver ----------
 def resolve_profile(project_dir: Path, env_name: str, env: EnvSettings) -> Profile:
     profiles: dict[str, dict[str, Any]] = load_profiles(project_dir)
+    requested = profiles.get(env_name)
+    fallback = profiles.get("default")
+
+    if profiles and requested is None and fallback is None:
+        raise ProfileConfigError(
+            f"Profile '{env_name}' not found "
+            "in profiles.yml (define it or add a 'default' profile)."
+        )
+
     raw: dict[str, Any] = (
-        profiles.get(env_name)
-        or profiles.get("default")
-        or {"engine": "duckdb", "duckdb": {"path": ":memory:"}}
+        requested or fallback or {"engine": "duckdb", "duckdb": {"path": ":memory:"}}
     )
 
     _apply_env_overrides(raw, env)

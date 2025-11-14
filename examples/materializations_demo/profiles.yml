@@ -1,0 +1,25 @@
+# profiles.yml for materializations demo
+
+dev_duckdb:
+  engine: duckdb
+  duckdb:
+    path: "{{ env('FF_DUCKDB_PATH', '.local/materializations_demo.duckdb') }}"
+
+dev_postgres:
+  engine: postgres
+  postgres:
+    dsn: "{{ env('FF_PG_DSN') }}"
+    db_schema: "{{ env('FF_PG_SCHEMA', 'public') }}"
+
+dev_databricks:
+  engine: databricks_spark
+  databricks_spark:
+    master: "{{ env('FF_SPARK_MASTER', 'local[*]') }}"
+    app_name: "{{ env('FF_SPARK_APP_NAME', 'materializations_demo') }}"
+    warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse"
+    extra_conf:
+      spark.hadoop.javax.jdo.option.ConnectionURL: "jdbc:derby:{{ project_dir() }}/.local/metastore_db;create=true"
+      spark.hadoop.datanucleus.rdbms.datastoreAdapterClassName: "org.datanucleus.store.rdbms.adapter.DerbyAdapter"
+      spark.hadoop.datanucleus.schema.autoCreateAll: "true"
+      spark.hadoop.javax.jdo.option.ConnectionDriverName: "org.apache.derby.jdbc.EmbeddedDriver"
+      spark.driver.extraJavaOptions: "-Dderby.stream.error.file={{ project_dir() }}/.local/derby.log"

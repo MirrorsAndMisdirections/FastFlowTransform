@@ -4,9 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-import yaml
 
-from fastflowtransform.core import Node, _parse_sources_yaml
+from fastflowtransform.core import Node
 from fastflowtransform.fingerprint import (
     EnvCtx,
     build_env_ctx,
@@ -14,27 +13,10 @@ from fastflowtransform.fingerprint import (
     fingerprint_sql,
     get_function_source,
     inspect,
-    normalized_sources_blob,
 )
 
 
 @pytest.mark.unit
-def test_sources_normalization_stable():
-    doc = """version: 2
-
-sources:
-  - name: crm
-    tables:
-      - name: users
-        identifier: seed_users
-      - name: orders
-        identifier: seed_orders
-"""
-    parsed = _parse_sources_yaml(yaml.safe_load(doc))
-    reordered = {"crm": {"orders": parsed["crm"]["orders"], "users": parsed["crm"]["users"]}}
-    assert normalized_sources_blob(parsed) == normalized_sources_blob(reordered)
-
-
 def test_env_ctx_respects_selected_env_keys(monkeypatch):
     monkeypatch.setenv("FF_ENGINE", "duckdb")
     monkeypatch.setenv("SECRET_TOKEN", "shh")
@@ -48,6 +30,7 @@ def test_env_ctx_respects_selected_env_keys(monkeypatch):
     assert ctx1.to_payload() == ctx3.to_payload()
 
 
+@pytest.mark.unit
 def test_fingerprint_sql_changes_on_small_sql_edit():
     node = Node(name="users.ff", kind="sql", path=Path(__file__))
     ctx = EnvCtx(engine="duckdb", profile="dev", env_vars={}, sources_json="{}")
@@ -56,6 +39,7 @@ def test_fingerprint_sql_changes_on_small_sql_edit():
     assert fp1 != fp2
 
 
+@pytest.mark.unit
 def test_fingerprint_sql_dep_cascade():
     node = Node(name="mart.ff", kind="sql", path=Path(__file__), deps=["users.ff"])
     ctx = EnvCtx(engine="duckdb", profile="dev", env_vars={}, sources_json="{}")
@@ -78,6 +62,7 @@ def _dummy_func_b(x):
     return x + 2
 
 
+@pytest.mark.unit
 def test_get_function_source_is_stable_and_different_per_change():
     src_a = get_function_source(_dummy_func_a)
     src_b = get_function_source(_dummy_func_b)
@@ -85,6 +70,7 @@ def test_get_function_source_is_stable_and_different_per_change():
     assert src_a != src_b
 
 
+@pytest.mark.unit
 def test_fingerprint_py_changes_with_source_and_deps():
     node = Node(name="py_model", kind="python", path=Path(__file__), deps=["users.ff"])
     ctx = EnvCtx(engine="duckdb", profile="dev", env_vars={}, sources_json="{}")
@@ -94,6 +80,7 @@ def test_fingerprint_py_changes_with_source_and_deps():
     assert fp1 != fp2
 
 
+@pytest.mark.unit
 def test_get_function_source_fallback(monkeypatch):
     # Force inspect.getsource to fail to exercise fallback path
     def boom(_):

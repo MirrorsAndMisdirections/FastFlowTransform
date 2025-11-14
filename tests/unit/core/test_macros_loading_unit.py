@@ -12,7 +12,10 @@ from fastflowtransform.core import REGISTRY
 def test_macros_are_loaded_and_callable(tmp_path: Path):
     models = tmp_path / "models" / "macros"
     models.mkdir(parents=True, exist_ok=True)
-    (tmp_path / "sources.yml").write_text("{}", encoding="utf-8")
+    (tmp_path / "sources.yml").write_text(
+        "version: 2\nsources: []\n",
+        encoding="utf-8",
+    )
 
     # A tiny macro file
     (models / "utils.sql").write_text(

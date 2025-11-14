@@ -1,7 +1,7 @@
-````markdown
-# Incremental & Delta Demo
+#  Incremental, Delta & Iceberg Demo
 
-This example project shows how to use **incremental models** and **Delta-style merges** in FastFlowTransform across DuckDB, Postgres and Databricks Spark.
+This example project shows how to use **incremental models** and **Delta-/Iceberg-style merges** in FastFlowTransform across DuckDB, Postgres and Databricks Spark (Parquet, Delta & Iceberg).
+
 
 It is intentionally small and self-contained so you can copy/paste patterns into your own project.
 
@@ -15,14 +15,15 @@ The example lives under:
 examples/incremental_demo/
 ````
 
-Suggested directory structure (mirrors the `api_demo` example):
+Directory structure:
 
 ```text
 incremental_demo/
   .env
   .env.dev_duckdb
   .env.dev_postgres
-  .env.dev_databricks
+  .env.dev_databricks_delta
+  .env.dev_databricks_iceberg
   Makefile
   profiles.yml
   project.yml
@@ -43,10 +44,6 @@ incremental_demo/
         fct_events_py_incremental.ff.py
       databricks_spark/
         fct_events_py_incremental.ff.py
-
-  config/
-    incremental/
-      fct_events_sql_yaml.delta.yml
 ```
 
 *Your actual filenames may differ slightly; the concepts are the same.*
@@ -62,10 +59,10 @@ The demo revolves around a tiny `events` dataset and three different ways to bui
    * `models/common/fct_events_sql_inline.ff.sql`
    * All incremental logic (how to find “new/changed” rows) is defined directly in the model’s `config(meta=...)` block.
 
-2. **SQL incremental model with external YAML delta config**
+2. **SQL incremental model with YAML config in `project.yml`**
 
    * `models/common/fct_events_sql_yaml.ff.sql`
-   * The base SELECT lives in the model, but the incremental *delta* SELECT is stored in a separate YAML file under `config/incremental/…`.
+   * The base SELECT lives in the model, but all incremental hints (`incremental.enabled`, `unique_key`, `updated_at_column`, …) are configured in `project.yml → models.incremental`.
 
 3. **Python incremental model**
 
@@ -73,7 +70,13 @@ The demo revolves around a tiny `events` dataset and three different ways to bui
    * A Python model that returns a DataFrame; the executor applies incremental behaviour based on model `meta` (unique key + updated-at timestamp) and the target engine:
 
      * DuckDB / Postgres: incremental insert/merge in SQL
-     * Databricks Spark: `MERGE INTO` for Delta where available, with a fallback full-refresh strategy
+     * Databricks Spark: `MERGE INTO` for Delta or Iceberg where available (Spark 4), with a fallback full-refresh strategy for other formats
+
+4. **Iceberg profile for Spark 4**
+
+   * Optional Databricks/Spark profile that uses the built-in **Iceberg catalog**.
+   * Seeds and models are materialized as Iceberg tables in a local warehouse directory.
+   * `ref()` and `source()` automatically point to the Iceberg catalog when the `databricks_spark.table_format` is set to `iceberg`.
 
 ---
 
@@ -150,19 +153,35 @@ All three incremental models share the same core idea:
   * **External YAML** (referenced from the model)
   * **Python** (engine-specific model that returns the delta dataset)
 
-The exact `meta` keys depend on your implementation, but conceptually they look like:
+There are two ways to express this in the demo:
+
+1. **Inline on the model** (used by `fct_events_sql_inline.ff.sql`), via `config(...)`:
 
 ```jinja
 {{ config(
-    materialized='table',
+    materialized='incremental',
+    unique_key='event_id',
+    incremental={'updated_at_column': 'updated_at'},
     tags=['example:incremental_demo'],
-    meta={
-      'incremental': True,
-      'unique_key': ['event_id'],
-      'updated_at': 'updated_at',
-      # plus engine- or strategy-specific options
-    },
 ) }}
+```
+
+2. **As an overlay in `project.yml`** (used by `fct_events_sql_yaml.ff.sql` and the Python model):
+
+```yaml
+models:
+  incremental:
+    fct_events_sql_yaml.ff:
+      unique_key: "event_id"
+      incremental:
+        enabled: true
+        updated_at_column: "updated_at"
+
+    fct_events_py_incremental.ff:
+      unique_key: "event_id"
+      incremental:
+        enabled: true
+        updated_at_column: "updated_at"
 ```
 
 The incremental engine then uses these `meta` fields to decide whether to:
@@ -180,50 +199,39 @@ File:
 models/common/fct_events_sql_inline.ff.sql
 ```
 
-In this variant, the *delta* (the rows to insert/merge) is defined as SQL directly in the model `config(...)` block. The model body usually just defines the **full canonical SELECT**, while the `meta.delta.sql` (or similar) tells the engine how to restrict it to “new” rows.
-
-Conceptually:
+In this variant, both *incremental configuration* and the *delta filter* live directly in the model:
 
 ```jinja
 {{ config(
-    materialized='table',
+    materialized='incremental',
+    unique_key='event_id',
+    incremental={'updated_at_column': 'updated_at'},
     tags=[
         'example:incremental_demo',
+        'scope:common',
         'kind:incremental',
+        'inc:type:inline-sql',
         'engine:duckdb',
         'engine:postgres',
         'engine:databricks_spark',
     ],
-    meta={
-        'incremental': True,
-        'unique_key': ['event_id'],
-        'updated_at': 'updated_at',
-        'delta': {
-            'sql': "
-              with base as (
-                select event_id, updated_at, value
-                from {{ ref('events_base') }}
-              )
-              select
-                event_id,
-                updated_at,
-                value
-              from base
-              where updated_at > (
-                select coalesce(max(updated_at), timestamp '1970-01-01 00:00:00')
-                from {{ this }}
-              )
-            "
-        },
-    },
 ) }}
 
--- canonical full-select form (used for docs / full-refresh fallbacks)
+with base as (
+  select *
+  from {{ ref('events_base.ff') }}
+)
 select
   event_id,
   updated_at,
   value
-from {{ ref('events_base') }};
+from base
+{% if is_incremental() %}
+where updated_at > (
+  select coalesce(max(updated_at), timestamp '1970-01-01 00:00:00')
+  from {{ this }}
+)
+{% endif %};
 ```
 
 On the **first run**, the engine sees no existing relation, so it materializes the full `select ... from events_base`.
@@ -239,61 +247,63 @@ On subsequent runs, the engine evaluates the `delta.sql` snippet and:
 
 File:
 
-* Model: `models/common/fct_events_sql_yaml.ff.sql`
-* Delta config: `config/incremental/fct_events_sql_yaml.delta.yml`
+```text
+models/common/fct_events_sql_yaml.ff.sql
+```
 
-This variant keeps the model body minimal and moves the delta logic out into a YAML file to keep SQL cleaner or to share the same delta definition across environments.
-
-Example model (conceptually):
+Here the model body only defines the **canonical SELECT** and does *not* contain any incremental hints:
 
 ```jinja
 {{ config(
-    materialized='table',
+    materialized='incremental',
     tags=[
         'example:incremental_demo',
+        'scope:common',
         'kind:incremental',
+        'inc:type:yaml-config',
         'engine:duckdb',
         'engine:postgres',
         'engine:databricks_spark',
     ],
-    meta={
-        'incremental': True,
-        'unique_key': ['event_id'],
-        'updated_at': 'updated_at',
-        'delta_config': 'config/incremental/fct_events_sql_yaml.delta.yml',
-    },
 ) }}
 
+with base as (
+  select *
+  from {{ ref('events_base.ff') }}
+)
 select
   event_id,
   updated_at,
   value
-from {{ ref('events_base') }};
+from base;
 ```
 
-The corresponding YAML might hold the same delta query as above, e.g.:
+All incremental behaviour for this model is driven by `project.yml`:
 
 ```yaml
-# config/incremental/fct_events_sql_yaml.delta.yml
-sql: |
-  with base as (
-    select event_id, updated_at, value
-    from {{ ref('events_base') }}
-  )
-  select
-    event_id,
-    updated_at,
-    value
-  from base
-  where updated_at > (
-    select coalesce(max(updated_at), timestamp '1970-01-01 00:00:00')
-    from {{ this }}
-  )
+models:
+  incremental:
+    fct_events_sql_yaml.ff:
+      unique_key: "event_id"
+      incremental:
+        enabled: true
+        updated_at_column: "updated_at"
 ```
 
-The engine reads this file, extracts `sql`, and uses it as the **delta SELECT**.
+The registry merges this overlay into the model at load time, so the incremental runtime
+sees effectively the same config as for the inline model (`unique_key` + `updated_at_column`) –
+only the **source of truth** is different.
 
 ---
+
+### Inline vs YAML config at a glance
+
+| Model                       | Where is incremental configured?        | What lives in the SQL file?                    |
+|----------------------------|-----------------------------------------|-----------------------------------------------|
+| `fct_events_sql_inline.ff` | Inline in `config(...)` on the model   | Full SELECT **+** `is_incremental()` filter   |
+| `fct_events_sql_yaml.ff`   | `project.yml → models.incremental`     | Full SELECT only (no incremental hints)       |
+
+Both end up with the same runtime meta, only the **location of config** differs.
 
 ## 3) Python incremental model
 
@@ -352,9 +362,9 @@ The executor uses the `meta.incremental` / `meta.unique_key` / `meta.updated_at`
 
 ---
 
-## Delta variant (Databricks / Spark)
+## Delta & Iceberg variants (Databricks / Spark)
 
-In addition to the “regular” incremental models, the demo also includes a **Delta Lake variant**
+In addition to the “regular” incremental models, the demo also includes **Delta Lake** and **Iceberg** variants
 that shows how to:
 
 - route a model to **Delta tables** via `project.yml`  
@@ -365,7 +375,7 @@ This is optional and only relevant for the `databricks_spark` engine.
 
 ---
 
-### Storage configuration for the Delta model
+### Storage configuration for the Delta / Iceberg models
 
 In `project.yml`, the Delta variant gets its own storage entry, separate from the Parquet fact table:
 
@@ -381,6 +391,12 @@ models:
     fct_events_sql_inline_delta:
       path: ".local/spark_delta/fct_events_sql_inline"
       format: delta
+
+    # ❄️ Iceberg-based fact table (Spark 4 / Databricks only)
+    fct_events_sql_inline_iceberg:
+      # Points into the Iceberg warehouse; must match your Iceberg catalog config
+      path: ".local/iceberg_warehouse/incremental_demo/fct_events_sql_inline"
+      format: iceberg
 ````
 
 Notes:
@@ -592,64 +608,50 @@ environment variable, without touching the models or project.yml.
 
 Adjust environment names to match your `profiles.yml`.
 
----
+### Databricks Spark (Iceberg / Spark 4+)
 
-## How to link this page into your docs
+If you are on Spark 4 / Databricks with Iceberg support, you can also run the incremental demo
+purely against Iceberg tables using a dedicated profile (for example `dev_databricks_iceberg`).
 
-### 1. MkDocs (`mkdocs.yml`)
+That profile typically:
 
-If you use MkDocs, place this file under e.g.:
+* uses `engine: databricks_spark`
+* sets `databricks_spark.table_format: iceberg`
+* configures an Iceberg catalog via `extra_conf`, for example:
 
-```text
-docs/examples/incremental_demo.md
-```
+  models:
+    storage:
+      # Example warehouse location, adjust as needed
+      fct_events_sql_inline_iceberg:
+        path: ".local/iceberg_warehouse/incremental_demo/fct_events_sql_inline"
+        format: iceberg
 
-and add it to your `mkdocs.yml` nav:
+and in the profile (profiles.yml) something like:
 
-```yaml
-nav:
-  - Overview: index.md
-  - Examples:
-      - API demo: examples/api_demo.md
-      - Incremental & Delta demo: examples/incremental_demo.md
-```
+  dev_databricks_iceberg:
+    engine: databricks_spark
+    databricks_spark:
+      master: "local[*]"
+      app_name: "incremental_demo"
+      warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse"
+      extra_conf:
+        spark.sql.catalog.iceberg: org.apache.iceberg.spark.SparkCatalog
+        spark.sql.catalog.iceberg.type: hadoop
+        spark.sql.catalog.iceberg.warehouse: "file:///{{ project_dir() }}/.local/iceberg_warehouse"
 
-### 2. Sphinx (`index.rst` + Markdown)
+From the repo root:
 
-If you use Sphinx with MyST or Markdown support, put the file under:
+  cd examples/incremental_demo
 
-```text
-docs/examples/incremental_demo.md
-```
+Run seeds and models against Iceberg:
 
-and reference it from your main `index.rst`:
+  FFT_ACTIVE_ENV=dev_databricks_iceberg fft seed .
 
-```rst
-Welcome to FastFlowTransform's documentation!
-=============================================
+  FFT_ACTIVE_ENV=dev_databricks_iceberg fft run . \
+    --select tag:example:incremental_demo --select tag:engine:databricks_spark
 
-.. toctree::
-   :maxdepth: 2
+  FFT_ACTIVE_ENV=dev_databricks_iceberg fft test . \
+    --select tag:example:incremental_demo
 
-   overview
-   examples/api_demo
-   examples/incremental_demo
-```
-
-(Adjust paths to match your actual layout.)
-
-### 3. Top-level `index.md` (Markdown-only docs)
-
-If your docs use a pure Markdown index, just add a link:
-
-```markdown
-## Examples
-
-- [API demo](examples/api_demo.md)
-- [Incremental & Delta demo](examples/incremental_demo.md)
-```
-
-This way, the incremental demo appears alongside your existing API demo and other examples in your global documentation navigation.
-
-```
-```
+Under this profile, all `ref()` / `source()` calls in Spark SQL and Python models are resolved
+against the Iceberg catalog, so seeds and incremental models operate purely on Iceberg tables.

@@ -12,7 +12,6 @@ from fastflowtransform.executors.duckdb_exec import DuckExecutor
 def test_var_overrides_and_this_object(tmp_path: Path):
     # Arrange: project with project.yml vars and a simple model using var() and this
     (tmp_path / "models").mkdir(parents=True)
-    (tmp_path / "sources.yml").write_text("{}", encoding="utf-8")
     (tmp_path / "project.yml").write_text(
         "name: test_var_this\nversion: '0.1'\nvars:\n  day: '2025-10-01'\n  limit: 5\n",
         encoding="utf-8",

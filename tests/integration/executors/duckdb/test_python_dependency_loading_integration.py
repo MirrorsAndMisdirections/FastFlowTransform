@@ -16,9 +16,8 @@ def test_duckdb_executor_dep_loading_unit(tmp_path):
         "select 101::int as order_id, 1::int as user_id, 10.0::double as amount"
     )
 
-    # registriere ein Multi-Dep Python-Modell on-the-fly
-    def multi(dfs: dict[str, pd.DataFrame]) -> pd.DataFrame:
-        return dfs["orders"].merge(dfs["users"], left_on="user_id", right_on="id")
+    def multi(orders: pd.DataFrame, users: pd.DataFrame) -> pd.DataFrame:
+        return orders.merge(users, left_on="user_id", right_on="id")
 
     REGISTRY.py_funcs["m1"] = multi
     REGISTRY.nodes["m1"] = Node(

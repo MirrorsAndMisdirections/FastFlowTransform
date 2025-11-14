@@ -36,6 +36,18 @@ RUN_ENV  = $(BASE_ENV)
 # Select only dq_demo models for the active engine
 SELECT_FLAGS = --select tag:example:dq_demo --select tag:$(ENGINE_TAG)
 
+CLEAN_SCRIPT = ../_scripts/cleanup_env.py
+
+ifeq ($(ENGINE),duckdb)
+  CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine duckdb --env "$(PROFILE_ENV)" --project "$(PROJECT)" --duckdb-path "$(DB)"
+else ifeq ($(ENGINE),postgres)
+  CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine postgres --env "$(PROFILE_ENV)" --project "$(PROJECT)"
+else ifeq ($(ENGINE),databricks_spark)
+  CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine databricks_spark --env "$(PROFILE_ENV)" --project "$(PROJECT)"
+else
+  CLEAN_CMD = $(error Unsupported ENGINE=$(ENGINE) for cleanup)
+endif
+
 # --- Core targets -------------------------------------------------------------
 
 seed:
@@ -57,7 +69,7 @@ artifacts:
 	@echo "  DAG HTML: $(PROJECT)/site/dag/index.html"
 
 clean:
-	rm -rf "$(PROJECT)/.local" "$(PROJECT)/.fastflowtransform" "$(PROJECT)/site"
+	$(CLEAN_CMD)
 
 demo-open:
 	@if [ -f "$(PROJECT)/site/dag/index.html" ]; then \

@@ -12,7 +12,6 @@ from fastflowtransform.schema_loader import load_schema_tests
 @pytest.mark.duckdb
 def test_schema_yaml_runs_basic_checks(tmp_path: Path):
     (tmp_path / "models").mkdir(parents=True)
-    (tmp_path / "sources.yml").write_text("{}", encoding="utf-8")
     (tmp_path / "models" / "users.ff.sql").write_text(
         "create or replace table users as select 1 as id, 'a@example.com' as email",
         encoding="utf-8",
@@ -45,7 +44,7 @@ models:
     specs = load_schema_tests(tmp_path)
     specs = _apply_legacy_tag_filter(specs, ["batch"], legacy_token=True)
 
-    results = _run_dq_tests(ex.con, specs)
+    results = _run_dq_tests(ex.con, specs, ex)
 
     error_fails = [r for r in results if (not r.ok) and r.severity != "warn"]
     assert error_fails == []

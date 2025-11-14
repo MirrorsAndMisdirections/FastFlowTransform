@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>fct_user_sales.ff – FastFlowTransform</title>
+  <style>
+    :root {
+      --bg:#ffffff; --fg:#0f172a; --muted:#6b7280; --card:#ffffff; --border:#e5e7eb;
+      --chip-sql-bg:#e8f1ff; --chip-sql-fg:#0a1f44;
+      --chip-py-bg:#e9fbf1;  --chip-py-fg:#0b2e1f;
+      --accent:#2563eb;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg:#0b0f1a; --fg:#e5e7eb; --muted:#94a3b8; --card:#111827; --border:#1f2937;
+        --chip-sql-bg:#0e1a2c; --chip-sql-fg:#93c5fd;
+        --chip-py-bg:#0f1f15;  --chip-py-fg:#86efac;
+        --accent:#60a5fa;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 24px; background: var(--bg); color: var(--fg);
+           font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .muted { color: var(--muted); }
+    .card { border:1px solid var(--border); background:var(--card); border-radius:14px; padding:16px; }
+    .row { display:grid; gap:16px; grid-template-columns: 1fr; }
+    @media (min-width: 900px) { .row { grid-template-columns: 2fr 1fr; } }
+    .chip { font-size:12px; padding:2px 10px; border-radius:999px; border:1px solid var(--border); }
+    .chip.sql { background: var(--chip-sql-bg); color: var(--chip-sql-fg); }
+    .chip.py  { background: var(--chip-py-bg);  color: var(--chip-py-fg);  }
+    .kv { display:grid; grid-template-columns: 140px 1fr; gap:8px 12px; align-items:start; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    .btn { border:1px solid var(--border); background: var(--card); color: var(--fg);
+           padding:6px 10px; border-radius:10px; cursor:pointer; }
+    .btn:hover { border-color: var(--accent); }
+    ul.inline { list-style:none; padding:0; margin:0; }
+    ul.inline li { display:inline; }
+    ul.inline li+li::before { content:", "; }
+    .badge { font: 12px/1.6 system-ui, sans-serif; padding: 2px 8px; border-radius: 999px; border: 1px solid transparent; }
+    .badge-table { background:#eef7ff; color:#0a3a77; border-color:#bcd8fb; }
+    .badge-view { background:#eefcf4; color:#0b5d2a; border-color:#bdebcf; }
+    .badge-ephemeral { background:#fff7e8; color:#7a4a00; border-color:#f6db9b; }
+    /* Columns table layout */
+    table.cols { width:100%; border-collapse: collapse; table-layout: fixed; }
+    table.cols th, table.cols td { vertical-align: top; }
+    table.cols .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    table.cols .pill { display:inline-block; padding:1px 8px; border-radius:999px; border:1px solid var(--border); font-size:12px; }
+    table.cols .pill.yes { background:#eefcf4; color:#0b5d2a; border-color:#bdebcf; }
+    table.cols .pill.no  { background:#fff7e8; color:#7a4a00; border-color:#f6db9b; }
+    table.cols col.col-name { width: 22%; }
+    table.cols col.col-type { width: 18%; }
+    table.cols col.col-null { width: 12%; }
+    table.cols col.col-desc { width: 28%; }
+    table.cols col.col-lineage { width: 20%; }
+    .desc { overflow-wrap:anywhere; white-space: normal; }
+    /* Lineage chips */
+    .lin-wrap { display:flex; flex-wrap:wrap; gap:6px 10px; }
+    .lineage-item { display:inline-flex; gap:6px; align-items:center; background: rgba(127,127,127,.06); padding:2px 8px; border-radius:10px; margin-bottom:4px; }
+    .badge-direct { background:#eef7ff; color:#0a3a77; border:1px solid #bcd8fb; border-radius:999px; padding:1px 8px; font-size:12px; }
+    .badge-transformed { background:#fff7e8; color:#7a4a00; border:1px solid #f6db9b; border-radius:999px; padding:1px 8px; font-size:12px; }
+  </style>
+</head>
+<body>
+  <p><a href="index.html">← Back to overview</a></p>
+
+  <header style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;">
+    <div>
+      <h1 style="margin:0 0 6px 0; font-size:1.25rem;">
+        fct_user_sales.ff
+        <span class="badge badge-table">table</span>
+      </h1>
+      <div class="muted">Model Detail • FastFlowTransform</div>
+    </div>
+    <span class="chip sql">sql</span>
+  </header>
+
+  <div class="row">
+    
+    <section class="card">
+      <h2 style="margin:0 0 10px 0; font-size:1rem;">Metadata</h2>
+      <div class="kv">
+        <div class="muted">Materialized</div>
+        <div><span class="badge badge-table">table</span></div>
+
+        <div class="muted">Relation</div>
+        <div><code>fct_user_sales</code></div>
+
+        <div class="muted">Path</div>
+        <div>
+          <code id="path">/Users/markolekic/Dev/FlowForge/fastflowtransform/examples/macros_demo/models/common/fct_user_sales.ff.sql</code>
+          <button class="btn" id="copyPath" style="margin-left:8px;">Copy</button>
+        </div>
+
+        <div class="muted">Dependencies</div>
+        <div>
+          
+            <ul class="inline">
+              
+                <li><a href="stg_orders.ff.html">stg_orders.ff</a></li>
+              
+                <li><a href="dim_users.ff.html">dim_users.ff</a></li>
+              
+            </ul>
+          
+        </div>
+
+        
+        <div class="muted">Referenced by</div>
+        <div>
+          <ul class="inline">
+            
+              <li><a href="py_example.html">py_example</a></li>
+            
+          </ul>
+        </div>
+        
+      </div>
+    </section>
+
+    
+
+    
+
+    <aside class="card">
+      <h2 style="margin:0 0 10px 0; font-size:1rem;">Tips</h2>
+      <ul style="margin:0 0 0 18px;">
+        <li>The relation is the physical table/view name (mapped via <code>relation_for</code>).</li>
+        <li><code>ref('...')</code> points to other models; <code>source()</code> points to seeds.</li>
+        <li>Python models accept DataFrames (single dependency → DataFrame, more than one → dict of relation to DataFrame).</li>
+      </ul>
+    </aside>
+  </div>
+
+  <script>
+    const btn = document.getElementById('copyPath');
+    btn?.addEventListener('click', async () => {
+      const p = document.getElementById('path')?.textContent ?? '';
+      try {
+        await navigator.clipboard.writeText(p.trim());
+        btn.textContent = 'Copied ✓';
+        setTimeout(() => btn.textContent = 'Copy', 1200);
+      } catch(e) {
+        btn.textContent = 'Copy failed';
+        setTimeout(() => btn.textContent = 'Copy', 1200);
+      }
+    });
+  </script>
+</body>
+</html>

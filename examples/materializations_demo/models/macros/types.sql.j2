@@ -1,0 +1,10 @@
+{# models/macros/types.sql.j2 #}
+{% macro dtype_double() -%}
+  {# Try project var first, then env var; normalize to lowercase #}
+  {% set eng = (var('engine') or env('FF_ENGINE') or '').lower() %}
+  {% if eng in ('postgres', 'postgresql') %}
+    double precision
+  {% else %}
+    double
+  {% endif %}
+{%- endmacro %}

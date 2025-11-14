@@ -12,6 +12,7 @@ from typing import Any, NamedTuple, cast
 from urllib.parse import unquote, urlparse
 
 import pandas as pd
+from pyspark.sql import DataFrame as SDF, SparkSession
 
 from fastflowtransform import storage
 from fastflowtransform.config.seeds import SeedsSchemaConfig, load_seeds_schema
@@ -461,6 +462,48 @@ def _write_spark_seed_to_path(
     return "custom path"
 
 
+def _write_spark_seed_managed(
+    executor: Any,
+    spark: SparkSession,
+    target_identifier: str,
+    sdf: SDF,
+    table_format: str | None,
+    table_options: dict[str, Any],
+) -> str | None:
+    """
+    Write the seed as a *managed* Spark table (no custom storage path).
+
+    For engines like DatabricksSparkExecutor this ensures that the
+    table_format handler (Delta / Iceberg / etc.) is used, so Iceberg
+    seeds become proper Iceberg tables.
+    """
+    try:
+        # Prefer engine-specific helper when available (e.g. DatabricksSparkExecutor)
+        save_df = getattr(executor, "_save_df_as_table", None)
+        if callable(save_df):
+            # Pass a truthy storage dict with path=None so we do *not* get
+            # redirected back into path-based storage again.
+            save_df(
+                target_identifier,
+                sdf,
+                storage={"path": None, "options": table_options or {}},
+            )
+        else:
+            # Generic Spark fallback: may not be format-aware, but keeps behavior
+            writer = sdf.write.mode("overwrite")
+            if table_format:
+                writer = writer.format(table_format)
+            if table_options:
+                writer = writer.options(**table_options)
+            writer.saveAsTable(target_identifier)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to materialize Spark seed '{target_identifier}' as managed table: {exc}"
+        ) from exc
+    # No temporary path to clean up for managed tables
+    return None
+
+
 def _spark_write_table(
     sdf: Any,
     target_identifier: str,
@@ -572,6 +615,7 @@ def _handle_spark(
 
     table_format = getattr(executor, "spark_table_format", None)
     table_options = getattr(executor, "spark_table_options", None) or {}
+    format_handler = getattr(executor, "_format_handler", None)
 
     storage_meta = storage.get_seed_storage(target_identifier)
 
@@ -579,7 +623,10 @@ def _handle_spark(
     sdf = spark.createDataFrame(df)
 
     cleanup_hint: str | None = None
-    if storage_meta.get("path"):
+    allows_unmanaged = bool(getattr(format_handler, "allows_unmanaged_paths", lambda: True)())
+
+    if storage_meta.get("path") and allows_unmanaged:
+        # Behavior for parquet/delta/etc: respect custom path.
         cleanup_hint = _write_spark_seed_to_path(
             spark=spark,
             target_identifier=target_identifier,
@@ -589,15 +636,23 @@ def _handle_spark(
             table_options=table_options,
         )
     else:
-        cleanup_hint = _write_spark_seed_to_table(
-            spark=spark,
-            sdf=sdf,
-            target_identifier=target_identifier,
-            target_sql=target_sql,
-            target_location=target_location,
-            table_format=table_format,
-            table_options=table_options,
-        )
+        # Behavior when no path is configured: table-based seed via executor handler
+        try:
+            if hasattr(executor, "_save_df_as_table"):
+                executor._save_df_as_table(target_identifier, sdf, storage={"path": None})
+                cleanup_hint = None
+            else:
+                cleanup_hint = _write_spark_seed_to_table(
+                    spark=spark,
+                    sdf=sdf,
+                    target_identifier=target_identifier,
+                    target_sql=target_sql,
+                    target_location=target_location,
+                    table_format=table_format,
+                    table_options=table_options,
+                )
+        except Exception as exc:  # pragma: no cover
+            raise RuntimeError(f"Spark seed load failed for {target_sql}: {exc}") from exc
 
     dt_ms = int((perf_counter() - t0) * 1000)
 

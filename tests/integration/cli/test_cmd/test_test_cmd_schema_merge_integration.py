@@ -13,7 +13,6 @@ from fastflowtransform.schema_loader import load_schema_tests
 def test_merge_project_yaml_and_schema_yaml(tmp_path: Path):
     # Projekt + Modell
     (tmp_path / "models").mkdir(parents=True)
-    (tmp_path / "sources.yml").write_text("{}", encoding="utf-8")
     (tmp_path / "project.yml").write_text(
         """
 name: test_project
@@ -65,9 +64,9 @@ models:
     schema_specs = load_schema_tests(tmp_path)
 
     legacy_only = _apply_legacy_tag_filter(legacy + schema_specs, ["legacy"], legacy_token=True)
-    res_legacy = _run_dq_tests(ex.con, legacy_only)
+    res_legacy = _run_dq_tests(ex.con, legacy_only, ex)
     assert all(r.ok for r in res_legacy)
 
     schema_only = _apply_legacy_tag_filter(legacy + schema_specs, ["schema"], legacy_token=True)
-    res_schema = _run_dq_tests(ex.con, schema_only)
+    res_schema = _run_dq_tests(ex.con, schema_only, ex)
     assert all(r.ok or r.severity == "warn" for r in res_schema)
