@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: crm
+    tables:
+      - name: customers
+        identifier: seed_customers   # materialized via `fft seed`
+      - name: orders
+        identifier: seed_orders      # materialized via `fft seed`

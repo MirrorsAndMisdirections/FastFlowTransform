@@ -4,6 +4,7 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -38,7 +39,7 @@ def test_read_seed_file_unsupported(tmp_path: Path):
 @pytest.mark.unit
 def test_apply_schema_happy():
     df = pd.DataFrame({"id": [1, 2], "name": ["a", "b"], "age": [10, 20]})
-    schema_cfg = {
+    cfg_raw = {
         "dtypes": {
             "users": {
                 "name": "string",
@@ -46,9 +47,9 @@ def test_apply_schema_happy():
             }
         }
     }
+    schema_cfg = seeding.SeedsSchemaConfig.model_validate(cfg_raw)
 
     out = seeding._apply_schema(df, "users", schema_cfg)
-    # 'name' should be string dtype
     assert str(out.dtypes["name"]).startswith("string")
     assert str(out.dtypes["age"]) in ("int64", "Int64")
 
@@ -56,8 +57,9 @@ def test_apply_schema_happy():
 @pytest.mark.unit
 def test_apply_schema_ignores_missing_table_key():
     df = pd.DataFrame({"id": [1]})
-    out = seeding._apply_schema(df, "other", {"dtypes": {"users": {"id": "int64"}}})
-    # unchanged
+    cfg_raw = {"dtypes": {"users": {"id": "int64"}}}
+    schema_cfg = seeding.SeedsSchemaConfig.model_validate(cfg_raw)
+    out = seeding._apply_schema(df, "other", schema_cfg)
     assert out.equals(df)
 
 
@@ -65,9 +67,9 @@ def test_apply_schema_ignores_missing_table_key():
 def test_apply_schema_soft_fails_on_bad_cast():
     df = pd.DataFrame({"id": ["x"]})
     # force bad cast
-    cfg = {"dtypes": {"t": {"id": "int64"}}}
-    out = seeding._apply_schema(df, "t", cfg)
-    # should not raise and should still have the row
+    cfg_raw = {"dtypes": {"t": {"id": "int64"}}}
+    schema_cfg = seeding.SeedsSchemaConfig.model_validate(cfg_raw)
+    out = seeding._apply_schema(df, "t", schema_cfg)
     assert len(out) == 1
 
 
@@ -95,6 +97,18 @@ def test_qualify_unqualified_with_schema():
 
 
 @pytest.mark.unit
+def test_qualify_with_schema_and_catalog():
+    out = seeding._qualify("users", "raw", "cat")
+    assert out == '"cat"."raw"."users"'
+
+
+@pytest.mark.unit
+def test_qualify_with_catalog_only():
+    out = seeding._qualify("users", None, "cat")
+    assert out == '"cat"."users"'
+
+
+@pytest.mark.unit
 def test_qualify_already_qualified_preserves_parts():
     out = seeding._qualify("raw.users", None)
     assert out == '"raw"."users"'
@@ -106,7 +120,7 @@ def test_qualify_already_qualified_preserves_parts():
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_spark_warehouse_base_local(tmp_path: Path):
     fake_spark = SimpleNamespace(
         conf=SimpleNamespace(get=lambda key, default=None: str(tmp_path / "wh"))
@@ -116,14 +130,14 @@ def test_spark_warehouse_base_local(tmp_path: Path):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_spark_warehouse_base_remote_scheme():
     fake_spark = SimpleNamespace(conf=SimpleNamespace(get=lambda *_: "s3://bucket/warehouse"))
     assert seeding._spark_warehouse_base(fake_spark) is None
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_spark_table_location_strips_catalog(tmp_path: Path):
     # warehouse dir is local
     fake_spark = SimpleNamespace(conf=SimpleNamespace(get=lambda *_: str(tmp_path / "wh")))
@@ -188,7 +202,7 @@ def test_echo_seed_line(monkeypatch):
 @pytest.mark.unit
 def test_engine_name_from_executor_spark():
     ex = SimpleNamespace(spark=object())
-    assert seeding._engine_name_from_executor(ex) == "spark"
+    assert seeding._engine_name_from_executor(ex) == "databricks_spark"
 
 
 @pytest.mark.unit
@@ -224,7 +238,7 @@ def test_seed_id_nested(tmp_path: Path):
 
 @pytest.mark.unit
 def test_resolve_schema_and_table_by_cfg_priority_engine_override():
-    schema_cfg = {
+    schema_cfg_raw = {
         "targets": {
             "raw/users": {
                 "schema": "raw",
@@ -238,6 +252,8 @@ def test_resolve_schema_and_table_by_cfg_priority_engine_override():
     }
     # executor pretending to be postgres
     ex = SimpleNamespace(engine=SimpleNamespace(dialect=SimpleNamespace(name="postgres")))
+
+    schema_cfg = seeding.SeedsSchemaConfig.model_validate(schema_cfg_raw)
 
     schema, table = seeding._resolve_schema_and_table_by_cfg(
         seed_id="raw/users",
@@ -341,7 +357,7 @@ def test_handle_sqlalchemy_returns_false_if_engine_not_sqlalchemy():
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_handle_spark_happy_default_table(tmp_path: Path, monkeypatch):
     # fake spark with local warehouse
     fake_spark = MagicMock()
@@ -374,21 +390,39 @@ def test_handle_spark_happy_default_table(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_handle_spark_uses_seed_storage(monkeypatch):
-    # storage override set to custom path
+    # 1) Seed-Storage Override setzen
     storage.set_seed_storage(
         {"raw.users": {"path": "/tmp/custom", "format": "parquet", "options": {"x": "1"}}}
     )
 
+    # 2) Fake Spark + DataFrame
     fake_spark = MagicMock()
     fake_sdf = MagicMock()
     fake_spark.createDataFrame.return_value = fake_sdf
+
     writer = MagicMock()
     fake_sdf.write.mode.return_value = writer
     writer.format.return_value = writer
     writer.options.return_value = writer
 
+    # 3) spark_write_to_path stubben, damit kein echtes FS angefasst wird
+    called: dict[str, Any] = {}
+
+    def _fake_write_to_path(
+        spark, identifier, df, *, storage: dict, default_format, default_options
+    ):
+        called["spark"] = spark
+        called["identifier"] = identifier
+        called["df"] = df
+        called["storage"] = storage
+        called["default_format"] = default_format
+        called["default_options"] = default_options
+
+    monkeypatch.setattr(seeding.storage, "spark_write_to_path", _fake_write_to_path)
+
+    # 4) Executor-Stub
     executor = SimpleNamespace(
         spark=fake_spark,
         spark_table_format=None,
@@ -396,15 +430,17 @@ def test_handle_spark_uses_seed_storage(monkeypatch):
     )
 
     df = pd.DataFrame({"id": [1]})
-    # name must match our storage key
+
+    # 5) Aufruf
     handled = seeding._handle_spark("raw.users", df, executor, schema=None)
     assert handled is True
 
-    # since we used storage override, it should have called storage.spark_write_to_path
-    # easiest: monkeypatch seeding.storage.spark_write_to_path and assert
-    # but here we can assert spark.sql got a DROP TABLE? no, path → register only
-    # so instead let's just check that createDataFrame was called (path flow runs too)
-    fake_spark.createDataFrame.assert_called_once()
+    # 6) Asserts
+    fake_spark.createDataFrame.assert_called_once_with(df)
+    assert called["spark"] is fake_spark
+    assert called["identifier"] == "raw.users"
+    assert called["storage"]["path"] == "/tmp/custom"
+    assert called["storage"]["format"] == "parquet"
 
 
 # ---------------------------------------------------------------------------

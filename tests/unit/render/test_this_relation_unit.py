@@ -16,7 +16,6 @@ def _env_for_tests() -> Environment:
 
 
 @pytest.mark.unit
-@pytest.mark.render
 def test_this_renders_physical_relation(tmp_path):
     # Arrange: Minimal SQL-Model, das nur `{{ this }}` rendert
     sql_path = tmp_path / "m.ff.sql"

@@ -41,6 +41,8 @@ def fake_bigquery_profile(
 def fake_duckdb_profile(
     *,
     path: str = ":memory:",
+    schema: str | None = None,
+    catalog: str | None = None,
 ) -> Profile:
     """
     Fake DuckDB profile - just enough for _validate_profile_params and _make_executor.
@@ -49,6 +51,8 @@ def fake_duckdb_profile(
         engine="duckdb",
         duckdb=SimpleNamespace(
             path=path,
+            db_schema=schema,
+            catalog=catalog,
         ),
     )
     return cast(Profile, ns)

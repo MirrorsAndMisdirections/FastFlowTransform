@@ -1,3 +1,0 @@
-{"user_id": "u1", "session_id": "s1", "source": "ads", "event_type": "page_view", "event_timestamp": "2025-09-27T10:00:01Z", "amount": null}
-{"user_id": "u1", "session_id": "s1", "source": "ads", "event_type": "purchase",  "event_timestamp": "2025-09-27T10:01:05Z", "amount": 29.9}
-{"user_id": "u2", "session_id": "s2", "source": "organic", "event_type": "page_view", "event_timestamp": "2025-09-27T10:02:10Z", "amount": null}

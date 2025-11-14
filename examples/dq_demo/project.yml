@@ -1,0 +1,116 @@
+name: dq_demo
+version: "0.1"
+
+vars: {}
+
+models:
+  storage:
+    customers.ff:
+      path: ".local/spark/customers"
+      format: parquet
+    orders.ff:
+      path: ".local/spark/orders"
+      format: parquet
+    mart_orders_agg.ff:
+      path: ".local/spark/mart_orders_agg"
+      format: parquet
+
+seeds:
+  storage:
+    seed_customers:
+      path: ".local/spark/seed_customers"
+      format: parquet
+    seed_orders:
+      path: ".local/spark/seed_orders"
+      format: parquet
+
+tests:
+  # --- Single-table checks ----------------------------------------------------
+
+  - type: not_null
+    table: customers
+    column: customer_id
+    tags: [example:dq_demo, batch]
+
+  - type: unique
+    table: customers
+    column: customer_id
+    tags: [example:dq_demo, batch]
+
+  - type: accepted_values
+    table: customers
+    column: status
+    values: [active, inactive]
+    severity: warn          # demo of warn vs error
+    tags: [example:dq_demo, batch]
+
+  - type: greater_equal
+    table: orders
+    column: amount
+    threshold: 0
+    tags: [example:dq_demo, batch]
+
+  - type: non_negative_sum
+    table: orders
+    column: amount
+    tags: [example:dq_demo, batch]
+
+  - type: row_count_between
+    table: customers
+    min_rows: 1
+    max_rows: 100
+    tags: [example:dq_demo, batch]
+
+  # Large max_delay_minutes so the example typically passes;
+  # adjust down in real projects to enforce freshness SLAs.
+  - type: freshness
+    table: orders
+    column: order_ts
+    max_delay_minutes: 100000000
+    tags: [example:dq_demo, batch]
+
+  # --- Reconciliation checks --------------------------------------------------
+
+  - type: reconcile_equal
+    name: orders_total_matches_mart
+    tags: [example:dq_demo, reconcile]
+    left:
+      table: orders
+      expr: "sum(amount)"
+    right:
+      table: mart_orders_agg
+      expr: "sum(total_amount)"
+    abs_tolerance: 0.0
+
+  - type: reconcile_ratio_within
+    name: order_counts_match
+    tags: [example:dq_demo, reconcile]
+    left:
+      table: mart_orders_agg
+      expr: "sum(order_count)"
+    right:
+      table: orders
+      expr: "count(*)"
+    min_ratio: 0.999
+    max_ratio: 1.001
+
+  - type: reconcile_diff_within
+    name: customers_vs_orders_volume
+    tags: [example:dq_demo, reconcile]
+    left:
+      table: orders
+      expr: "count(*)"
+    right:
+      table: customers
+      expr: "count(*)"
+    max_abs_diff: 10
+
+  - type: reconcile_coverage
+    name: all_orders_have_customers
+    tags: [example:dq_demo, reconcile]
+    source:
+      table: orders
+      key: "customer_id"
+    target:
+      table: customers
+      key: "customer_id"

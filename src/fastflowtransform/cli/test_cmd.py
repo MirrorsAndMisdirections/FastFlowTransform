@@ -1,8 +1,9 @@
+# fastflowtransform/cli/test_cmd.py
 from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,13 +11,13 @@ from typing import Any
 import typer
 import yaml
 
-from fastflowtransform import testing
 from fastflowtransform.cli.bootstrap import _get_test_con, _prepare_context
 from fastflowtransform.cli.options import (
     EngineOpt,
     EnvOpt,
     ProjectArg,
     SelectOpt,
+    SkipBuildOpt,
     VarsOpt,
 )
 from fastflowtransform.cli.selectors import _compile_selector
@@ -25,7 +26,7 @@ from fastflowtransform.dag import topo_sort
 from fastflowtransform.errors import ModelExecutionError
 from fastflowtransform.logging import echo
 from fastflowtransform.schema_loader import Severity, TestSpec, load_schema_tests
-from fastflowtransform.test_registry import TESTS
+from fastflowtransform.testing.registry import TESTS
 
 
 @dataclass
@@ -115,11 +116,11 @@ def _apply_legacy_tag_filter(
     legacy_tag = tokens[0]
 
     def has_tag(t: Any) -> bool:
-        # Dict (altes Format)
+        # Dict (old format)
         if isinstance(t, dict):
             tags = t.get("tags") or []
             return (legacy_tag in tags) if isinstance(tags, list) else (legacy_tag == tags)
-        # TestSpec (neues Schema)
+        # TestSpec (new Schema)
         if isinstance(t, TestSpec):
             return legacy_tag in (t.tags or [])
         return False
@@ -127,51 +128,114 @@ def _apply_legacy_tag_filter(
     return [t for t in tests if has_tag(t)]
 
 
-def _run_dq_tests(con: Any, tests: Iterable[Any]) -> list[DQResult]:
-    results: list[DQResult] = []
-    for t in tests:
-        severity: Severity
-        if isinstance(t, TestSpec):
-            kind = t.type
-            col = t.column
-            severity = t.severity
-            params: dict[str, Any] = t.params or {}
-            display_table = t.table
-            table_for_exec = t.table
-        else:
-            kind = t["type"]
-            _sev = str(t.get("severity", "error")).lower()
-            severity = "warn" if _sev == "warn" else "error"
-            params = dict(t)
-            col = t.get("column")
-            if kind.startswith("reconcile_"):
-                if isinstance(t.get("left"), dict) and isinstance(t.get("right"), dict):
-                    lt = (t.get("left") or {}).get("table")
-                    rt = (t.get("right") or {}).get("table")
-                    display_table = f"{lt} ⇔ {rt}"
-                elif isinstance(t.get("source"), dict) and isinstance(t.get("target"), dict):
-                    st = (t.get("source") or {}).get("table")
-                    tt = (t.get("target") or {}).get("table")
-                    display_table = f"{st} ⇒ {tt}"
-                else:
-                    display_table = "<reconcile>"
-                table_for_exec = t.get("table")
-            else:
-                table_for_exec = t.get("table")
-                if not isinstance(table_for_exec, str) or not table_for_exec:
-                    raise typer.BadParameter("Missing or invalid 'table' in test config")
-                display_table = table_for_exec
+def _fmt_table(value: Any, executor: Any) -> Any:
+    if executor is None or not hasattr(executor, "_format_test_table"):
+        return value
+    return executor._format_test_table(value)
 
-        # Dispatch via registry if available; otherwise fallback to legacy map
-        t0 = time.perf_counter()
-        if kind in TESTS:
-            ok, msg, example = TESTS[kind](con, table_for_exec, col, params)
+
+def _fmt_reconcile_side(side: Any, executor: Any) -> Any:
+    if not isinstance(side, dict):
+        return side
+    side_fmt = dict(side)
+    tbl = side_fmt.get("table")
+    if tbl is not None:
+        side_fmt["table"] = _fmt_table(tbl, executor)
+    return side_fmt
+
+
+def _prepare_test_from_spec(
+    t: TestSpec, executor: Any
+) -> tuple[str, Any, Severity, dict[str, Any], Any, Any]:
+    """
+    Normalize a TestSpec into (kind, column, severity, params, display_table, table_for_exec)
+    """
+    kind = t.type
+    col = t.column
+    severity: Severity = t.severity
+    params: dict[str, Any] = t.params or {}
+
+    display_table = t.table
+    table_for_exec = _fmt_table(t.table, executor)
+
+    if kind.startswith("reconcile_"):
+        params = dict(params)  # copy so we don't mutate original
+        for key in ("left", "right", "source", "target"):
+            side = params.get(key)
+            if isinstance(side, dict):
+                params[key] = _fmt_reconcile_side(side, executor)
+
+    return kind, col, severity, params, display_table, table_for_exec
+
+
+def _prepare_test_from_mapping(
+    t: Mapping[str, Any], executor: Any
+) -> tuple[str, Any, Severity, dict[str, Any], Any, Any]:
+    """
+    Normalize a dict-like test into (kind, column, severity, params, display_table, table_for_exec)
+    """
+    kind = t["type"]
+    _sev = str(t.get("severity", "error")).lower()
+    severity: Severity = "warn" if _sev == "warn" else "error"
+
+    params: dict[str, Any] = dict(t)
+    col = t.get("column")
+
+    if kind.startswith("reconcile_"):
+        if isinstance(t.get("left"), dict) and isinstance(t.get("right"), dict):
+            lt = (t.get("left") or {}).get("table")
+            rt = (t.get("right") or {}).get("table")
+            display_table = f"{lt} ⇔ {rt}"
+        elif isinstance(t.get("source"), dict) and isinstance(t.get("target"), dict):
+            st = (t.get("source") or {}).get("table")
+            tt = (t.get("target") or {}).get("table")
+            display_table = f"{st} ⇒ {tt}"
         else:
-            ok, msg = _exec_test_kind(con, kind, params, table_for_exec, col)
-            example = None
+            display_table = "<reconcile>"
+
+        table_for_exec = _fmt_table(t.get("table"), executor)
+
+        for key in ("left", "right", "source", "target"):
+            side = params.get(key)
+            if isinstance(side, dict):
+                params[key] = _fmt_reconcile_side(side, executor)
+    else:
+        table_for_exec = _fmt_table(t.get("table"), executor)
+        if not isinstance(table_for_exec, str) or not table_for_exec:
+            raise typer.BadParameter("Missing or invalid 'table' in test config")
+        display_table = table_for_exec
+
+    return kind, col, severity, params, display_table, table_for_exec
+
+
+def _prepare_test(
+    raw_test: Any, executor: Any
+) -> tuple[str, Any, Severity, dict[str, Any], Any, Any]:
+    """
+    Dispatcher that normalizes both TestSpec and mapping-based tests.
+    """
+    if isinstance(raw_test, TestSpec):
+        return _prepare_test_from_spec(raw_test, executor)
+    return _prepare_test_from_mapping(raw_test, executor)
+
+
+def _run_dq_tests(con: Any, tests: Iterable[Any], executor: Any) -> list[DQResult]:
+    results: list[DQResult] = []
+
+    for raw_test in tests:
+        (
+            kind,
+            col,
+            severity,
+            params,
+            display_table,
+            table_for_exec,
+        ) = _prepare_test(raw_test, executor)
+
+        t0 = time.perf_counter()
+        ok, msg, example = TESTS[kind](con, table_for_exec, col, params)
         ms = int((time.perf_counter() - t0) * 1000)
 
-        # Build short parameter display for the summary line
         param_str = _format_params_for_summary(kind, params)
 
         results.append(
@@ -187,70 +251,100 @@ def _run_dq_tests(con: Any, tests: Iterable[Any]) -> list[DQResult]:
                 example_sql=example,
             )
         )
+
     return results
 
 
-def _exec_test_kind(con: Any, kind: str, t: dict, table: Any, col: Any) -> tuple[bool, str | None]:
-    # Guard for column-required tests in legacy path
-    def _need_col() -> str:
-        if not isinstance(col, str) or not col:
-            raise typer.BadParameter(f"Test '{kind}' requires a non-empty 'column' parameter")
-        return col
+# def _run_dq_tests(con: Any, tests: Iterable[Any], executor: Any) -> list[DQResult]:
+#     results: list[DQResult] = []
 
-    try_map = {
-        "not_null": lambda: testing.not_null(con, table, _need_col()),
-        "unique": lambda: testing.unique(con, table, _need_col()),
-        "greater_equal": lambda: testing.greater_equal(
-            con, table, _need_col(), t.get("threshold", 0)
-        ),
-        "non_negative_sum": lambda: testing.non_negative_sum(con, table, _need_col()),
-        "row_count_between": lambda: testing.row_count_between(
-            con, table, t.get("min", 1), t.get("max")
-        ),
-        "freshness": lambda: testing.freshness(con, table, _need_col(), t["max_delay_minutes"]),
-        "accepted_values": lambda: testing.accepted_values(
-            con, table, col, values=t.get("values", []), where=t.get("where")
-        ),
-        "reconcile_equal": lambda: testing.reconcile_equal(
-            con,
-            t["left"],
-            t["right"],
-            abs_tolerance=t.get("abs_tolerance"),
-            rel_tolerance_pct=t.get("rel_tolerance_pct"),
-        ),
-        "reconcile_ratio_within": lambda: testing.reconcile_ratio_within(
-            con,
-            t["left"],
-            t["right"],
-            min_ratio=t["min_ratio"],
-            max_ratio=t["max_ratio"],
-        ),
-        "reconcile_diff_within": lambda: testing.reconcile_diff_within(
-            con,
-            t["left"],
-            t["right"],
-            max_abs_diff=t["max_abs_diff"],
-        ),
-        "reconcile_coverage": lambda: testing.reconcile_coverage(
-            con,
-            t["source"],
-            t["target"],
-            source_where=t.get("source_where"),
-            target_where=t.get("target_where"),
-        ),
-    }
+#     def _fmt_table(value: Any) -> Any:
+#         if executor is None or not hasattr(executor, "_format_test_table"):
+#             return value
+#         return executor._format_test_table(value)
 
-    fn = try_map.get(kind)
-    if fn is None:
-        raise typer.BadParameter(f"Unknown test type: {kind}")
+#     def _fmt_reconcile_side(side: Any) -> Any:
+#         if not isinstance(side, dict):
+#             return side
+#         side_fmt = dict(side)
+#         tbl = side_fmt.get("table")
+#         if tbl is not None:
+#             side_fmt["table"] = _fmt_table(tbl)
+#         return side_fmt
 
-    try:
-        fn()
-        return True, None
-    except testing.TestFailure as e:
-        return False, str(e)
-    except Exception as e:
-        return False, f"Unexpected error: {e.__class__.__name__}: {e}"
+#     for t in tests:
+#         severity: Severity
+#         if isinstance(t, TestSpec):
+#             kind = t.type
+#             col = t.column
+#             severity = t.severity
+#             params: dict[str, Any] = t.params or {}
+#             display_table = t.table
+#             table_for_exec = _fmt_table(t.table)
+#             if kind.startswith("reconcile_"):
+#                 params = dict(params)
+#                 if isinstance(params.get("left"), dict):
+#                     params["left"] = _fmt_reconcile_side(params["left"])
+#                 if isinstance(params.get("right"), dict):
+#                     params["right"] = _fmt_reconcile_side(params["right"])
+#                 if isinstance(params.get("source"), dict):
+#                     params["source"] = _fmt_reconcile_side(params["source"])
+#                 if isinstance(params.get("target"), dict):
+#                     params["target"] = _fmt_reconcile_side(params["target"])
+#         else:
+#             kind = t["type"]
+#             _sev = str(t.get("severity", "error")).lower()
+#             severity = "warn" if _sev == "warn" else "error"
+#             params = dict(t)
+#             col = t.get("column")
+#             if kind.startswith("reconcile_"):
+#                 if isinstance(t.get("left"), dict) and isinstance(t.get("right"), dict):
+#                     lt = (t.get("left") or {}).get("table")
+#                     rt = (t.get("right") or {}).get("table")
+#                     display_table = f"{lt} ⇔ {rt}"
+#                 elif isinstance(t.get("source"), dict) and isinstance(t.get("target"), dict):
+#                     st = (t.get("source") or {}).get("table")
+#                     tt = (t.get("target") or {}).get("table")
+#                     display_table = f"{st} ⇒ {tt}"
+#                 else:
+#                     display_table = "<reconcile>"
+#                 table_for_exec = _fmt_table(t.get("table"))
+#                 if isinstance(params.get("left"), dict):
+#                     params["left"] = _fmt_reconcile_side(params["left"])
+#                 if isinstance(params.get("right"), dict):
+#                     params["right"] = _fmt_reconcile_side(params["right"])
+#                 if isinstance(params.get("source"), dict):
+#                     params["source"] = _fmt_reconcile_side(params["source"])
+#                 if isinstance(params.get("target"), dict):
+#                     params["target"] = _fmt_reconcile_side(params["target"])
+#             else:
+#                 table_for_exec = _fmt_table(t.get("table"))
+#                 if not isinstance(table_for_exec, str) or not table_for_exec:
+#                     raise typer.BadParameter("Missing or invalid 'table' in test config")
+#                 display_table = table_for_exec
+
+#         # Dispatch via registry
+#         t0 = time.perf_counter()
+#         ok, msg, example = TESTS[kind](con, table_for_exec, col, params)
+#         ms = int((time.perf_counter() - t0) * 1000)
+
+#         # Build short parameter display for the summary line
+#         param_str = _format_params_for_summary(kind, params)
+
+#         results.append(
+#             DQResult(
+#                 kind=kind,
+#                 table=str(display_table),
+#                 column=col,
+#                 ok=ok,
+#                 msg=msg,
+#                 ms=ms,
+#                 severity=severity,
+#                 param_str=param_str,
+#                 example_sql=example,
+#             )
+#         )
+#     return results
 
 
 def _print_summary(results: list[DQResult]) -> None:
@@ -314,8 +408,8 @@ def test(
     engine: EngineOpt = None,
     vars: VarsOpt = None,
     select: SelectOpt = None,
+    skip_build: SkipBuildOpt = False,
 ) -> None:
-    # _ensure_logging()
     ctx = _prepare_context(project, env_name, engine, vars)
     tokens, pred = _compile_selector(select)
     has_model_matches = any(pred(node) for node in REGISTRY.nodes.values())
@@ -327,7 +421,8 @@ def test(
 
     model_pred = (lambda _n: True) if legacy_tag_only else pred
     # Run models; if a model fails, show friendly error then exit(1).
-    _run_models(model_pred, run_sql, run_py)
+    if not skip_build:
+        _run_models(model_pred, run_sql, run_py)
 
     # 1) project.yml tests
     tests: list[Any] = _load_tests(ctx.project)
@@ -339,7 +434,7 @@ def test(
         typer.secho("No tests configured.", fg="bright_black")
         raise typer.Exit(code=0)
 
-    results = _run_dq_tests(con, tests)
+    results = _run_dq_tests(con, tests, execu)
     _print_summary(results)
 
     # Exit code: count only ERROR fails

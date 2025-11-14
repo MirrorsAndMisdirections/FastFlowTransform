@@ -8,13 +8,31 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import psycopg
 import pytest
+import sqlalchemy as sa
+from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from psycopg import sql
+from sqlalchemy import text
 
 from fastflowtransform import utest
 from fastflowtransform.core import REGISTRY
 from fastflowtransform.executors.databricks_spark_exec import DatabricksSparkExecutor
 from tests.common.utils import ROOT, run
+
+
+# ---- Load Env Variables ----
+@pytest.fixture(scope="session", autouse=True)
+def load_test_env():
+    candidates = [
+        ROOT / "tests" / ".env",
+        ROOT / "tests" / ".env.dev_databricks",
+        ROOT / "tests" / ".env.dev_duckdb",
+        ROOT / "tests" / ".env.dev_postgres",
+    ]
+
+    for env_file in candidates:
+        if env_file.is_file():
+            load_dotenv(env_file, override=False)
 
 
 # ---- Jinja Env ----
@@ -59,17 +77,21 @@ def duckdb_env(duckdb_db_path):
     return {"FF_ENGINE": "duckdb", "FF_DUCKDB_PATH": str(duckdb_db_path)}
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def duckdb_seeded(duckdb_project, duckdb_env):
     db_path = duckdb_env.get("FF_DUCKDB_PATH")
-    if db_path:
-        db_file = Path(db_path)
+    db_file = Path(db_path) if db_path else None
+    if db_file:
         if db_file.exists():
             db_file.unlink()
-            # ensure parent dir exists for fresh DB creation
-            db_file.parent.mkdir(parents=True, exist_ok=True)
+        db_file.parent.mkdir(parents=True, exist_ok=True)
     run(["fft", "seed", str(duckdb_project), "--env", "dev"], duckdb_env)
-    yield
+    try:
+        yield
+    finally:
+        if db_file:
+            with suppress(Exception):
+                db_file.unlink()
 
 
 # ---- Postgres ----
@@ -80,15 +102,13 @@ def pg_project():
 
 @pytest.fixture(scope="session")
 def pg_env():
-    # Passe DSN/Schema bei Bedarf an dein Profil an
     dsn = os.environ.get("FF_PG_DSN", "postgresql+psycopg://postgres:postgres@localhost:5432/ffdb")
-    schema = os.environ.get("FF_PG_SCHEMA", "public")  # falls Profile das verwenden
+    schema = os.environ.get("FF_PG_SCHEMA", "public")
     return {"FF_ENGINE": "postgres", "FF_PG_DSN": dsn, "FF_PG_SCHEMA": schema}
 
 
 @pytest.fixture(scope="module")
 def pg_seeded(pg_project, pg_env):
-    # optional: Datenbank leeren/neu erstellen - je nach CI-Setup
     dsn = pg_env.get("FF_PG_DSN")
     schema = pg_env.get("FF_PG_SCHEMA") or "public"
     if dsn and schema and ("psycopg://" in dsn or "+psycopg" in dsn):
@@ -126,7 +146,10 @@ def exec_factory():
             # make .config(...) chainable
             fake_builder.config.return_value = fake_builder
             fake_builder.enableHiveSupport.return_value = fake_builder
-            fake_spark = MagicMock()
+            fake_conf = MagicMock()
+            fake_sc_conf = MagicMock()
+            fake_sc = MagicMock(getConf=MagicMock(return_value=fake_sc_conf))
+            fake_spark = MagicMock(conf=fake_conf, sparkContext=fake_sc)
             fake_builder.getOrCreate.return_value = fake_spark
 
             ex = DatabricksSparkExecutor(**kwargs)
@@ -150,10 +173,31 @@ def spark_exec(spark_tmpdir: Path) -> DatabricksSparkExecutor:
     )
 
 
+@pytest.fixture(scope="session")
+def spark_exec_delta(spark_tmpdir):
+    try:
+        pass
+    except Exception:
+        pytest.skip("delta-spark is not installed; skipping Delta tests")
+
+    extra_conf = {
+        "spark.ui.enabled": "false",
+        "spark.sql.shuffle.partitions": "1",
+    }
+
+    return DatabricksSparkExecutor(
+        master="local[*]",
+        app_name="fft-it-delta",
+        warehouse_dir=str(spark_tmpdir),
+        database=os.getenv("FF_DBR_DATABASE", "default"),
+        extra_conf=extra_conf,
+        table_format="delta",  # executor will configure Delta & verify it
+    )
+
+
 # ---- utest ----
 @pytest.fixture
 def fake_registry(tmp_path, monkeypatch):
-    # wir brauchen ein REGISTRY mit projekt-dir und 1 node
     node = SimpleNamespace(name="model_a", kind="sql", deps=["src1"])
     reg = SimpleNamespace(
         nodes={"model_a": node},
@@ -161,7 +205,6 @@ def fake_registry(tmp_path, monkeypatch):
         get_project_dir=lambda: tmp_path,
     )
     monkeypatch.setattr(utest, "REGISTRY", reg)
-    # relation_for -> immer schema.model
     monkeypatch.setattr(utest, "relation_for", lambda name: f"public.{name}")
     return reg
 
@@ -169,14 +212,13 @@ def fake_registry(tmp_path, monkeypatch):
 @pytest.fixture
 def duckdb_executor():
     """
-    Fake-Executor, der dem DuckDB-Pfad ähnelt:
-    - hat .con
+    Fake-Executor:
+    - has .con
     - con.register(...)
     - con.execute(...)
     - con.table(...).df()
     """
     con = MagicMock()
-    # für _read_result (duckdb)
     table_df = pd.DataFrame([{"id": 1}])
     con.table.return_value.df.return_value = table_df
 
@@ -184,9 +226,7 @@ def duckdb_executor():
         def __init__(self, con):
             self.con = con
 
-        # für _execute_node(sql)
         def run_sql(self, node, jenv):
-            # schreibt nix, simuliert nur Erfolg
             return None
 
         def run_python(self, node):
@@ -208,3 +248,57 @@ def postgres_executor():
             self.schema = "public"
 
     return PgEx(engine)
+
+
+# ---- Examples ----
+@pytest.fixture(scope="session")
+def duckdb_engine_env(tmp_path_factory):
+    """Basic env for DuckDB examples."""
+    db_dir = tmp_path_factory.mktemp("duckdb")
+    db_path = db_dir / "examples.duckdb"
+    return {
+        "FF_ENGINE": "duckdb",
+        "FF_DUCKDB_PATH": str(db_path),
+    }
+
+
+@pytest.fixture(scope="session")
+def postgres_engine_env():
+    """Basic env für Postgres. Skipped if DSN is missing or DB not reachable."""
+    dsn = os.environ.get(
+        "FF_PG_DSN",
+        "postgresql+psycopg://postgres:postgres@localhost:5432/ffdb",
+    )
+    schema = os.environ.get("FF_PG_SCHEMA", "public")
+
+    # Optional: Connectivity-Check
+    try:
+        engine = sa.create_engine(dsn)
+        with engine.connect() as conn:
+            conn.execute(text("select 1"))
+    except Exception as exc:
+        pytest.skip(f"Postgres not reachable at DSN={dsn!r}: {exc}")
+
+    return {
+        "FF_ENGINE": "postgres",
+        "FF_PG_DSN": dsn,
+        "FF_PG_SCHEMA": schema,
+    }
+
+
+@pytest.fixture(scope="session")
+def spark_engine_env(tmp_path_factory):
+    """Basic env for Databricks-Spark-Executor. Skipped if JAVA_HOME is missing."""
+    if not os.environ.get("JAVA_HOME"):
+        pytest.skip("JAVA_HOME not set for Spark tests")
+
+    warehouse = tmp_path_factory.mktemp("spark_warehouse")
+
+    return {
+        "FF_ENGINE": "databricks_spark",
+        "FF_SPARK_MASTER": "local[*]",
+        "FF_SPARK_APP_NAME": "fft_examples_ci",
+        "FF_DBR_ENABLE_HIVE": "1",
+        "FF_DBR_DATABASE": "ff_examples_ci",
+        "FF_SPARK_WAREHOUSE_DIR": str(warehouse),
+    }

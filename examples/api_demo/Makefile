@@ -108,7 +108,7 @@ demo-open:
 	fi
 
 demo: clean
-	@echo "== 🚀 R1 Demo (DuckDB) =="
+	@echo "== 🚀 API Demo (DuckDB) =="
 	@echo "Profile=$(PROFILE_ENV)  DB=$(DB)  PROJECT=$(PROJECT)"
 	+$(MAKE) seed
 	+$(MAKE) run
@@ -128,7 +128,6 @@ demo: clean
 	+$(MAKE) res-warn
 	@echo
 	@echo "✅ Demo done. Open DAG here: $(PROJECT)/site/dag/index.html"
-	+$(MAKE) demo-open
 
 # --- API-specific convenience targets ----------------------------------------
 

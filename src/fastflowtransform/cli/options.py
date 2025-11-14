@@ -185,6 +185,14 @@ ReuseMetaOpt = Annotated[
     ),
 ]
 
+SkipBuildOpt = Annotated[
+    bool,
+    typer.Option(
+        "--skip-build",
+        help="Do not build models before running tests (use existing tables).",
+    ),
+]
+
 
 __all__ = [
     "CacheMode",
@@ -205,6 +213,7 @@ __all__ = [
     "RebuildOnlyOpt",
     "ReuseMetaOpt",
     "SelectOpt",
+    "SkipBuildOpt",
     "UTestCacheMode",
     "UTestCacheOpt",
     "VarsOpt",

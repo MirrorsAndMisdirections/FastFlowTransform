@@ -1,0 +1,41 @@
+name: materializations_demo
+version: "0.1"
+
+vars: {}
+
+models:
+  storage:
+    # Optionally persist specific relations to predictable paths (Spark/Delta etc.)
+    dim_customers.ff:
+      path: ".local/spark/dim_customers"
+      format: parquet
+    fct_orders_inc.ff:
+      path: ".local/spark/fct_orders_inc"
+      format: parquet
+    mart_order_summary.ff:
+      path: ".local/spark/mart_order_summary"
+      format: parquet
+
+seeds:
+  storage:
+    seed_customers:
+      path: ".local/spark/seed_customers"
+      format: parquet
+    seed_orders:
+      path: ".local/spark/seed_orders"
+      format: parquet
+
+tests:
+  # Simple sanity tests; add more if you like
+  - type: not_null
+    table: dim_customers
+    column: customer_id
+    tags: [batch, example:materializations_demo]
+  - type: row_count_between
+    table: dim_customers
+    min_rows: 1
+    tags: [batch, example:materializations_demo]
+  - type: not_null
+    table: fct_orders_inc
+    column: order_id
+    tags: [batch, example:materializations_demo]

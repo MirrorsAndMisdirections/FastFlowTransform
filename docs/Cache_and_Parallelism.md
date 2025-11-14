@@ -1,9 +1,9 @@
-### 🆕 `docs/Cache_and_Parallelism.md`
+# Parallelism & Cache
 
-````markdown
-# Parallelism & Cache (FastFlowTransform v0.3)
+**TL;DR:** FastFlowTransform executes models in parallel DAG levels and uses deterministic
+fingerprints to skip unchanged nodes — while a separate HTTP cache accelerates API models.
 
-FastFlowTransform 0.3 introduces a level-wise parallel scheduler and a build cache driven by stable fingerprints. This document explains **how parallel execution works**, **when nodes are skipped**, the exact **fingerprint formula**, and the **meta table** written after successful builds.
+FastFlowTransform introduces a level-wise parallel scheduler and a build cache driven by stable fingerprints. This document explains **how parallel execution works**, **when nodes are skipped**, the exact **fingerprint formula**, and the **meta table** written after successful builds.
 
 ---
 
@@ -34,7 +34,7 @@ fft run . --env dev --jobs 4
 
 # Keep tasks in the same level running even if one fails
 fft run . --env dev --jobs 4 --keep-going
-````
+```
 
 ---
 
@@ -59,6 +59,23 @@ A node is skipped iff:
 2. The **physical relation exists** on the target engine.
 
 If the relation was dropped externally, FastFlowTransform will **rebuild** even if the fingerprint matches.
+
+### HTTP Response Cache
+
+In addition to the build cache, FastFlowTransform provides an **HTTP response cache** for API models using
+`fastflowtransform.api.http.get_df(...)`.
+
+- **Purpose:** Avoid redundant API calls and support offline mode.
+- **Location:** Controlled by `FF_HTTP_CACHE_DIR` (e.g. `.local/http-cache`).
+- **Controls (environment):**
+  - `FF_HTTP_ALLOWED_DOMAINS`: comma-separated list of hosts allowed to cache.
+  - `FF_HTTP_MAX_RPS`, `FF_HTTP_MAX_RETRIES`, `FF_HTTP_TIMEOUT`: rate limiting & retry policy.
+  - `FF_HTTP_OFFLINE=1`: run in offline mode — serve only from cache, no network calls.
+- **CLI visibility:** Each run writes HTTP stats (`requests`, `cache_hits`, `bytes`, `used_offline`)
+  to `.fastflowtransform/target/run_results.json`.
+- **Makefile helpers:** see `make api-show-http` in the API demo to inspect HTTP cache usage.
+
+> This cache is independent from the build cache; it stores API responses, not SQL or fingerprints.
 
 ---
 
@@ -87,6 +104,10 @@ Fingerprints are stable hashes that change on any relevant input:
 * Same inputs ⇒ same hash.
 * Minimal change in SQL/function ⇒ different hash.
 * Dependency changes propagate downstream.
+
+> **Note:** The active engine and profile name are part of the fingerprint.
+> Switching from `duckdb` to `postgres` automatically invalidates the cache, so cross-engine runs
+> never reuse outdated fingerprints.
 
 ---
 

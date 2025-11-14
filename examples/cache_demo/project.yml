@@ -1,0 +1,23 @@
+name: cache_demo
+version: "0.1"
+
+vars: {}
+
+models:
+  storage:
+    stg_users.ff:         { path: ".local/duck/users", format: parquet }
+    stg_orders.ff:        { path: ".local/duck/orders", format: parquet }
+    mart_user_orders.ff:  { path: ".local/duck/mart_user_orders", format: parquet }
+    py_constants:         { path: ".local/duck/py_constants", format: parquet }
+    http_users:           { path: ".local/duck/http_users", format: parquet }
+
+seeds:
+  storage:
+    seed_users:  { path: ".local/duck/seed_users",  format: parquet }
+    seed_orders: { path: ".local/duck/seed_orders", format: parquet }
+
+tests:
+  - type: row_count_between
+    table: stg_users
+    min_rows: 3
+    tags: [batch]

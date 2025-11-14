@@ -1,3 +1,4 @@
+# fastflowtransform/settings.py
 from __future__ import annotations
 
 import os
@@ -7,7 +8,7 @@ from typing import Annotated, Any, Literal, cast
 
 import yaml
 from jinja2 import Environment, StrictUndefined
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from fastflowtransform.errors import ProfileConfigError
@@ -15,23 +16,30 @@ from fastflowtransform.errors import ProfileConfigError
 EngineType = Literal["duckdb", "postgres", "bigquery", "databricks_spark", "snowflake_snowpark"]
 
 
-class DuckDBConfig(BaseModel):
+class BaseConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class DuckDBConfig(BaseConfig):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
     path: str = ":memory:"  # file path or ":memory:"
+    db_schema: str | None = Field(default=None, alias="schema")
+    catalog: str | None = None
 
 
-class PostgresConfig(BaseModel):
+class PostgresConfig(BaseConfig):
     dsn: str | None = None  # e.g. postgresql+psycopg://user:pass@host:5432/db
     db_schema: str = "public"
 
 
-class BigQueryConfig(BaseModel):
+class BigQueryConfig(BaseConfig):
     project: str | None = None
     dataset: str | None = None
     location: str | None = None
     use_bigframes: bool = True
 
 
-class DatabricksSparkConfig(BaseModel):
+class DatabricksSparkConfig(BaseConfig):
     master: str = "local[*]"
     app_name: str = "fastflowtransform"
     extra_conf: dict[str, Any] | None = None
@@ -43,7 +51,7 @@ class DatabricksSparkConfig(BaseModel):
     table_options: dict[str, Any] | None = None
 
 
-class SnowflakeSnowparkConfig(BaseModel):
+class SnowflakeSnowparkConfig(BaseConfig):
     account: str
     user: str
     password: str
@@ -53,27 +61,27 @@ class SnowflakeSnowparkConfig(BaseModel):
     role: str | None = None
 
 
-class DuckDBProfile(BaseModel):
+class DuckDBProfile(BaseConfig):
     engine: Literal["duckdb"]
     duckdb: DuckDBConfig
 
 
-class PostgresProfile(BaseModel):
+class PostgresProfile(BaseConfig):
     engine: Literal["postgres"]
     postgres: PostgresConfig
 
 
-class BigQueryProfile(BaseModel):
+class BigQueryProfile(BaseConfig):
     engine: Literal["bigquery"]
     bigquery: BigQueryConfig
 
 
-class DatabricksSparkProfile(BaseModel):
+class DatabricksSparkProfile(BaseConfig):
     engine: Literal["databricks_spark"]
     databricks_spark: DatabricksSparkConfig
 
 
-class SnowflakeSnowparkProfile(BaseModel):
+class SnowflakeSnowparkProfile(BaseConfig):
     engine: Literal["snowflake_snowpark"]
     snowflake_snowpark: SnowflakeSnowparkConfig
 
@@ -88,12 +96,6 @@ Profile = Annotated[
 ]
 
 
-class ProjectConfig(BaseModel):
-    name: str
-    version: str
-    models_dir: str = "models"
-
-
 class EnvSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FF_", env_file=".env", extra="ignore")
 
@@ -106,6 +108,8 @@ class EnvSettings(BaseSettings):
 
     # DuckDB
     DUCKDB_PATH: str | None = None
+    DUCKDB_SCHEMA: str | None = None
+    DUCKDB_CATALOG: str | None = None
 
     # Postgres
     PG_DSN: str | None = None
@@ -143,12 +147,6 @@ class EnvSettings(BaseSettings):
     HTTP_ALLOWED_DOMAINS: str | None = None  # FF_HTTP_ALLOWED_DOMAINS (csv)
 
 
-def load_project_config(project_dir: Path) -> ProjectConfig:
-    cfg_path = project_dir / "project.yml"
-    data = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
-    return ProjectConfig(**data)
-
-
 # ---------- Loader ----------
 def load_profiles(project_dir: Path) -> dict:
     """
@@ -184,10 +182,17 @@ def _render_profiles_template(text: str, project_dir: Path) -> str:
 # ---------- Resolver ----------
 def resolve_profile(project_dir: Path, env_name: str, env: EnvSettings) -> Profile:
     profiles: dict[str, dict[str, Any]] = load_profiles(project_dir)
+    requested = profiles.get(env_name)
+    fallback = profiles.get("default")
+
+    if profiles and requested is None and fallback is None:
+        raise ProfileConfigError(
+            f"Profile '{env_name}' not found "
+            "in profiles.yml (define it or add a 'default' profile)."
+        )
+
     raw: dict[str, Any] = (
-        profiles.get(env_name)
-        or profiles.get("default")
-        or {"engine": "duckdb", "duckdb": {"path": ":memory:"}}
+        requested or fallback or {"engine": "duckdb", "duckdb": {"path": ":memory:"}}
     )
 
     _apply_env_overrides(raw, env)
@@ -223,6 +228,8 @@ def _set_if(d: dict[str, Any], key: str, value: Any | None) -> None:
 def _ov_duckdb(raw: dict[str, Any], env: EnvSettings) -> None:
     duck = raw.setdefault("duckdb", {})
     _set_if(duck, "path", getattr(env, "DUCKDB_PATH", None))
+    _set_if(duck, "schema", getattr(env, "DUCKDB_SCHEMA", None))
+    _set_if(duck, "catalog", getattr(env, "DUCKDB_CATALOG", None))
 
 
 def _ov_postgres(raw: dict[str, Any], env: EnvSettings) -> None:

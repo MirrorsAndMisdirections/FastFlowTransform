@@ -15,7 +15,6 @@ def test_catalog_duckdb(tmp_path: Path):
     (tmp_path / "models" / "t.ff.sql").write_text(
         "create or replace table t as select 1::int as id, 'x'::varchar as email", encoding="utf-8"
     )
-    (tmp_path / "sources.yml").write_text("{}", encoding="utf-8")
     REGISTRY.load_project(tmp_path)
     env = REGISTRY.get_env()
     ex = DuckExecutor(":memory:")

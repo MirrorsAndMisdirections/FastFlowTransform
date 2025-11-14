@@ -1,22 +1,167 @@
 # src/fastflowtransform/executors/databricks_spark_exec.py
 from __future__ import annotations
 
-import shutil
 from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from pyspark.errors.exceptions.base import AnalysisException
 from pyspark.sql import DataFrame as SDF, SparkSession
 from pyspark.sql.types import DataType
+
+try:
+    # Enable Delta Lake via delta-spark when available
+    from delta import configure_spark_with_delta_pip
+except Exception:  # pragma: no cover
+    configure_spark_with_delta_pip = None  # type: ignore[assignment]
 
 from fastflowtransform import storage
 from fastflowtransform.core import REGISTRY, Node, relation_for
 from fastflowtransform.errors import ModelExecutionError
 from fastflowtransform.executors.base import BaseExecutor
+from fastflowtransform.logging import echo_debug
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
+from fastflowtransform.table_formats import get_spark_format_handler
+from fastflowtransform.table_formats.base import SparkFormatHandler
+
+_DELTA_EXTENSION = "io.delta.sql.DeltaSparkSessionExtension"
+_DELTA_CATALOG = "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+_SPARK_DEFAULT_CATALOG = "org.apache.spark.sql.internal.CatalogImpl"  # Spark's built-in
+
+
+def _has_delta(spark: SparkSession) -> bool:
+    """
+    Best-effort Delta availability check that works with:
+      * local Spark + delta-spark
+      * Databricks runtime
+      * Databricks Connect
+
+    We first inspect Spark configuration, then fall back to checking that
+    delta-spark is importable, and finally use the old JVM heuristic for
+    plain local Spark.
+    """
+    # 1) Look at Spark SQL extensions (delta-spark & Databricks both wire this)
+    try:
+        exts = spark.conf.get("spark.sql.extensions", "")
+        if _DELTA_EXTENSION in str(exts):
+            return True
+    except Exception:
+        pass
+
+    # 2) If delta-spark is importable, we assume Delta is available
+    #    (this covers Databricks Connect as well in practice)
+    try:
+        from delta.tables import DeltaTable  # noqa PLC0415
+
+        _ = DeltaTable  # silence linters; import succeeded
+        return True
+    except Exception:
+        pass
+
+    # 3) Fallback: old JVM classpath heuristic for bare Spark installs
+    def _handles() -> list[Any]:
+        refs: list[Any] = []
+        with suppress(Exception):
+            refs.append(getattr(spark, "_jvm", None))
+        with suppress(Exception):
+            sc = getattr(spark, "sparkContext", None)
+            if sc:
+                gw = getattr(sc, "_gateway", None)
+                if gw:
+                    refs.append(getattr(gw, "jvm", None))
+        return [ref for ref in refs if ref is not None]
+
+    def _try_for_name(jvm: Any) -> bool:
+        candidates: list[Any] = []
+
+        java_pkg = getattr(jvm, "java", None)
+        if java_pkg is not None:
+            with suppress(Exception):
+                candidates.append(java_pkg.lang.Class)
+
+        lang_pkg = getattr(jvm, "lang", None)
+        if lang_pkg is not None:
+            with suppress(Exception):
+                candidates.append(lang_pkg.Class)
+
+        cls = getattr(jvm, "Class", None)
+        if cls is not None:
+            candidates.append(cls)
+
+        for target in candidates:
+            try:
+                target.forName(_DELTA_CATALOG)
+                return True
+            except Exception:
+                continue
+        return False
+
+    return any(_try_for_name(handle) for handle in _handles())
+
+
+def _csv_tokens(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [part.strip() for part in value.split(",") if part and part.strip()]
+
+
+def _ensure_csv_token(value: str | None, token: str) -> tuple[str | None, bool]:
+    tokens = _csv_tokens(value)
+    if token in tokens:
+        return value, False
+    tokens.append(token)
+    return ",".join(tokens), True
+
+
+def _as_nonempty_str(value: Any | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _safe_conf(spark: SparkSession, key: str, default: str = "<unset>") -> str:
+    try:
+        return str(spark.conf.get(key, default))
+    except Exception as exc:
+        return f"<error: {exc}>"
+
+
+def _log_delta_capabilities(
+    spark: SparkSession,
+    *,
+    wants_delta: bool,
+    delta_ok: bool,
+    user_spark: SparkSession | None,
+    table_format: str | None,
+) -> None:
+    """
+    Debug helper: log what we know about Spark/Delta capabilities.
+    Useful for environments like Databricks Connect where JVM probing is tricky.
+    """
+    lines: list[str] = []
+    lines.append("=== DatabricksSparkExecutor capabilities ===")
+    lines.append(f"Spark version: {getattr(spark, 'version', '<unknown>')}")
+    lines.append(f"user_spark_provided: {user_spark is not None}")
+    lines.append(f"table_format: {table_format!r}")
+    lines.append(f"wants_delta: {wants_delta}")
+    lines.append(f"delta_ok: {delta_ok}")
+    lines.append(f"spark.sql.extensions: {_safe_conf(spark, 'spark.sql.extensions')}")
+    lines.append(
+        f"spark.sql.catalog.spark_catalog: {_safe_conf(spark, 'spark.sql.catalog.spark_catalog')}"
+    )
+
+    # Check whether delta-spark is importable
+    try:
+        from delta.tables import DeltaTable  # noqa PLC0415
+
+        _ = DeltaTable
+        lines.append("delta.tables.DeltaTable import: OK")
+    except Exception as exc:
+        lines.append(f"delta.tables.DeltaTable import: FAILED ({exc})")
+
+    echo_debug("\n".join(lines))
 
 
 class DatabricksSparkExecutor(BaseExecutor[SDF]):
@@ -35,8 +180,13 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         database: str | None = None,
         table_format: str | None = "parquet",
         table_options: dict[str, Any] | None = None,
+        spark: SparkSession | None = None,
     ):
+        extra_conf = dict(extra_conf or {})
+        self._user_spark = spark
         builder = SparkSession.builder.master(master).appName(app_name)
+        catalog_key = "spark.sql.catalog.spark_catalog"
+        ext_key = "spark.sql.extensions"
 
         warehouse_path: Path | None = None
         if warehouse_dir:
@@ -46,8 +196,9 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
             warehouse_path.mkdir(parents=True, exist_ok=True)
             builder = builder.config("spark.sql.warehouse.dir", str(warehouse_path))
 
-        if catalog:
-            builder = builder.config("spark.sql.catalog.spark_catalog", catalog)
+        catalog_value = _as_nonempty_str(catalog)
+        if catalog_value:
+            builder = builder.config(catalog_key, catalog_value)
 
         if extra_conf:
             for key, value in extra_conf.items():
@@ -58,7 +209,38 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
             builder = builder.config("spark.sql.catalogImplementation", "hive")
             builder = builder.enableHiveSupport()
 
-        self.spark = builder.getOrCreate()
+        fmt_requested = (table_format or "").strip().lower()
+        wants_delta = fmt_requested == "delta"
+
+        if not wants_delta and self._user_spark is None:
+            catalog_overridden = bool(catalog_value)
+            if not catalog_overridden:
+                # Leave Spark catalog untouched; downstream environments may supply
+                # their own defaults (e.g., Unity, Glue). We only force a catalog
+                # when the user explicitly opts into Delta.
+                pass
+
+        # Apply Delta configuration last, after all Spark configs are set.
+        if wants_delta and self._user_spark is None:
+            if configure_spark_with_delta_pip is None:
+                raise RuntimeError(
+                    "Delta table_format requested for DatabricksSparkExecutor, "
+                    "but 'delta-spark' is not installed. "
+                    "Install it with: pip install delta-spark"
+                )
+            builder = configure_spark_with_delta_pip(builder)
+
+            ext_value = _as_nonempty_str(extra_conf.get(ext_key))
+            merged_ext, changed = _ensure_csv_token(ext_value, _DELTA_EXTENSION)
+            if changed or ext_value is None:
+                builder = builder.config(ext_key, merged_ext)
+
+            extra_catalog = _as_nonempty_str(extra_conf.get(catalog_key))
+            catalog_overridden = bool(catalog_value) or bool(extra_catalog)
+            if not catalog_overridden:
+                builder = builder.config(catalog_key, _DELTA_CATALOG)
+
+        self.spark = self._user_spark or builder.getOrCreate()
         # Lightweight testing shim so tests can call executor.con.execute("SQL")
         self.con = _SparkConnShim(self.spark)
         self._registered_path_sources: dict[str, dict[str, Any]] = {}
@@ -66,35 +248,58 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         self.catalog = catalog
         self.database = database
         self.schema = database
+
         if database:
             self.spark.sql(f"CREATE DATABASE IF NOT EXISTS `{database}`")
             with suppress(Exception):
                 self.spark.catalog.setCurrentDatabase(database)
 
-        fmt = (table_format or "").strip().lower()
-        self.spark_table_format: str | None = fmt or None
-        if table_options:
-            self.spark_table_options = {str(k): str(v) for k, v in table_options.items()}
-        else:
-            self.spark_table_options = {}
+        self.spark_table_format: str | None = fmt_requested or None
+        self.spark_table_options = {str(k): str(v) for k, v in (table_options or {}).items()}
+        # ---- Delta availability check ----
+        self._delta_ok = _has_delta(self.spark)
+
+        # Log capabilities whenever Delta is requested or detected
+        if wants_delta or self._delta_ok:
+            _log_delta_capabilities(
+                self.spark,
+                wants_delta=wants_delta,
+                delta_ok=self._delta_ok,
+                user_spark=self._user_spark,
+                table_format=self.spark_table_format,
+            )
+
+        if wants_delta and not self._delta_ok and self._user_spark is None:
+            raise RuntimeError(
+                "Delta table_format requested, but the Delta Lake classes are not available. "
+                "Install delta-spark or provide a SparkSession already configured for Delta."
+            )
+
+        # Unified format handler for managed tables (Delta, Iceberg, generic Parquet/ORC/etc.)
+        self._format_handler: SparkFormatHandler = get_spark_format_handler(
+            self.spark_table_format,
+            self.spark,
+            table_options=self.spark_table_options,
+        )
 
     # ---------- Frame hooks (required) ----------
     def _read_relation(self, relation: str, node: Node, deps: Iterable[str]) -> SDF:
         # relation may optionally be "db.table" (via source()/ref())
-        return self.spark.table(relation)
+        physical = self._format_handler.qualify_identifier(relation, database=self.database)
+        return self.spark.table(physical)
 
     def _materialize_relation(self, relation: str, df: SDF, node: Node) -> None:
         if not self._is_frame(df):
             raise TypeError("Spark model must return a Spark DataFrame")
         storage_meta = self._storage_meta(node, relation)
-        if storage_meta.get("path"):
-            self._write_to_storage_path(relation, df, storage_meta)
-            return
-        # write as a table in Hive/Unity/Delta environments
+        # Delegate managed/unmanaged handling to _save_df_as_table so Iceberg
+        # (or other handlers) can consistently enforce managed tables.
         self._save_df_as_table(relation, df, storage=storage_meta)
 
     def _create_view_over_table(self, view_name: str, backing_table: str, node: Node) -> None:
-        self.spark.sql(f"CREATE OR REPLACE VIEW `{view_name}` AS SELECT * FROM `{backing_table}`")
+        view_sql = self._sql_identifier(view_name)
+        backing_sql = self._sql_identifier(backing_table)
+        self.spark.sql(f"CREATE OR REPLACE VIEW {view_sql} AS SELECT * FROM {backing_sql}")
 
     def _validate_required(
         self, node_name: str, inputs: Any, requires: dict[str, set[str]]
@@ -171,11 +376,10 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
                 continue
         return storage.get_model_storage(rel_clean)
 
-    def _write_to_storage_path(
-        self, relation: str, df: SDF, storage_meta: dict[str, Any]
-    ) -> None:  # pragma: no cover
+    def _write_to_storage_path(self, relation: str, df: SDF, storage_meta: dict[str, Any]) -> None:
         parts = self._identifier_parts(relation)
         identifier = ".".join(parts)
+
         storage.spark_write_to_path(
             self.spark,
             identifier,
@@ -185,9 +389,27 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
             default_options=self.spark_table_options,
         )
 
+        path = storage_meta.get("path")
+        if path:
+            with suppress(Exception):
+                self.spark.catalog.refreshByPath(path)
+
     # ---- SQL hooks ----
     def _format_relation_for_ref(self, name: str) -> str:
-        return self._q_ident(relation_for(name))
+        """
+        Format a ref(...) relation for use in SQL.
+
+        - Default: just backtick-quote the logical relation name.
+        - Iceberg: qualify with the Iceberg catalog so that models point at
+          tables in `iceberg.<db>.<table>`, matching the seed & incremental
+          write path.
+        """
+        base = relation_for(name)
+        return self._sql_identifier(base)
+
+    def _this_identifier(self, node: Node) -> str:
+        base = relation_for(node.name)
+        return self._sql_identifier(base)
 
     def _format_source_reference(
         self, cfg: dict[str, Any], source_name: str, table_name: str
@@ -197,8 +419,8 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
 
         if location:
             alias = identifier or f"__ff_src_{source_name}_{table_name}"
-            fmt = cfg.get("format")
-            if not fmt:
+            fmt_src = cfg.get("format")
+            if not fmt_src:
                 raise KeyError(
                     f"Source {source_name}.{table_name} requires 'format' when using a location"
                 )
@@ -206,12 +428,12 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
             options = dict(cfg.get("options") or {})
             descriptor = {
                 "location": location,
-                "format": fmt,
+                "format": fmt_src,
                 "options": options,
             }
             existing = self._registered_path_sources.get(alias)
             if existing != descriptor:
-                reader = self.spark.read.format(fmt)
+                reader = self.spark.read.format(fmt_src)
                 if options:
                     reader = reader.options(**options)
                 df = reader.load(location)
@@ -221,13 +443,20 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
 
         if not identifier:
             raise KeyError(f"Source {source_name}.{table_name} missing identifier")
+        catalog = cfg.get("catalog")
+        schema = cfg.get("schema") or cfg.get("database")
+        if catalog or schema:
+            logical = ".".join([p for p in (catalog, schema, identifier) if p])
+            return self._sql_identifier(logical)
 
-        catalog = cfg.get("catalog") or cfg.get("database")
-        schema = cfg.get("schema")
-        parts = [p for p in (catalog, schema, identifier) if p]
-        if not parts:
-            parts = [identifier]
-        return ".".join(self._q_ident(str(part)) for part in parts)
+        fallback_db = self.database or self.spark.catalog.currentDatabase()
+        return self._sql_identifier(str(identifier), database=fallback_db)
+
+    def _format_test_table(self, table: str | None) -> str | None:
+        formatted = super()._format_test_table(table)
+        if not isinstance(formatted, str):
+            return formatted
+        return self._format_handler.format_test_table(formatted, database=self.database)
 
     # ---- Spark table helpers ----
     @staticmethod
@@ -237,6 +466,14 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
     def _identifier_parts(self, identifier: str) -> list[str]:
         cleaned = self._strip_quotes(identifier)
         return [part for part in cleaned.split(".") if part]
+
+    def _physical_identifier(self, identifier: str, *, database: str | None = None) -> str:
+        db = database if database is not None else self.database
+        return self._format_handler.qualify_identifier(identifier, database=db)
+
+    def _sql_identifier(self, identifier: str, *, database: str | None = None) -> str:
+        db = database if database is not None else self.database
+        return self._format_handler.format_identifier_for_sql(identifier, database=db)
 
     def _warehouse_base(self) -> Path | None:
         try:
@@ -291,43 +528,35 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
     def _save_df_as_table(
         self, identifier: str, df: SDF, *, storage: dict[str, Any] | None = None
     ) -> None:
+        """
+        Save a DataFrame as a (managed or unmanaged) table.
+
+        - If storage["path"] is set -> unmanaged/path-based via storage.spark_write_to_path.
+        - Otherwise -> managed table via the configured format handler
+          (Delta, Parquet, future Iceberg, ...).
+        """
         parts = self._identifier_parts(identifier)
         if not parts:
             raise ValueError(f"Invalid Spark table identifier: {identifier}")
 
-        storage_meta = storage or self._storage_meta(None, identifier)
-        if storage_meta.get("path"):
+        storage_meta = dict(storage or self._storage_meta(None, identifier) or {})
+
+        path_override = storage_meta.get("path")
+        if path_override and not self._format_handler.allows_unmanaged_paths():
+            echo_debug(
+                f"Ignoring storage.path override for table '{identifier}' because "
+                f"format '{self._format_handler.table_format or 'default'}' "
+                "requires managed tables."
+            )
+            path_override = None
+
+        if path_override:
             self._write_to_storage_path(identifier, df, storage_meta)
             return
 
         table_name = ".".join(parts)
-        target_location = self._table_location(parts)
-
-        def _write() -> None:
-            writer = df.write.mode("overwrite")
-            if self.spark_table_format:
-                writer = writer.format(self.spark_table_format)
-            if self.spark_table_options:
-                writer = writer.options(**self.spark_table_options)
-            writer.saveAsTable(table_name)
-
-        target_sql = ".".join(self._q_ident(p) for p in parts)
-        with suppress(Exception):
-            self.spark.sql(f"DROP TABLE IF EXISTS {target_sql}")
-        if target_location and target_location.exists():
-            with suppress(Exception):
-                shutil.rmtree(target_location, ignore_errors=True)
-
-        try:
-            _write()
-        except AnalysisException as exc:  # pragma: no cover - requires real Spark/Delta error
-            message = str(exc)
-            if target_location and "LOCATION_ALREADY_EXISTS" in message.upper():
-                with suppress(Exception):
-                    shutil.rmtree(target_location, ignore_errors=True)
-                _write()
-            else:
-                raise
+        # Managed tables: delegate to the format handler (Delta, Parquet, Iceberg, ...)
+        self._format_handler.save_df_as_table(table_name, df)
 
     def _create_or_replace_view(self, target_sql: str, select_body: str, node: Node) -> None:
         self.spark.sql(f"CREATE OR REPLACE VIEW {target_sql} AS {select_body}")
@@ -344,7 +573,9 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
     def _create_or_replace_view_from_table(
         self, view_name: str, backing_table: str, node: Node
     ) -> None:
-        self.spark.sql(f"CREATE OR REPLACE VIEW `{view_name}` AS SELECT * FROM `{backing_table}`")
+        view_sql = self._sql_identifier(view_name)
+        backing_sql = self._sql_identifier(backing_table)
+        self.spark.sql(f"CREATE OR REPLACE VIEW {view_sql} AS SELECT * FROM {backing_sql}")
 
     # ---- Meta hook ----
     def on_node_built(self, node: Node, relation: str, fingerprint: str) -> None:
@@ -358,43 +589,93 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
     # ── Incremental API (parity) ─────────────────────────────────────────
     def exists_relation(self, relation: str) -> bool:
         """Check whether a table/view exists (optionally qualified with database)."""
-        db, tbl = _split_db_table(relation)
-        if db:
-            return bool(self.spark.catalog._jcatalog.tableExists(db, tbl))
-        return self.spark.catalog.tableExists(tbl)
+        return self._format_handler.relation_exists(relation, database=self.database)
 
     def create_table_as(self, relation: str, select_sql: str) -> None:
         """CREATE TABLE AS with cleaned SELECT body."""
-        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
+        body = self._selectable_body(select_sql).strip().rstrip(";\n\t ")
+        df = self.spark.sql(body)
+        self._save_df_as_table(relation, df)
+
+    def full_refresh_table(self, relation: str, select_sql: str) -> None:
+        """
+        Engine-specific full refresh for incremental fallbacks.
+        Important: NO 'REPLACE TABLE' SQL, but DataFrame path + saveAsTable instead.
+        """
+        body = self._selectable_body(select_sql).strip().rstrip(";\n\t ")
+        # Delegate to format handler via _save_df_as_table for managed, or storage for unmanaged
         df = self.spark.sql(body)
         self._save_df_as_table(relation, df)
 
     def incremental_insert(self, relation: str, select_sql: str) -> None:
-        """INSERT INTO with cleaned SELECT body."""
-        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
-        self.spark.sql(f"INSERT INTO {relation} {body}")
+        """INSERT INTO with cleaned SELECT body (format-aware via handler)."""
+        body = self._selectable_body(select_sql).strip().rstrip(";\n\t ")
+        self._format_handler.incremental_insert(relation, body)
 
     def incremental_merge(self, relation: str, select_sql: str, unique_key: list[str]) -> None:
-        """
-        Try Delta MERGE (Databricks typical). If MERGE fails (non-Delta), fallback to full replace.
-        """
-        body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
-        pred = " AND ".join([f"t.{k}=s.{k}" for k in unique_key]) or "FALSE"
+        body = self._selectable_body(select_sql).strip().rstrip(";\n\t ")
+
+        # First: let the current format handler try to do a native merge.
+        # - DeltaFormatHandler -> DeltaTable.merge()
+        # - IcebergFormatHandler -> Spark SQL MERGE INTO
         try:
-            # Use inline subquery as source; SET * / INSERT * requires Delta ≥ 1.2 / Spark ≥ 3.4.
-            self.spark.sql(
-                f"""
-                MERGE INTO {relation} AS t
-                USING ({body}) AS s
-                ON {pred}
-                WHEN MATCHED THEN UPDATE SET *
-                WHEN NOT MATCHED THEN INSERT *
-                """
-            )
-        except Exception:
-            # Fallback: Full replace is safer across lake formats
-            df = self.spark.sql(body)
-            self._save_df_as_table(relation, df)
+            self._format_handler.incremental_merge(relation, body, unique_key)
+            return
+        except NotImplementedError:
+            # Format handler doesn't support MERGE → fall back to generic Spark strategy.
+            pass
+
+        # Fallback for formats without native merge:
+        # overwrite = (existing minus keys being updated) UNION (new rows)
+        materialized: list[SDF] = []
+
+        def _materialize(df: SDF) -> SDF:
+            """
+            Ensure the frame is realized independently of the source table so an
+            overwrite doesn't conflict with the read path.
+            """
+            try:
+                cp = df.localCheckpoint(eager=True)
+                materialized.append(cp)
+                return cp
+            except Exception:
+                cached = df.cache()
+                cached.count()
+                materialized.append(cached)
+                return cached
+
+        try:
+            physical = self._physical_identifier(relation)
+            existing = _materialize(self.spark.table(physical))
+            incoming = _materialize(self.spark.sql(body))
+
+            if unique_key:
+                # ensure key columns exist on incoming
+                missing = [k for k in unique_key if k not in incoming.columns]
+                if missing:
+                    raise ModelExecutionError(
+                        node_name="__python_incremental__",
+                        relation=relation,
+                        message=(
+                            "incremental_merge fallback: missing key columns on incoming: "
+                            f"{missing}"
+                        ),
+                    )
+                key_df = incoming.select(*unique_key).dropDuplicates()
+                # left_anti: keep only rows whose keys are NOT in incoming
+                kept = existing.join(key_df, on=unique_key, how="left_anti")
+                merged = kept.unionByName(incoming, allowMissingColumns=True)
+            else:
+                # No keys → append & deduplicate
+                merged = existing.unionByName(incoming, allowMissingColumns=True).dropDuplicates()
+
+            merged = _materialize(merged)
+            # Full overwrite with merged result
+            self._save_df_as_table(relation, merged)
+        finally:
+            for handle in materialized:
+                with suppress(Exception):
+                    handle.unpersist()
 
     def alter_table_sync_schema(
         self, relation: str, select_sql: str, *, mode: str = "append_new_columns"
@@ -408,7 +689,8 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
             return
         # Target schema
         try:
-            target_df = self.spark.table(relation)
+            physical = self._physical_identifier(relation)
+            target_df = self.spark.table(physical)
         except Exception:
             return
         existing = {f.name for f in target_df.schema.fields}
@@ -429,7 +711,8 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
             )
 
         cols_sql = ", ".join([f"`{f.name}` {_spark_sql_type(f.dataType)}" for f in to_add])
-        self.spark.sql(f"ALTER TABLE {relation} ADD COLUMNS ({cols_sql})")
+        table_sql = self._sql_identifier(relation)
+        self.spark.sql(f"ALTER TABLE {table_sql} ADD COLUMNS ({cols_sql})")
 
 
 # ────────────────────────── local helpers / shim ──────────────────────────

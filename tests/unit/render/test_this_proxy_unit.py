@@ -9,7 +9,6 @@ from fastflowtransform.executors.duckdb_exec import DuckExecutor
 
 
 @pytest.mark.unit
-@pytest.mark.render
 def test_this_string_and_name(tmp_path: Path):
     p = tmp_path / "m.ff.sql"
     p.write_text("select '{{ this }}' as a, '{{ this.name }}' as b", encoding="utf-8")

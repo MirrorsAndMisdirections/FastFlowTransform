@@ -78,6 +78,34 @@ class ModuleLoadError(FastFlowTransformError):
     pass
 
 
+class ModelConfigError(FastFlowTransformError):
+    """
+    Raised when a model's {{ config(...) }} (or @model(meta=...)) is malformed
+    or fails schema validation.
+
+    Typical causes:
+      - Syntax errors in the config(...) header
+      - Non-literal expressions in values (must be JSON/Python literals)
+      - Unknown/forbidden keys
+      - Wrong types for documented fields
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        path: str | None = None,
+        field: str | None = None,
+        hint: str | None = None,
+        code: str = "CFG_PARSE",
+    ):
+        prefix = f"{path}: " if path else ""
+        scope = f"config.{field}: " if field else "config: "
+        super().__init__(f"{prefix}{scope}{message}".rstrip(), code=code, hint=hint)
+        self.path = path
+        self.field = field
+
+
 class ProfileConfigError(FastFlowTransformError):
     """Profile/configuration error with a short, actionable hint."""
 

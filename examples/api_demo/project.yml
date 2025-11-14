@@ -25,8 +25,12 @@ seeds:
       format: parquet
 
 tests:
-  # Batch tables
   - type: not_null
     table: mart_users_join
     column: user_id
+    tags: [batch]
+  - type: row_count_between
+    table: mart_users_join
+    min_rows: 3
+    max_rows: 3
     tags: [batch]

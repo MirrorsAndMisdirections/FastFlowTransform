@@ -1,0 +1,67 @@
+dev_duckdb:
+  engine: duckdb
+  duckdb:
+    path: "{{ env('FF_DUCKDB_PATH', '.local/incremental_demo.duckdb') }}"
+
+dev_postgres:
+  engine: postgres
+  postgres:
+    dsn: "{{ env('FF_PG_DSN') }}"
+    db_schema: "{{ env('FF_PG_SCHEMA', 'public') }}"
+
+dev_databricks_delta:
+  engine: databricks_spark
+  databricks_spark:
+    master: "{{ env('FF_SPARK_MASTER', 'local[*]') }}"
+    app_name: "{{ env('FF_SPARK_APP_NAME', 'incremental_demo') }}"
+    warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse"
+    extra_conf:
+      spark.hadoop.javax.jdo.option.ConnectionURL: "jdbc:derby:{{ project_dir() }}/.local/metastore_db;create=true"
+      spark.hadoop.datanucleus.rdbms.datastoreAdapterClassName: "org.datanucleus.store.rdbms.adapter.DerbyAdapter"
+      spark.hadoop.datanucleus.schema.autoCreateAll: "true"
+      spark.hadoop.javax.jdo.option.ConnectionDriverName: "org.apache.derby.jdbc.EmbeddedDriver"
+      spark.driver.extraJavaOptions: "-Dderby.stream.error.file={{ project_dir() }}/.local/derby.log"
+
+dev_databricks_iceberg:
+  engine: databricks_spark
+  databricks_spark:
+    master: "{{ env('FF_SPARK_MASTER', 'local[*]') }}"
+    app_name: "{{ env('FF_SPARK_APP_NAME', 'incremental_demo_iceberg') }}"
+    warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse_iceberg"
+    table_format: "iceberg"
+    extra_conf:
+      spark.jars.packages: "org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.0"
+      # minimal local Hadoop catalog example:
+      spark.sql.catalog.iceberg: "org.apache.iceberg.spark.SparkCatalog"
+      spark.sql.catalog.iceberg.type: "hadoop"
+      spark.sql.catalog.iceberg.warehouse: "file://{{ project_dir() }}/.local/iceberg_warehouse"
+      spark.sql.catalog.iceberg.write.metadata.version-hint.enabled: "false"
+      spark.sql.catalog.iceberg.read.metadata.version-hint.enabled: "false"
+
+dev_databricks_hudi:
+  engine: databricks_spark
+  databricks_spark:
+    master: "{{ env('FF_SPARK_MASTER', 'local[*]') }}"
+    app_name: "{{ env('FF_SPARK_APP_NAME', 'incremental_demo_hudi') }}"
+    warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse_hudi"
+
+    # Tell DatabricksSparkExecutor / get_spark_format_handler to use HudiFormatHandler
+    table_format: "hudi"
+
+    # Default Hudi options – overridden per model via models.storage
+    table_options:
+      hoodie.datasource.write.recordkey.field: "id"
+      hoodie.datasource.write.precombine.field: "updated_at"
+      hoodie.table.name: "fct_events_hudi"
+
+    extra_conf:
+      spark.jars.packages: "org.apache.hudi:hudi-spark4.0-bundle_2.13:1.0.0"
+
+      # Core Hudi Spark wiring
+      spark.serializer: "org.apache.spark.serializer.KryoSerializer"
+      spark.sql.extensions: "org.apache.spark.sql.hudi.HoodieSparkSessionExtension"
+      spark.sql.catalog.spark_catalog: "org.apache.spark.sql.hudi.catalog.HoodieCatalog"
+      spark.kryo.registrator: "org.apache.spark.HoodieSparkKryoRegistrar"
+
+      # Keep warehouse on disk under the project (matches warehouse_dir)
+      spark.sql.warehouse.dir: "file://{{ project_dir() }}/.local/spark_warehouse_hudi"

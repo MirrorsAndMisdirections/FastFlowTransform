@@ -1,3 +1,4 @@
+# fastflowtransform/cli/run.py
 from __future__ import annotations
 
 import os
@@ -46,7 +47,6 @@ from fastflowtransform.fingerprint import (
     fingerprint_sql,
     get_function_source,
 )
-from fastflowtransform.incremental import run_or_dispatch as run_sql_with_incremental
 from fastflowtransform.log_queue import LogQueue
 from fastflowtransform.logging import bind_context, bound_context, clear_context, echo, warn
 from fastflowtransform.meta import ensure_meta_table
@@ -102,12 +102,6 @@ class _RunEngine:
                     clone_needed = not (isinstance(db_path, str) and db_path.strip() == ":memory:")
                     if clone_needed:
                         ex = ex.clone()
-
-                    def _run_sql_duckdb(n):
-                        # Planner: intercept incremental materializations
-                        return run_sql_with_incremental(ex, n, self.ctx.jinja_env)
-
-                    run_sql_wrapped = _run_sql_duckdb
                     run_py_wrapped = ex.run_python
                 except Exception:
                     pass
@@ -144,6 +138,87 @@ class _RunEngine:
         except Exception:
             return None
         return None
+
+    def _executor_namespace(self) -> str | None:
+        """
+        Best-effort namespace (catalog/database/schema/dataset) to enrich log output.
+        """
+        if not isinstance(self.shared, tuple) or not self.shared:
+            return None
+        executor = self.shared[0]
+        if executor is None:
+            return None
+        parts: list[str] = []
+        for attr in ("catalog", "database"):
+            val = getattr(executor, attr, None)
+            if isinstance(val, str) and val.strip():
+                parts.append(val.strip())
+        for attr in ("dataset", "schema"):
+            val = getattr(executor, attr, None)
+            if isinstance(val, str) and val.strip():
+                parts.append(val.strip())
+        return ".".join(parts) if parts else None
+
+    def _qualified_target(self, name: str) -> str | None:
+        namespace = self._executor_namespace()
+        if not namespace:
+            return None
+        rel = relation_for(name)
+        if not rel:
+            return None
+        return f"{namespace}.{rel}"
+
+    def format_run_label(self, name: str) -> str:
+        """
+        Build the human-facing label for run logs, e.g.:
+          fct_events_sql_inline.ff [delta] (catalog.schema.fct_events_sql_inline)
+
+        The storage format is resolved from:
+          1) per-model storage config (project.yml → models.storage / meta.storage),
+          2) engine defaults (e.g. Databricks/Spark table_format) as a fallback.
+
+        For database engines like DuckDB/Postgres we intentionally hide the
+        underlying storage format (e.g. 'parquet') to avoid confusing output.
+        """
+        qualified = self._qualified_target(name)
+        engine = (self.ctx.profile.engine or "").lower()
+
+        # 1) per-model storage.format from meta (preferred)
+        fmt_from_meta: str | None = None
+        try:
+            node = REGISTRY.get_node(name)
+            meta = getattr(node, "meta", {}) or {}
+            storage_cfg = meta.get("storage") or {}
+            if isinstance(storage_cfg, dict):
+                val = storage_cfg.get("format")
+                if isinstance(val, str) and val.strip():
+                    fmt_from_meta = val.strip()
+        except Exception:
+            fmt_from_meta = None
+
+        fmt: str | None = fmt_from_meta
+
+        # 2) engine-level default format (e.g. Spark table_format) as fallback.
+        # Only meaningful for Spark-like engines.
+        if fmt is None and engine in {"databricks_spark", "spark"}:
+            try:
+                executor, _, _ = self.shared
+                default_fmt = getattr(executor, "spark_table_format", None)
+                if isinstance(default_fmt, str) and default_fmt.strip():
+                    fmt = default_fmt.strip()
+            except Exception:
+                fmt = None
+
+        # For database engines (DuckDB/Postgres), we do not show a format suffix
+        # at all to avoid misleading '[parquet]' labels.
+        if engine in {"duckdb", "postgres", "postgresql"}:
+            fmt_suffix = ""
+        else:
+            fmt_suffix = f" [{fmt}]" if fmt else ""
+
+        if qualified:
+            return f"{name}{fmt_suffix} ({qualified})"
+        return f"{name}{fmt_suffix}"
 
     def run_node(self, name: str) -> None:
         node = REGISTRY.nodes[name]
@@ -363,7 +438,8 @@ def _run_schedule(engine_, lvls, jobs, keep_going, ctx):
         on_error=None,
         logger=logq,
         engine_abbr=_abbr(ctx.profile.engine),
-        name_width=28,
+        name_width=100,
+        name_formatter=engine_.format_run_label,
     )
 
     finished_at = datetime.now(UTC).isoformat(timespec="seconds")

@@ -194,15 +194,17 @@ def test_make_executor_bigquery_uses_correct_executor(monkeypatch):
 @pytest.mark.unit
 def test_make_executor_duckdb(monkeypatch, tmp_path: Path):
     class _FakeDuckExec:
-        def __init__(self, db_path: str):
+        def __init__(self, db_path: str, schema: str | None = None, catalog: str | None = None):
             self.db_path = db_path
+            self.schema = schema
+            self.catalog = catalog
 
         def run_python(self, *a, **k):
             pass
 
     monkeypatch.setattr(bootstrap, "DuckExecutor", _FakeDuckExec, raising=True)
 
-    prof = fake_duckdb_profile(path=str(tmp_path / "test.duckdb"))
+    prof = fake_duckdb_profile(path=str(tmp_path / "test.duckdb"), schema="demo", catalog="demo")
     jenv = Environment()
 
     ex, run_fn, py_fn = bootstrap._make_executor(prof, jenv)

@@ -2,7 +2,8 @@
 
 ### DuckDB
 
-- Copy `.env.dev_duckdb` and adjust `FF_DUCKDB_PATH` if you want a different location (default: `.local/api_demo.duckdb`).
+- Copy `.env.dev_duckdb` and adjust `FF_DUCKDB_PATH` if you want a different location (default: `.local/api_demo.duckdb`).  
+  Optionally set `FF_DUCKDB_SCHEMA` (default schema for models/seeds) and `FF_DUCKDB_CATALOG` (catalog alias) if you need to isolate namespaces.
 - Create the target directory once: `mkdir -p examples/api_demo/.local`.
 - Run `make ENGINE=duckdb seed run` to build the seeds and models inside the DuckDB file.
 

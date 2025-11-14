@@ -13,7 +13,7 @@ from fastflowtransform.executors.databricks_spark_exec import DatabricksSparkExe
 
 
 @pytest.mark.integration
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_create_table_and_exists(spark_exec: DatabricksSparkExecutor):
     spark_exec.create_table_as("default.it_users", "SELECT 1 AS id, 'x' AS name")
     assert spark_exec.exists_relation("default.it_users")
@@ -21,7 +21,7 @@ def test_create_table_and_exists(spark_exec: DatabricksSparkExecutor):
 
 
 @pytest.mark.integration
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_incremental_insert_integration(spark_exec: DatabricksSparkExecutor):
     spark_exec.create_table_as("it_inc", "SELECT 1 AS id")
     spark_exec.incremental_insert("it_inc", "SELECT 2 AS id")
@@ -30,9 +30,9 @@ def test_incremental_insert_integration(spark_exec: DatabricksSparkExecutor):
 
 
 @pytest.mark.integration
-@pytest.mark.spark
-def test_incremental_merge_integration(spark_exec: DatabricksSparkExecutor):
-    spark_exec.create_table_as("it_merge", "SELECT 1 AS id, 'old' AS v")
+@pytest.mark.databricks_spark
+def test_incremental_merge_fallback_without_delta(spark_exec: DatabricksSparkExecutor):
+    spark_exec.create_table_as("it_merge_fallback", "SELECT 1 AS id, 'old' AS v")
     sql = """
     SELECT * FROM (
         SELECT 1 AS id, 'new' AS v
@@ -40,13 +40,15 @@ def test_incremental_merge_integration(spark_exec: DatabricksSparkExecutor):
         SELECT 2 AS id, 'other' AS v
     ) s
     """
-    spark_exec.incremental_merge("it_merge", sql, unique_key=["id"])
-    rows = {(r["id"], r["v"]) for r in spark_exec.spark.sql("SELECT * FROM it_merge").collect()}
+    spark_exec.incremental_merge("it_merge_fallback", sql, unique_key=["id"])
+    rows = {
+        (r["id"], r["v"]) for r in spark_exec.spark.sql("SELECT * FROM it_merge_fallback").collect()
+    }
     assert rows == {(1, "new"), (2, "other")}
 
 
 @pytest.mark.integration
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_alter_table_sync_schema_integration(spark_exec: DatabricksSparkExecutor):
     spark_exec.create_table_as("it_schema", "SELECT 1 AS id")
     spark_exec.alter_table_sync_schema("it_schema", "SELECT 1 AS id, 'x' AS extra")
@@ -55,7 +57,7 @@ def test_alter_table_sync_schema_integration(spark_exec: DatabricksSparkExecutor
 
 
 @pytest.mark.integration
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_create_or_replace_table_wraps_error(spark_exec: DatabricksSparkExecutor):
     bad_sql = "SELECT * FROM not_there"
     node = Node(name="bad_node", kind="sql", path=Path("dummy"))
@@ -64,7 +66,7 @@ def test_create_or_replace_table_wraps_error(spark_exec: DatabricksSparkExecutor
 
 
 @pytest.mark.integration
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_materialize_relation_real(spark_exec: DatabricksSparkExecutor):
     df = spark_exec.spark.createDataFrame([(1, "x")], ["id", "val"])
     node = Node(name="it_node", kind="python", path=Path("x"))
@@ -74,7 +76,7 @@ def test_materialize_relation_real(spark_exec: DatabricksSparkExecutor):
 
 
 @pytest.mark.integration
-@pytest.mark.spark
+@pytest.mark.databricks_spark
 def test_create_view_over_table_real(spark_exec: DatabricksSparkExecutor):
     """Create a table and a view over it using simple, backtick-safe names."""
     # 1) create a table WITHOUT a dot in the name

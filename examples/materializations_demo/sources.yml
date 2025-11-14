@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: demo
+    tables:
+      - name: customers
+        identifier: seed_customers  # via `fft seed`
+      - name: orders
+        identifier: seed_orders     # via `fft seed`

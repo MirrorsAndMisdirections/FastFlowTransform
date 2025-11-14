@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-# concat_docs.py
+# _scripts/concat_docs.py
 """
 Concatenates all Markdown files from the docs directory into a single file.
 - Respects the order in mkdocs.yml (nav).
@@ -15,7 +14,6 @@ Example:
 from __future__ import annotations
 import argparse
 import fnmatch
-import os
 from pathlib import Path
 import re
 import sys

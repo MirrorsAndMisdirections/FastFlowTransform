@@ -16,6 +16,11 @@ def duck_exec() -> DuckExecutor:
     return DuckExecutor(":memory:")
 
 
+@pytest.fixture
+def duck_exec_schema() -> DuckExecutor:
+    return DuckExecutor(":memory:", schema="demo_schema")
+
+
 def _node(name: str = "m", kind: str = "python") -> Node:
     return Node(name=name, kind=kind, path=Path("."))
 
@@ -101,6 +106,21 @@ def test_format_relation_for_ref(duck_exec: DuckExecutor):
 
 @pytest.mark.unit
 @pytest.mark.duckdb
+def test_format_relation_for_ref_with_schema(duck_exec_schema: DuckExecutor):
+    rel = duck_exec_schema._format_relation_for_ref("my_model")
+    assert rel == f'"demo_schema".{_q("my_model")}'
+
+
+@pytest.mark.unit
+@pytest.mark.duckdb
+def test_format_relation_for_ref_with_catalog_collision():
+    exec_catalog = DuckExecutor(":memory:", schema="memory")
+    rel = exec_catalog._format_relation_for_ref("foo")
+    assert rel == '"memory"."memory"."foo"'
+
+
+@pytest.mark.unit
+@pytest.mark.duckdb
 def test_format_source_reference_ok(duck_exec: DuckExecutor):
     cfg = {
         "catalog": "c1",
@@ -130,6 +150,22 @@ def test_format_source_reference_path_not_supported(duck_exec: DuckExecutor):
     cfg = {"location": "/some/path.csv"}
     with pytest.raises(NotImplementedError):
         duck_exec._format_source_reference(cfg, "src", "tbl")
+
+
+@pytest.mark.unit
+@pytest.mark.duckdb
+def test_format_source_reference_injects_executor_schema():
+    exec_schema = DuckExecutor(":memory:", schema="demo_schema")
+    ref = exec_schema._format_source_reference({"identifier": "src_tbl"}, "src", "tbl")
+    assert ref == '"demo_schema"."src_tbl"'
+
+
+@pytest.mark.unit
+@pytest.mark.duckdb
+def test_format_source_reference_injects_catalog_when_matches_schema():
+    exec_catalog = DuckExecutor(":memory:", schema="memory")
+    ref = exec_catalog._format_source_reference({"identifier": "src_tbl"}, "src", "tbl")
+    assert ref == '"memory"."memory"."src_tbl"'
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +212,13 @@ def test_exists_relation_true(duck_exec: DuckExecutor):
 @pytest.mark.duckdb
 def test_exists_relation_false(duck_exec: DuckExecutor):
     assert duck_exec.exists_relation("nope") is False
+
+
+@pytest.mark.unit
+@pytest.mark.duckdb
+def test_exists_relation_with_schema(duck_exec_schema: DuckExecutor):
+    duck_exec_schema.con.execute('create table "demo_schema"."t_s" (id int)')
+    assert duck_exec_schema.exists_relation("t_s") is True
 
 
 # ---------------------------------------------------------------------------
@@ -242,3 +285,12 @@ def test_alter_table_sync_schema_adds_missing_columns(duck_exec: DuckExecutor):
     col_names = [r[1] for r in info]
     assert "id" in col_names
     assert "new_col" in col_names
+
+
+@pytest.mark.unit
+@pytest.mark.duckdb
+def test_read_relation_respects_schema(duck_exec_schema: DuckExecutor):
+    duck_exec_schema.con.execute('create table "demo_schema"."t_in_schema" (id int)')
+    duck_exec_schema.con.execute('insert into "demo_schema"."t_in_schema" values (5)')
+    df = duck_exec_schema._read_relation("t_in_schema", _node(), deps=[])
+    assert df.to_dict(orient="records") == [{"id": 5}]

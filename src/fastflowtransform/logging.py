@@ -46,7 +46,9 @@ def _prefix_text_block(text: str) -> str:
     return "".join(prefixed)
 
 
-def _prefix_format(fmt: str) -> str:
+def _prefix_format(fmt: str | None) -> str | None:
+    if not fmt:
+        return fmt
     if not _prefix_enabled():
         return fmt
     return f"{LOG_PREFIX} {fmt}"

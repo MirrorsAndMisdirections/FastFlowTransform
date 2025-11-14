@@ -66,14 +66,35 @@ jobs:
       - name: Unit tests (fast)
         env:
           PYTHONWARNINGS: default
-        run: uv run pytest -q tests -m "not slow and not postgres" --maxfail=1
+        run: uv run pytest -q tests -m unit --maxfail=1
 
-  # ---------- smoke: examples/simple_duckdb with view + ephemeral ----------
-  smoke-duckdb:
+  # ---------- Examples: Integration Tests ----------
+  examples-matrix:
     runs-on: ubuntu-latest
     needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [duckdb, postgres, databricks_spark]
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fastflowtransform
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup uv (and Python)
         uses: astral-sh/setup-uv@v5
@@ -81,60 +102,30 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
-      - name: Sync deps
-        run: uv sync
+      - name: Sync deps (dev)
+        run: uv sync --extra dev --frozen
 
-      - name: Prepare ephemeral + view models in example
-        shell: bash
-        run: |
-          set -euo pipefail
-          PROJECT="examples/simple_duckdb"
-          mkdir -p "${PROJECT}/models"
+      - name: Setup Java for Spark
+        if: matrix.engine == 'databricks_spark'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-          cat > "${PROJECT}/models/ephemeral_ids.ff.sql" <<'SQL'
-          {{ config(materialized='ephemeral') }}
-          select id from {{ source('crm','users') }}
-          SQL
-
-          cat > "${PROJECT}/models/v_users.ff.sql" <<'SQL'
-          {{ config(materialized='view') }}
-          select u.id
-          from {{ ref('users.ff') }} u
-          join {{ ref('ephemeral_ids.ff') }} e using(id)
-          SQL
-
-      - name: Seed example (DuckDB file db)
+      - name: Run example/integration tests for engine
         env:
-          FF_ENGINE: duckdb
-          FF_DUCKDB_PATH: examples/simple_duckdb/.local/demo.duckdb
-        run: uv run fft seed examples/simple_duckdb --env dev
-
-      - name: Run models (ephemeral inline + view materialization)
-        env:
-          FF_ENGINE: duckdb
-          FF_DUCKDB_PATH: examples/simple_duckdb/.local/demo.duckdb
-        run: uv run fft run examples/simple_duckdb --env dev
-
-      - name: Smoke assertions (query DuckDB)
+          FF_PG_DSN: postgresql+psycopg://postgres:postgres@localhost:5432/fastflowtransform
+          FF_PG_SCHEMA: ci_examples
         run: |
-          uv run python - <<'PY'
-          import duckdb, pathlib
-          db = "examples/simple_duckdb/.local/demo.duckdb"
-          assert pathlib.Path(db).exists(), "DuckDB file not found"
-          con = duckdb.connect(db)
-          n = con.execute("select count(*) from v_users").fetchone()[0]
-          assert n >= 1, f"v_users empty (count={n})"
-          existing = {r[0] for r in con.execute(
-              "select table_name from information_schema.tables where table_schema in ('main','temp')"
-          ).fetchall()}
-          assert "ephemeral_ids" not in existing, "ephemeral_ids should not be materialized"
-          print("✓ smoke ok: v_users present, ephemeral inlined")
-          PY
-
-      - name: Build DAG (optional sanity)
-        env:
-          FF_ENGINE: duckdb
-          FF_DUCKDB_PATH: examples/simple_duckdb/.local/demo.duckdb
-        run: |
-          uv run fft dag examples/simple_duckdb --env dev --html
-          test -f examples/simple_duckdb/site/dag/index.html
+          echo "Running integration tests for engine=${{ matrix.engine }}"
+          case "${{ matrix.engine }}" in
+            duckdb)
+              uv run pytest -m "integration and duckdb" --maxfail=1 -q tests
+              ;;
+            postgres)
+              uv run pytest -m "integration and postgres" --maxfail=1 -q tests
+              ;;
+            databricks_spark)
+              uv run pytest -m "integration and databricks_spark" --maxfail=1 -q tests
+              ;;
+          esac

@@ -1,7 +1,7 @@
+# fastflowtransform/incremental.py
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from contextlib import suppress
 from typing import Any
 
 from sqlalchemy import text as _sa_text
@@ -25,12 +25,47 @@ def _normalize_unique_key(val: Any) -> list[str]:
     return []
 
 
-def _get_on_schema_change(meta: dict | None) -> str:
-    v = (meta or {}).get("on_schema_change") or "ignore"
-    v = str(v).strip().lower()
-    if v not in {"ignore", "append_new_columns", "sync_all_columns"}:
+def _get_schema_sync_policy(meta: dict | None) -> str:
+    """
+    Resolve schema sync / on_schema_change policy with backwards compatibility.
+
+    Priority:
+      1) top-level schema_sync
+      2) incremental.schema_sync (if present as nested config)
+      3) legacy on_schema_change
+
+    Normalizes:
+      - "none" -> "ignore"
+      - invalid values -> "ignore"
+    """
+    data = meta or {}
+
+    raw = data.get("schema_sync")
+    if raw is None:
+        incr = data.get("incremental")
+        if isinstance(incr, dict):
+            raw = incr.get("schema_sync")
+    if raw is None:
+        raw = data.get("on_schema_change")
+
+    v = str(raw or "ignore").strip().lower()
+
+    if v in {"none", "ignore"}:
         return "ignore"
-    return v
+    if v in {"append_new_columns", "sync_all_columns"}:
+        return v
+    return "ignore"
+
+
+def _is_merge_not_supported_error(exc: Exception) -> bool:
+    """
+    Detect engine messages where MERGE is simply not supported for the target table/catalog.
+    In those cases we want to gracefully fall back to a full refresh, instead of failing.
+    """
+    msg = str(exc)
+    text = msg.lower()
+    # Databricks / Spark-style messages
+    return "merge into table is not supported" in text or "merge into is not supported" in text
 
 
 # ---------- Helper ----------
@@ -104,11 +139,25 @@ def _maybe_schema_sync(executor: Any, relation: Any, rendered_sql: str, policy: 
     if policy in {"append_new_columns", "sync_all_columns"} and hasattr(
         executor, "alter_table_sync_schema"
     ):
-        with suppress(Exception):
-            executor.alter_table_sync_schema(relation, rendered_sql, mode=policy)
+        executor.alter_table_sync_schema(relation, rendered_sql, mode=policy)
 
 
 def _create_table_as_or_replace(executor: Any, relation: Any, rendered_sql: str) -> None:
+    _full_refresh_table(executor, relation, rendered_sql)
+
+
+def _full_refresh_table(executor: Any, relation: Any, rendered_sql: str) -> None:
+    """
+    Engine-agnostic full refresh:
+    - If the executor has a `full_refresh_table(...)` method, it is used.
+    - Otherwise: first try `create_table_as`; on failure, fall back to raw SQL
+    'create or replace table ... as ...' (for DuckDB, Postgres, Snowflake, etc.).
+    """
+    full_refresh = getattr(executor, "full_refresh_table", None)
+    if callable(full_refresh):
+        full_refresh(relation, rendered_sql)
+        return
+
     try:
         executor.create_table_as(relation, rendered_sql)
     except Exception:
@@ -123,27 +172,43 @@ def _merge_or_insert_with_fallback(
     relation: Any,
     rendered_sql: str,
     unique_key: UniqueKey,
+    *,
+    fallback_sql: str | None = None,
+    on_full_refresh_error: Callable[[Exception], None] | None = None,
 ) -> None:
+    fallback_sql = fallback_sql or rendered_sql
+
+    def _run_full_refresh() -> None:
+        try:
+            _full_refresh_table(executor, relation, fallback_sql)
+        except Exception as exc:
+            if on_full_refresh_error is not None:
+                on_full_refresh_error(exc)
+            else:
+                raise
+
     if unique_key:
-        # auf Liste normalisieren
         if isinstance(unique_key, str):
             keys: list[str] = [unique_key]
         else:
-            keys = list(unique_key)  # Sequence[str] -> List[str]
+            keys = list(unique_key)
 
         try:
-            # merge mit Keys
             executor.incremental_merge(relation, rendered_sql, keys)
             return
-        except Exception:
-            _exec_sql(executor, f"create or replace table {relation} as {rendered_sql}")
-            return
+        except Exception as exc:
+            # 🔑 Only treat "MERGE not supported" as a soft error → fallback
+            if _is_merge_not_supported_error(exc):
+                _run_full_refresh()
+                return
+            # Any other error (e.g. UNRESOLVED_COLUMN, syntax, etc.) is a *real* failure
+            raise
 
-    # kein unique_key -> insert
+    # no unique_key -> insert-only
     try:
         executor.incremental_insert(relation, rendered_sql)
     except Exception:
-        _exec_sql(executor, f"create or replace table {relation} as {rendered_sql}")
+        _run_full_refresh()
 
 
 # ---------- Run or dispatch ----------
@@ -151,40 +216,82 @@ def _merge_or_insert_with_fallback(
 
 def run_or_dispatch(executor: Any, node: Any, jenv: Any) -> None:
     """
-    Wrapper für executor.run_sql(...):
-    - fängt materialized='incremental' ab und plant nenewu/merge/insert.
-    - sonst Delegation an executor.
+    Incremental materialization for materialized='incremental'.
+    Method called from BaseExecutor.run_sql(...).
     """
     meta = getattr(node, "meta", {}) or {}
-    materialized = meta.get("materialized", "table")
 
-    if materialized != "incremental":
-        try:
-            return executor.run_sql(node, jenv)
-        except Exception as e:
-            rel = relation_for(node.name)
-            msg = f"{e.__class__.__name__}: {e}"
-            raise ModelExecutionError(node.name, rel, msg, sql_snippet=None) from e
+    materialized = meta.get("materialized")
+    incr_cfg = meta.get("incremental")
+
+    # Determine if incremental is enabled
+    incr_enabled = False
+    if isinstance(incr_cfg, bool):
+        incr_enabled = incr_cfg
+    elif isinstance(incr_cfg, dict):
+        # default enabled=True if a dict is present unless explicitly disabled
+        incr_enabled = incr_cfg.get("enabled", True)
+
+    # Decide whether to treat this as an incremental model
+    is_incremental_model = False
+    if materialized == "incremental":
+        # respect enabled flag if present
+        is_incremental_model = incr_enabled if incr_cfg is not None else True
+    elif materialized is None and incr_enabled:
+        # legacy: "incremental: true" without explicit materialized
+        is_incremental_model = True
 
     relation = relation_for(node.name)
-    exists = _safe_exists(executor, relation)
-    env = _env_with_incremental(jenv, exists)
-    rendered_sql = _render_sql_safe(executor, node, env)
-    wrap_and_raise = _wrap_and_raise_factory(node.name, relation, rendered_sql)
 
-    unique_key = _normalize_unique_key(meta.get("unique_key"))
-    schema_policy = _get_on_schema_change(meta)
-
-    if not exists:
+    if not is_incremental_model:
+        rendered_sql = _render_sql_safe(executor, node, jenv)
+        wrap_and_raise = _wrap_and_raise_factory(node.name, relation, rendered_sql)
         try:
             _create_table_as_or_replace(executor, relation, rendered_sql)
         except Exception as e:
             wrap_and_raise(e)
         return
 
-    # exists -> inkrementeller Pfad
+    exists = _safe_exists(executor, relation)
+    env = _env_with_incremental(jenv, exists)
+
+    base_sql = _render_sql_safe(executor, node, env)
+
+    delta_sql = meta.get("delta_sql")
+    if exists and isinstance(delta_sql, str) and delta_sql.strip():
+        rendered_sql = delta_sql.strip()
+    else:
+        rendered_sql = base_sql
+
+    fallback_sql = rendered_sql
+    if exists:
+        non_incr_env = _env_with_incremental(jenv, False)
+        fallback_sql = _render_sql_safe(executor, node, non_incr_env)
+
+    wrap_incremental = _wrap_and_raise_factory(node.name, relation, rendered_sql)
+    wrap_full_refresh = _wrap_and_raise_factory(node.name, relation, fallback_sql)
+
+    unique_key = _normalize_unique_key(meta.get("unique_key"))
+    schema_policy = _get_schema_sync_policy(meta)
+
+    if not exists:
+        try:
+            _create_table_as_or_replace(executor, relation, fallback_sql)
+        except Exception as e:
+            wrap_full_refresh(e)
+        return
+
     _maybe_schema_sync(executor, relation, rendered_sql, schema_policy)
     try:
-        _merge_or_insert_with_fallback(executor, relation, rendered_sql, unique_key)
+        _merge_or_insert_with_fallback(
+            executor,
+            relation,
+            rendered_sql,
+            unique_key,
+            fallback_sql=fallback_sql,
+            on_full_refresh_error=wrap_full_refresh,
+        )
+    except ModelExecutionError:
+        raise
     except Exception as e:
-        wrap_and_raise(e)
+        wrap_incremental(e)

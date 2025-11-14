@@ -5,6 +5,9 @@
 
 FFT := FF_ENGINE=duckdb FF_DUCKDB_PATH="$(FF_DB)" fft
 
+init:
+	$(UV) fft init examples/materializations_demo  
+
 seed:
 	$(FFT) seed "$(FF_PROJECT)" --env dev
 

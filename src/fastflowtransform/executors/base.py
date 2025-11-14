@@ -2,21 +2,83 @@
 from __future__ import annotations
 
 import contextvars
+import importlib
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
+import pandas as pd
 from jinja2 import Environment
 from pandas import DataFrame as _PDDataFrame
 
+from fastflowtransform import incremental as _ff_incremental
 from fastflowtransform.api import context as _http_ctx
 from fastflowtransform.core import REGISTRY, Node, relation_for, resolve_source_entry
 from fastflowtransform.errors import ModelExecutionError
+from fastflowtransform.incremental import _normalize_unique_key
 from fastflowtransform.logging import echo_debug
 from fastflowtransform.validation import validate_required_columns
+
+
+def _python_incremental_merge_default(
+    df_old: _PDDataFrame,
+    df_new: _PDDataFrame,
+    unique_key: list[str],
+    update_cols: list[str],
+) -> _PDDataFrame:
+    """
+    Default merge for Python-Incremental:
+      - unique_key: key columns
+      - update_cols: columns from which to determine delta
+    Strategy:
+      - df_old + df_new concat,
+      - sorted by unique_key + update_cols
+      - Deduplicate unique_key (keep='last').
+    """
+    if df_old is None or df_old.empty:
+        return df_new.copy()
+    if df_new is None or df_new.empty:
+        return df_old.copy()
+
+    if not unique_key:
+        combined = pd.concat([df_old, df_new], ignore_index=True)
+        combined = combined.drop_duplicates()
+        return combined
+
+    combined = pd.concat([df_old, df_new], ignore_index=True)
+
+    # Nur Update-Spalten verwenden, die es wirklich gibt
+    update_cols = [c for c in update_cols if c in combined.columns]
+
+    sort_cols = unique_key + update_cols if update_cols else unique_key
+    combined = combined.sort_values(sort_cols)
+    combined = combined.drop_duplicates(subset=unique_key, keep="last")
+    return combined
+
+
+def _load_callable(path: str) -> Callable[..., Any]:
+    """
+    Import a callable from 'pkg.mod:func' or 'pkg.mod.func'.
+    """
+    text = path.strip()
+    if ":" in text:
+        mod_name, func_name = text.split(":", 1)
+    elif "." in text:
+        mod_name, func_name = text.rsplit(".", 1)
+    else:
+        raise ValueError(
+            f"Invalid callable path {path!r}; expected 'module:func' or 'module.func'."
+        )
+
+    mod = importlib.import_module(mod_name)
+    fn = getattr(mod, func_name, None)
+    if not callable(fn):
+        raise ValueError(f"{path!r} is not a callable")
+    return fn
+
 
 # Frame type (pandas.DataFrame, pyspark.sql.DataFrame, snowflake.snowpark.DataFrame, ...)
 TFrame = TypeVar("TFrame")
@@ -98,13 +160,13 @@ class BaseExecutor[TFrame](ABC):
             env.globals["var"] = _var
 
         # ---- is_incremental() builtin
-        # True iff materialization is 'incremental' AND the target relation already exists.
+        # True iff meta marks the model as incremental AND the target relation exists.
         if "is_incremental" not in env.globals:
 
             def _is_incremental() -> bool:
                 try:
-                    mat = (getattr(node, "meta", {}) or {}).get("materialized", "table")
-                    if mat != "incremental":
+                    meta = getattr(node, "meta", {}) or {}
+                    if not self._meta_is_incremental(meta):
                         return False
                     rel = relation_for(node.name)
                     return bool(self.exists_relation(rel))
@@ -142,7 +204,7 @@ class BaseExecutor[TFrame](ABC):
 
         # expose 'this' to the template: Proxy-Objekt, das wie String wirkt
         this_obj = _ThisProxy(
-            relation_for(node.name),
+            self._this_identifier(node),
             (getattr(node, "meta", {}) or {}).get("materialized", "table"),
             getattr(self, "schema", None) or getattr(self, "dataset", None),
             getattr(self, "database", None) or getattr(self, "project", None),
@@ -169,6 +231,11 @@ class BaseExecutor[TFrame](ABC):
              The body is CTE-aware (keeps WITH … SELECT … intact).
         On failure, raise ModelExecutionError with a helpful snippet.
         """
+        meta = getattr(node, "meta", {}) or {}
+        if self._meta_is_incremental(meta):
+            # Delegates to incremental engine: render, schema sync, merge/insert, etc.
+            return _ff_incremental.run_or_dispatch(self, node, env)
+
         sql_rendered = self.render_sql(
             node,
             env,
@@ -330,7 +397,7 @@ class BaseExecutor[TFrame](ABC):
             ref=lambda n: self._resolve_ref(n, env),
             source=self._resolve_source,
             this=_ThisProxy(
-                relation_for(node.name),
+                self._this_identifier(node),
                 (getattr(node, "meta", {}) or {}).get("materialized", "table"),
                 getattr(self, "schema", None) or getattr(self, "dataset", None),
                 getattr(self, "database", None) or getattr(self, "project", None),
@@ -343,56 +410,190 @@ class BaseExecutor[TFrame](ABC):
 
     # ---------- Python models ----------
     def run_python(self, node: Node) -> None:
+        """Execute the Python model for a given node and materialize its result."""
         func = REGISTRY.py_funcs[node.name]
         deps = REGISTRY.nodes[node.name].deps or []
-        if _http_ctx is not None:
-            with suppress(Exception):
-                _http_ctx.reset_for_node(node.name)
 
-        # Load inputs
-        arg: Any
-        if len(deps) == 0:
-            arg = None
-        elif len(deps) == 1:
-            rel = relation_for(deps[0])
-            df_in: TFrame = self._read_relation(rel, node, deps)
-            arg = df_in  # TFrame
-        else:
-            frames: dict[str, TFrame] = {}
-            for dep in deps:
-                rel = relation_for(dep)
-                f = self._read_relation(rel, node, deps)
-                frames[rel] = f
-            arg = frames  # dict[str, TFrame]
+        self._reset_http_ctx(node)
 
-        # Validate required columns / structure (frame specific)
+        # arg = self._build_python_args(node, deps)
+        args, argmap = self._build_python_inputs(node, deps)
         requires = REGISTRY.py_requires.get(node.name, {})
+        # if deps:
+        #     self._validate_required(node.name, arg, requires)
         if deps:
-            self._validate_required(node.name, arg, requires)
+            # Required-columns check works against the mapping
+            self._validate_required(node.name, argmap, requires)
 
-        # Execute the model
-        out = func(arg)
-        if not self._is_frame(out):
-            raise TypeError(
-                f"Python-Modell '{node.name}' muss {self._frame_name()} DataFrame zurückgeben."
-            )
+        # out = self._execute_python_func(func, arg, node)
+        out = self._execute_python_func(func, args, node)
 
-        # Materialize the result (table default; view supported)
         target = relation_for(node.name)
-        mat = (getattr(node, "meta", {}) or {}).get("materialized", "table")
-        if mat == "view":
-            backing = self._py_view_backing_name(target)
-            self._materialize_relation(backing, out, node)
-            self._create_or_replace_view_from_table(target, backing, node)
+        meta = getattr(node, "meta", {}) or {}
+        mat = self._resolve_materialization_strategy(meta)
+
+        if mat == "incremental":
+            self._materialize_incremental(target, out, node, meta)
+        elif mat == "view":
+            self._materialize_view(target, out, node)
         else:
             self._materialize_relation(target, out, node)
 
-        if _http_ctx is not None:
-            try:
-                snap = _http_ctx.snapshot()
-                (node.meta or {}).update({"_http_snapshot": snap})
-            except Exception:
-                pass
+        self._snapshot_http_ctx(node)
+
+    # ----------------- helpers -----------------
+
+    def _reset_http_ctx(self, node: Node) -> None:
+        """Reset HTTP context for the given node if available."""
+        if _http_ctx is None:
+            return
+        with suppress(Exception):
+            _http_ctx.reset_for_node(node.name)
+
+    def _build_python_inputs(
+        self, node: Node, deps: list[str]
+    ) -> tuple[list[TFrame], dict[str, TFrame]]:
+        """
+        Load input frames for the Python model.
+        Returns:
+            - args:  positional argument list in the order of `deps`
+            - argmap: mapping {relation_name -> frame} for validation
+        """
+        args: list[TFrame] = []
+        argmap: dict[str, TFrame] = {}
+        for dep in deps or []:
+            rel = relation_for(dep)
+            df = self._read_relation(rel, node, deps)
+            args.append(df)
+            argmap[rel] = df
+        return args, argmap
+
+    def _execute_python_func(
+        self,
+        func: Callable[[Any], Any],
+        args: Any,
+        node: Node,
+    ) -> TFrame:
+        """Execute the Python function and ensure it returns a valid frame."""
+        # raw = func(arg)
+        raw = func(*args)
+        if not self._is_frame(raw):
+            raise TypeError(
+                f"Python-Modell '{node.name}' muss {self._frame_name()} DataFrame zurückgeben."
+            )
+        return cast(TFrame, raw)
+
+    def _resolve_materialization_strategy(self, meta: dict[str, Any]) -> str:
+        """
+        Determine how the Python model result should be materialized.
+
+        Returns "table" by default, but respects:
+            - meta["materialized"]
+            - meta["incremental"] (bool or dict) as a shortcut for incremental
+              materialization.
+        """
+        if self._meta_is_incremental(meta):
+            return "incremental"
+        mat = meta.get("materialized") or "table"
+        return str(mat)
+
+    def _materialize_view(self, target: str, out: TFrame, node: Node) -> None:
+        """Materialize a Python model as a backing table and expose it as a view."""
+        backing = self._py_view_backing_name(target)
+        self._materialize_relation(backing, out, node)
+        self._create_or_replace_view_from_table(target, backing, node)
+
+    def _materialize_incremental(
+        self,
+        target: str,
+        out: TFrame,
+        node: Node,
+        meta: dict[str, Any],
+    ) -> None:
+        """Materialize a Python model using incremental semantics."""
+        if not self._relation_exists_safely(target):
+            # First run -> write full table
+            self._materialize_relation(target, out, node)
+            return
+
+        if not isinstance(out, _PDDataFrame):
+            # Non-pandas frames: fall back to full refresh
+            self._materialize_relation(target, out, node)
+            return
+
+        df_old = self._safe_read_existing_incremental(target, node)
+        if df_old is None or not isinstance(df_old, _PDDataFrame):
+            # Fallback: full-refresh
+            self._materialize_relation(target, out, node)
+            return
+
+        merged = self._merge_incremental_frames(df_old, out, meta, node)
+        self._materialize_relation(target, merged, node)
+
+    def _relation_exists_safely(self, target: str) -> bool:
+        """Check whether the target relation exists, swallowing backend errors."""
+        try:
+            return bool(self.exists_relation(target))
+        except Exception:
+            return False
+
+    def _safe_read_existing_incremental(self, target: str, node: Node) -> Any:
+        """Try to read an existing incremental relation, swallowing backend errors."""
+        try:
+            return self._read_relation(target, node, deps=[])
+        except Exception:
+            return None
+
+    def _merge_incremental_frames(
+        self,
+        df_old: _PDDataFrame,
+        df_new: _PDDataFrame,
+        meta: dict[str, Any],
+        node: Node,
+    ) -> TFrame:
+        """
+        Merge existing and new frames using a custom delta function if configured,
+        otherwise fall back to the default incremental merge.
+        """
+        delta_fn_ref = meta.get("delta_python")
+
+        if isinstance(delta_fn_ref, str) and delta_fn_ref.strip():
+            delta_fn = _load_callable(delta_fn_ref)
+            merged = delta_fn(
+                existing=df_old,
+                new=df_new,
+                node=node,
+                executor=self,
+                meta=meta,
+            )
+            if not self._is_frame(merged):
+                raise TypeError(
+                    f"delta_python '{delta_fn_ref}' must return a DataFrame {self._frame_name()}."
+                )
+            return cast(TFrame, merged)
+
+        unique_key = _normalize_unique_key(meta.get("unique_key") or meta.get("primary_key"))
+        update_cols = _normalize_unique_key(
+            meta.get("delta_columns")
+            or meta.get("updated_at_columns")
+            or meta.get("updated_at")
+            or meta.get("timestamp_columns")
+        )
+        merged_default = _python_incremental_merge_default(df_old, df_new, unique_key, update_cols)
+        return cast(TFrame, merged_default)
+
+    def _snapshot_http_ctx(self, node: Node) -> None:
+        """Store an HTTP snapshot into node.meta if HTTP context is available."""
+        if _http_ctx is None:
+            return
+
+        try:
+            snap = _http_ctx.snapshot()
+        except Exception:
+            return
+
+        with suppress(Exception):
+            (node.meta or {}).update({"_http_snapshot": snap})
 
     # -------- Python model view helpers (shared) --------
     def _py_view_backing_name(self, relation: str) -> str:
@@ -456,6 +657,28 @@ class BaseExecutor[TFrame](ABC):
         ...
 
     # ---------- Resolution helpers ----------
+    def _this_identifier(self, node: Node) -> str:
+        """
+        Physical identifier backing {{ this }} in SQL templates.
+
+        Engines may override to inject catalog/schema qualification.
+        """
+        return relation_for(node.name)
+
+    def _format_test_table(self, table: str | None) -> str | None:
+        """
+        Format table identifiers for data-quality tests (fft test).
+
+        Default behavior normalizes '.ff' suffixes only; engines can override
+        to add catalog/schema qualification.
+        """
+        if not isinstance(table, str):
+            return table
+        stripped = table.strip()
+        if not stripped:
+            return stripped
+        return relation_for(stripped) if stripped.endswith(".ff") else stripped
+
     def _resolve_ref(self, name: str, env: Environment) -> str:
         dep = REGISTRY.get_node(name) if hasattr(REGISTRY, "get_node") else REGISTRY.nodes[name]
         if dep.meta.get("materialized") == "ephemeral":
@@ -559,6 +782,39 @@ class BaseExecutor[TFrame](ABC):
         Default implementation: No-Op.
         """
         return None
+
+    @staticmethod
+    def _meta_is_incremental(meta: Mapping[str, Any] | None) -> bool:
+        """
+        Return True if the given meta mapping describes an incremental model.
+
+        This mirrors the semantics of ModelConfig.is_incremental_enabled(), but
+        works on a plain mapping to avoid tight coupling to the Pydantic model.
+        """
+        if not meta:
+            return False
+
+        incremental_cfg = meta.get("incremental")
+        materialized = str(meta.get("materialized") or "").lower()
+
+        # Explicit materialized='incremental' always wins.
+        if materialized == "incremental":
+            return True
+
+        # incremental: true / false
+        if isinstance(incremental_cfg, bool):
+            return incremental_cfg
+
+        # incremental: {enabled: bool, ...}
+        if isinstance(incremental_cfg, dict):
+            enabled = incremental_cfg.get("enabled")
+            if isinstance(enabled, bool):
+                return enabled
+            # Default: treat presence of a dict as "enabled" if no explicit flag is set.
+            return True
+
+        # Fallback: any non-empty incremental value is treated as "enabled".
+        return bool(incremental_cfg)
 
     ENGINE_NAME: str = "generic"
 

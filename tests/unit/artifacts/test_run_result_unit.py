@@ -7,7 +7,6 @@ from fastflowtransform.artifacts import RunNodeResult, write_run_results
 
 
 @pytest.mark.unit
-@pytest.mark.artifacts
 def test_run_results_written(tmp_path: Path):
     started = "2025-01-01T00:00:00+00:00"
     finished = "2025-01-01T00:01:00+00:00"

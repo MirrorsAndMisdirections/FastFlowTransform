@@ -8,11 +8,13 @@ from fastflowtransform.core import REGISTRY
 
 
 @pytest.mark.unit
-@pytest.mark.artifacts
 def test_manifest_minimal(tmp_path: Path):
     (tmp_path / "models").mkdir(parents=True)
     (tmp_path / "models" / "m.ff.sql").write_text("select 1 as x", encoding="utf-8")
-    (tmp_path / "sources.yml").write_text("{}", encoding="utf-8")
+    (tmp_path / "sources.yml").write_text(
+        "version: 2\nsources: []\n",
+        encoding="utf-8",
+    )
 
     REGISTRY.load_project(tmp_path)
     p = write_manifest(tmp_path)
@@ -21,5 +23,4 @@ def test_manifest_minimal(tmp_path: Path):
     n = data["nodes"]["m.ff"]
     assert n["relation"] == "m"
     assert n["path"] == "models/m.ff.sql"
-    # sorted & deterministic keys (spot check)
     assert list(sorted(data["nodes"].keys())) == list(data["nodes"].keys())

@@ -1,4 +1,4 @@
-name: duckdb_api_demo
+name: duckdb_env_matrix_demo
 version: "0.1"
 
 vars: {}
@@ -13,5 +13,6 @@ tests:
 
   - type: row_count_between
     table: users
-    min: 1
+    min_rows: 3
+    max_rows: 3
     tags: [batch]

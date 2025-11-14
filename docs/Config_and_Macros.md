@@ -377,7 +377,7 @@ fft utest . --env dev
 fft utest . --model users_enriched --case flags_gmail
 ```
 
-See the [Technical Overview](./Technical_Overview.md#model-unit-tests-fft-utest) for an exhaustive walkthrough (engine overrides, CI examples, troubleshooting).
+See the [Model Unit Tests guide](./Unit_Tests.md) for an exhaustive walkthrough (engine overrides, CI examples, troubleshooting).
 
 ---
 
