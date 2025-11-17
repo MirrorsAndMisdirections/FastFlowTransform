@@ -12,6 +12,7 @@ __all__ = [
     "BadRequest",
     "BigQueryOptions",
     "Client",
+    "DataType",
     "LoadJobConfig",
     "NotFound",
     "SparkAnalysisException",
@@ -125,12 +126,18 @@ else:  # pragma: no cover - runtime import
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pyspark.errors.exceptions.base import AnalysisException as SparkAnalysisException
     from pyspark.sql import DataFrame as SDF, SparkSession
+    from pyspark.sql.types import DataType
 else:  # pragma: no cover - runtime import
     try:
         from pyspark.sql import DataFrame as SDF, SparkSession  # type: ignore
     except Exception:
         SDF = Any  # type: ignore[assignment]
         SparkSession = Any  # type: ignore[assignment]
+
+    try:
+        from pyspark.sql.types import DataType  # type: ignore
+    except Exception:
+        DataType = Any  # type: ignore[assignment]
 
     try:
         from pyspark.errors.exceptions.base import (  # type: ignore

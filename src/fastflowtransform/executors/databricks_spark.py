@@ -7,9 +7,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from pyspark.sql import DataFrame as SDF, SparkSession
-from pyspark.sql.types import DataType
-
 from fastflowtransform import storage
 from fastflowtransform.core import REGISTRY, Node, relation_for
 from fastflowtransform.errors import ModelExecutionError
@@ -18,6 +15,7 @@ from fastflowtransform.logging import echo_debug
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
 from fastflowtransform.table_formats import get_spark_format_handler
 from fastflowtransform.table_formats.base import SparkFormatHandler
+from fastflowtransform.typing import SDF, DataType, SparkSession
 
 # Enable Delta Lake via delta-spark when available
 configure_spark_with_delta_pip: Callable[..., Any] | None
