@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>dim_customers.ff – FastFlowTransform</title>
+  <title>stg_users.ff – FastFlowTransform</title>
   <style>
     :root {
       --bg:#ffffff; --fg:#0f172a; --muted:#6b7280; --card:#ffffff; --border:#e5e7eb;
@@ -69,7 +69,7 @@
   <header style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;">
     <div>
       <h1 style="margin:0 0 6px 0; font-size:1.25rem;">
-        dim_customers.ff
+        stg_users.ff
         <span class="badge badge-table">table</span>
       </h1>
       <div class="muted">Model Detail • FastFlowTransform</div>
@@ -86,22 +86,18 @@
         <div><span class="badge badge-table">table</span></div>
 
         <div class="muted">Relation</div>
-        <div><code>dim_customers</code></div>
+        <div><code>stg_users</code></div>
 
         <div class="muted">Path</div>
         <div>
-          <code id="path">/Users/markolekic/Dev/FlowForge/fastflowtransform/examples/materializations_demo/models/common/dim_customers.ff.sql</code>
+          <code id="path">/Users/markolekic/Dev/FlowForge/fastflowtransform/examples/cache_demo/models/seeds_consumers/stg_users.ff.sql</code>
           <button class="btn" id="copyPath" style="margin-left:8px;">Copy</button>
         </div>
 
         <div class="muted">Dependencies</div>
         <div>
           
-            <ul class="inline">
-              
-                <li><a href="stg_customers.ff.html">stg_customers.ff</a></li>
-              
-            </ul>
+            <span class="muted">–</span>
           
         </div>
 
@@ -110,7 +106,9 @@
         <div>
           <ul class="inline">
             
-              <li><a href="demo_py_emit.html">demo_py_emit</a></li>
+              <li><a href="http_users.html">http_users</a></li>
+            
+              <li><a href="mart_user_orders.ff.html">mart_user_orders.ff</a></li>
             
           </ul>
         </div>
@@ -143,7 +141,7 @@
         <tbody>
           
           <tr>
-            <td class="mono"><code>customer_id</code></td>
+            <td class="mono"><code>user_id</code></td>
             <td class="mono"><code>int</code></td>
             <td>
               
@@ -158,9 +156,9 @@
             <td class="desc">
               
                 
-                  <span class="mono"><code>?.customer_id</code></span>
+                  <span class="mono"><code>?.?</code></span>
                   
-                    <span class="badge-direct">direct</span>
+                    <span class="badge-transformed">transformed</span>
                   
                   
                 
@@ -169,7 +167,7 @@
           </tr>
           
           <tr>
-            <td class="mono"><code>customer_name</code></td>
+            <td class="mono"><code>email</code></td>
             <td class="mono"><code>string</code></td>
             <td>
               
@@ -184,61 +182,9 @@
             <td class="desc">
               
                 
-                  <span class="mono"><code>?.customer_name</code></span>
+                  <span class="mono"><code>?.?</code></span>
                   
-                    <span class="badge-direct">direct</span>
-                  
-                  
-                
-              
-            </td>
-          </tr>
-          
-          <tr>
-            <td class="mono"><code>customer_status</code></td>
-            <td class="mono"><code>string</code></td>
-            <td>
-              
-                <span class="pill yes">yes</span>
-              
-            </td>
-            <td class="desc">
-              
-                —
-              
-            </td>
-            <td class="desc">
-              
-                
-                  <span class="mono"><code>?.customer_status</code></span>
-                  
-                    <span class="badge-direct">direct</span>
-                  
-                  
-                
-              
-            </td>
-          </tr>
-          
-          <tr>
-            <td class="mono"><code>loaded_at</code></td>
-            <td class="mono"><code>timestamp</code></td>
-            <td>
-              
-                <span class="pill yes">yes</span>
-              
-            </td>
-            <td class="desc">
-              
-                —
-              
-            </td>
-            <td class="desc">
-              
-                
-                  <span class="mono"><code>?.current_timestamp</code></span>
-                  
-                    <span class="badge-direct">direct</span>
+                    <span class="badge-transformed">transformed</span>
                   
                   
                 

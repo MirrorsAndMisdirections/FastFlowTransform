@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>stg_customers.ff – FastFlowTransform</title>
+  <title>py_constants – FastFlowTransform</title>
   <style>
     :root {
       --bg:#ffffff; --fg:#0f172a; --muted:#6b7280; --card:#ffffff; --border:#e5e7eb;
@@ -69,12 +69,12 @@
   <header style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;">
     <div>
       <h1 style="margin:0 0 6px 0; font-size:1.25rem;">
-        stg_customers.ff
-        <span class="badge badge-view">view</span>
+        py_constants
+        <span class="badge badge-table">table</span>
       </h1>
       <div class="muted">Model Detail • FastFlowTransform</div>
     </div>
-    <span class="chip sql">sql</span>
+    <span class="chip py">python</span>
   </header>
 
   <div class="row">
@@ -83,14 +83,14 @@
       <h2 style="margin:0 0 10px 0; font-size:1rem;">Metadata</h2>
       <div class="kv">
         <div class="muted">Materialized</div>
-        <div><span class="badge badge-view">view</span></div>
+        <div><span class="badge badge-table">table</span></div>
 
         <div class="muted">Relation</div>
-        <div><code>stg_customers</code></div>
+        <div><code>py_constants</code></div>
 
         <div class="muted">Path</div>
         <div>
-          <code id="path">/Users/markolekic/Dev/FlowForge/fastflowtransform/examples/materializations_demo/models/common/stg_customers.ff.sql</code>
+          <code id="path">/Users/markolekic/Dev/FlowForge/fastflowtransform/examples/cache_demo/models/engines/databricks_spark/py_constants.ff.py</code>
           <button class="btn" id="copyPath" style="margin-left:8px;">Copy</button>
         </div>
 
@@ -101,17 +101,6 @@
           
         </div>
 
-        
-        <div class="muted">Referenced by</div>
-        <div>
-          <ul class="inline">
-            
-              <li><a href="dim_customers.ff.html">dim_customers.ff</a></li>
-            
-              <li><a href="mart_order_summary.ff.html">mart_order_summary.ff</a></li>
-            
-          </ul>
-        </div>
         
       </div>
     </section>
@@ -141,33 +130,7 @@
         <tbody>
           
           <tr>
-            <td class="mono"><code>customer_id</code></td>
-            <td class="mono"><code>int</code></td>
-            <td>
-              
-                <span class="pill yes">yes</span>
-              
-            </td>
-            <td class="desc">
-              
-                —
-              
-            </td>
-            <td class="desc">
-              
-                
-                  <span class="mono"><code>?.?</code></span>
-                  
-                    <span class="badge-transformed">transformed</span>
-                  
-                  
-                
-              
-            </td>
-          </tr>
-          
-          <tr>
-            <td class="mono"><code>customer_name</code></td>
+            <td class="mono"><code>k</code></td>
             <td class="mono"><code>string</code></td>
             <td>
               
@@ -181,20 +144,14 @@
             </td>
             <td class="desc">
               
-                
-                  <span class="mono"><code>?.name</code></span>
-                  
-                    <span class="badge-direct">direct</span>
-                  
-                  
-                
+                <span class="muted">unknown</span>
               
             </td>
           </tr>
           
           <tr>
-            <td class="mono"><code>customer_status</code></td>
-            <td class="mono"><code>string</code></td>
+            <td class="mono"><code>v</code></td>
+            <td class="mono"><code>bigint</code></td>
             <td>
               
                 <span class="pill yes">yes</span>
@@ -207,13 +164,7 @@
             </td>
             <td class="desc">
               
-                
-                  <span class="mono"><code>?.status</code></span>
-                  
-                    <span class="badge-direct">direct</span>
-                  
-                  
-                
+                <span class="muted">unknown</span>
               
             </td>
           </tr>

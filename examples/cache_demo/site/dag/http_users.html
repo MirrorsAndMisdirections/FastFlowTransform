@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>fct_orders_inc.ff – FastFlowTransform</title>
+  <title>http_users – FastFlowTransform</title>
   <style>
     :root {
       --bg:#ffffff; --fg:#0f172a; --muted:#6b7280; --card:#ffffff; --border:#e5e7eb;
@@ -69,12 +69,12 @@
   <header style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;">
     <div>
       <h1 style="margin:0 0 6px 0; font-size:1.25rem;">
-        fct_orders_inc.ff
-        <span class="badge badge-incremental">incremental</span>
+        http_users
+        <span class="badge badge-table">table</span>
       </h1>
       <div class="muted">Model Detail • FastFlowTransform</div>
     </div>
-    <span class="chip sql">sql</span>
+    <span class="chip py">python</span>
   </header>
 
   <div class="row">
@@ -83,14 +83,14 @@
       <h2 style="margin:0 0 10px 0; font-size:1rem;">Metadata</h2>
       <div class="kv">
         <div class="muted">Materialized</div>
-        <div><span class="badge badge-incremental">incremental</span></div>
+        <div><span class="badge badge-table">table</span></div>
 
         <div class="muted">Relation</div>
-        <div><code>fct_orders_inc</code></div>
+        <div><code>http_users</code></div>
 
         <div class="muted">Path</div>
         <div>
-          <code id="path">/Users/markolekic/Dev/FlowForge/fastflowtransform/examples/materializations_demo/models/common/fct_orders_inc.ff.sql</code>
+          <code id="path">/Users/markolekic/Dev/FlowForge/fastflowtransform/examples/cache_demo/models/engines/databricks_spark/http_users.ff.py</code>
           <button class="btn" id="copyPath" style="margin-left:8px;">Copy</button>
         </div>
 
@@ -99,7 +99,7 @@
           
             <ul class="inline">
               
-                <li><a href="stg_orders.ff.html">stg_orders.ff</a></li>
+                <li><a href="stg_users.ff.html">stg_users.ff</a></li>
               
             </ul>
           
@@ -134,8 +134,8 @@
         <tbody>
           
           <tr>
-            <td class="mono"><code>order_id</code></td>
-            <td class="mono"><code>int</code></td>
+            <td class="mono"><code>api_user_id</code></td>
+            <td class="mono"><code>bigint</code></td>
             <td>
               
                 <span class="pill yes">yes</span>
@@ -148,20 +148,14 @@
             </td>
             <td class="desc">
               
-                
-                  <span class="mono"><code>?.order_id</code></span>
-                  
-                    <span class="badge-direct">direct</span>
-                  
-                  
-                
+                <span class="muted">unknown</span>
               
             </td>
           </tr>
           
           <tr>
-            <td class="mono"><code>customer_id</code></td>
-            <td class="mono"><code>int</code></td>
+            <td class="mono"><code>email</code></td>
+            <td class="mono"><code>string</code></td>
             <td>
               
                 <span class="pill yes">yes</span>
@@ -174,20 +168,14 @@
             </td>
             <td class="desc">
               
-                
-                  <span class="mono"><code>?.customer_id</code></span>
-                  
-                    <span class="badge-direct">direct</span>
-                  
-                  
-                
+                <span class="muted">unknown</span>
               
             </td>
           </tr>
           
           <tr>
-            <td class="mono"><code>amount</code></td>
-            <td class="mono"><code>double</code></td>
+            <td class="mono"><code>username</code></td>
+            <td class="mono"><code>string</code></td>
             <td>
               
                 <span class="pill yes">yes</span>
@@ -200,39 +188,7 @@
             </td>
             <td class="desc">
               
-                
-                  <span class="mono"><code>?.amount</code></span>
-                  
-                    <span class="badge-direct">direct</span>
-                  
-                  
-                
-              
-            </td>
-          </tr>
-          
-          <tr>
-            <td class="mono"><code>order_ts</code></td>
-            <td class="mono"><code>timestamp</code></td>
-            <td>
-              
-                <span class="pill yes">yes</span>
-              
-            </td>
-            <td class="desc">
-              
-                —
-              
-            </td>
-            <td class="desc">
-              
-                
-                  <span class="mono"><code>?.order_ts</code></span>
-                  
-                    <span class="badge-direct">direct</span>
-                  
-                  
-                
+                <span class="muted">unknown</span>
               
             </td>
           </tr>

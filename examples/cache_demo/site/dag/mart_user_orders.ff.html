@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>stg_orders.ff – FastFlowTransform</title>
+  <title>mart_user_orders.ff – FastFlowTransform</title>
   <style>
     :root {
       --bg:#ffffff; --fg:#0f172a; --muted:#6b7280; --card:#ffffff; --border:#e5e7eb;
@@ -69,8 +69,8 @@
   <header style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;">
     <div>
       <h1 style="margin:0 0 6px 0; font-size:1.25rem;">
-        stg_orders.ff
-        <span class="badge badge-view">view</span>
+        mart_user_orders.ff
+        <span class="badge badge-table">table</span>
       </h1>
       <div class="muted">Model Detail • FastFlowTransform</div>
     </div>
@@ -83,37 +83,30 @@
       <h2 style="margin:0 0 10px 0; font-size:1rem;">Metadata</h2>
       <div class="kv">
         <div class="muted">Materialized</div>
-        <div><span class="badge badge-view">view</span></div>
+        <div><span class="badge badge-table">table</span></div>
 
         <div class="muted">Relation</div>
-        <div><code>stg_orders</code></div>
+        <div><code>mart_user_orders</code></div>
 
         <div class="muted">Path</div>
         <div>
-          <code id="path">/Users/markolekic/Dev/FlowForge/fastflowtransform/examples/materializations_demo/models/common/stg_orders.ff.sql</code>
+          <code id="path">/Users/markolekic/Dev/FlowForge/fastflowtransform/examples/cache_demo/models/marts/mart_user_orders.ff.sql</code>
           <button class="btn" id="copyPath" style="margin-left:8px;">Copy</button>
         </div>
 
         <div class="muted">Dependencies</div>
         <div>
           
-            <span class="muted">–</span>
+            <ul class="inline">
+              
+                <li><a href="stg_users.ff.html">stg_users.ff</a></li>
+              
+                <li><a href="stg_orders.ff.html">stg_orders.ff</a></li>
+              
+            </ul>
           
         </div>
 
-        
-        <div class="muted">Referenced by</div>
-        <div>
-          <ul class="inline">
-            
-              <li><a href="fct_orders_inc.ff.html">fct_orders_inc.ff</a></li>
-            
-              <li><a href="mart_order_summary.ff.html">mart_order_summary.ff</a></li>
-            
-              <li><a href="order_flags_ephemeral.ff.html">order_flags_ephemeral.ff</a></li>
-            
-          </ul>
-        </div>
         
       </div>
     </section>
@@ -143,7 +136,7 @@
         <tbody>
           
           <tr>
-            <td class="mono"><code>order_id</code></td>
+            <td class="mono"><code>user_id</code></td>
             <td class="mono"><code>int</code></td>
             <td>
               
@@ -158,9 +151,9 @@
             <td class="desc">
               
                 
-                  <span class="mono"><code>?.?</code></span>
+                  <span class="mono"><code>?.user_id</code></span>
                   
-                    <span class="badge-transformed">transformed</span>
+                    <span class="badge-direct">direct</span>
                   
                   
                 
@@ -169,8 +162,8 @@
           </tr>
           
           <tr>
-            <td class="mono"><code>customer_id</code></td>
-            <td class="mono"><code>int</code></td>
+            <td class="mono"><code>email</code></td>
+            <td class="mono"><code>string</code></td>
             <td>
               
                 <span class="pill yes">yes</span>
@@ -184,9 +177,9 @@
             <td class="desc">
               
                 
-                  <span class="mono"><code>?.?</code></span>
+                  <span class="mono"><code>?.email</code></span>
                   
-                    <span class="badge-transformed">transformed</span>
+                    <span class="badge-direct">direct</span>
                   
                   
                 
@@ -195,8 +188,8 @@
           </tr>
           
           <tr>
-            <td class="mono"><code>amount</code></td>
-            <td class="mono"><code>double</code></td>
+            <td class="mono"><code>total_amount</code></td>
+            <td class="mono"><code>decimal(20,0)</code></td>
             <td>
               
                 <span class="pill yes">yes</span>
@@ -210,32 +203,6 @@
             <td class="desc">
               
                 <span class="muted">unknown</span>
-              
-            </td>
-          </tr>
-          
-          <tr>
-            <td class="mono"><code>order_ts</code></td>
-            <td class="mono"><code>timestamp</code></td>
-            <td>
-              
-                <span class="pill yes">yes</span>
-              
-            </td>
-            <td class="desc">
-              
-                —
-              
-            </td>
-            <td class="desc">
-              
-                
-                  <span class="mono"><code>?.?</code></span>
-                  
-                    <span class="badge-transformed">transformed</span>
-                  
-                  
-                
               
             </td>
           </tr>

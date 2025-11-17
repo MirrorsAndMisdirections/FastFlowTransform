@@ -124,27 +124,19 @@
       <div class="mermaid" id="dag">flowchart TD
   classDef sql fill:#e8f1ff,stroke:#5b8def,color:#0a1f44;
   classDef py  fill:#e9fbf1,stroke:#2bb673,color:#0b2e1f;
-  demo_py_emit("demo_py_emit<br/>(demo_py_emit)")
-  class demo_py_emit py;
-  dim_customers_ff["dim_customers.ff<br/>(dim_customers)"]
-  class dim_customers_ff sql;
-  fct_orders_inc_ff["fct_orders_inc.ff<br/>(fct_orders_inc)"]
-  class fct_orders_inc_ff sql;
-  mart_order_summary_ff["mart_order_summary.ff<br/>(mart_order_summary)"]
-  class mart_order_summary_ff sql;
-  order_flags_ephemeral_ff["order_flags_ephemeral.ff<br/>(order_flags_ephemeral)"]
-  class order_flags_ephemeral_ff sql;
-  stg_customers_ff["stg_customers.ff<br/>(stg_customers)"]
-  class stg_customers_ff sql;
+  http_users("http_users<br/>(http_users)")
+  class http_users py;
+  mart_user_orders_ff["mart_user_orders.ff<br/>(mart_user_orders)"]
+  class mart_user_orders_ff sql;
+  py_constants("py_constants<br/>(py_constants)")
+  class py_constants py;
   stg_orders_ff["stg_orders.ff<br/>(stg_orders)"]
   class stg_orders_ff sql;
-  stg_orders_ff --> order_flags_ephemeral_ff
-  stg_orders_ff --> mart_order_summary_ff
-  order_flags_ephemeral_ff --> mart_order_summary_ff
-  stg_customers_ff --> mart_order_summary_ff
-  stg_orders_ff --> fct_orders_inc_ff
-  stg_customers_ff --> dim_customers_ff
-  dim_customers_ff --> demo_py_emit
+  stg_users_ff["stg_users.ff<br/>(stg_users)"]
+  class stg_users_ff sql;
+  stg_users_ff --> mart_user_orders_ff
+  stg_orders_ff --> mart_user_orders_ff
+  stg_users_ff --> http_users
 </div>
     </section>
 
@@ -165,15 +157,15 @@
           <tr>
             <td class="nowrap">
               
-              <a href="demo_py_emit.html"
-                 title="demo_py_emit">
-                demo_py_emit
+              <a href="http_users.html"
+                 title="http_users">
+                http_users
               </a>
               
             </td>
             <td><span class="chip py">python</span></td>
-            <td><code>demo_py_emit</code></td>
-            <td class="muted">dim_customers.ff</td>
+            <td><code>http_users</code></td>
+            <td class="muted">stg_users.ff</td>
             <td>
               <span class="badge badge-table">
                 table
@@ -184,15 +176,15 @@
           <tr>
             <td class="nowrap">
               
-              <a href="dim_customers.ff.html"
-                 title="dim_customers.ff">
-                dim_customers.ff
+              <a href="mart_user_orders.ff.html"
+                 title="mart_user_orders.ff">
+                mart_user_orders.ff
               </a>
               
             </td>
             <td><span class="chip sql">sql</span></td>
-            <td><code>dim_customers</code></td>
-            <td class="muted">stg_customers.ff</td>
+            <td><code>mart_user_orders</code></td>
+            <td class="muted">stg_users.ff, stg_orders.ff</td>
             <td>
               <span class="badge badge-table">
                 table
@@ -203,75 +195,18 @@
           <tr>
             <td class="nowrap">
               
-              <a href="fct_orders_inc.ff.html"
-                 title="fct_orders_inc.ff">
-                fct_orders_inc.ff
+              <a href="py_constants.html"
+                 title="py_constants">
+                py_constants
               </a>
               
             </td>
-            <td><span class="chip sql">sql</span></td>
-            <td><code>fct_orders_inc</code></td>
-            <td class="muted">stg_orders.ff</td>
-            <td>
-              <span class="badge badge-incremental">
-                incremental
-              </span>
-            </td>
-          </tr>
-        
-          <tr>
-            <td class="nowrap">
-              
-              <a href="mart_order_summary.ff.html"
-                 title="mart_order_summary.ff">
-                mart_order_summary.ff
-              </a>
-              
-            </td>
-            <td><span class="chip sql">sql</span></td>
-            <td><code>mart_order_summary</code></td>
-            <td class="muted">stg_orders.ff, order_flags_ephemeral.ff, stg_customers.ff</td>
-            <td>
-              <span class="badge badge-table">
-                table
-              </span>
-            </td>
-          </tr>
-        
-          <tr>
-            <td class="nowrap">
-              
-              <a href="order_flags_ephemeral.ff.html"
-                 title="order_flags_ephemeral.ff">
-                order_flags_ephemeral.ff
-              </a>
-              
-            </td>
-            <td><span class="chip sql">sql</span></td>
-            <td><code>order_flags_ephemeral</code></td>
-            <td class="muted">stg_orders.ff</td>
-            <td>
-              <span class="badge badge-ephemeral">
-                ephemeral
-              </span>
-            </td>
-          </tr>
-        
-          <tr>
-            <td class="nowrap">
-              
-              <a href="stg_customers.ff.html"
-                 title="stg_customers.ff">
-                stg_customers.ff
-              </a>
-              
-            </td>
-            <td><span class="chip sql">sql</span></td>
-            <td><code>stg_customers</code></td>
+            <td><span class="chip py">python</span></td>
+            <td><code>py_constants</code></td>
             <td class="muted">–</td>
             <td>
-              <span class="badge badge-view">
-                view
+              <span class="badge badge-table">
+                table
               </span>
             </td>
           </tr>
@@ -295,6 +230,25 @@
             </td>
           </tr>
         
+          <tr>
+            <td class="nowrap">
+              
+              <a href="stg_users.ff.html"
+                 title="stg_users.ff">
+                stg_users.ff
+              </a>
+              
+            </td>
+            <td><span class="chip sql">sql</span></td>
+            <td><code>stg_users</code></td>
+            <td class="muted">–</td>
+            <td>
+              <span class="badge badge-table">
+                table
+              </span>
+            </td>
+          </tr>
+        
         </tbody>
       </table>
     </aside>
@@ -302,28 +256,7 @@
     <section class="card">
       <h2>Macros</h2>
       
-        <table style="width:100%; border-collapse:collapse;">
-          <thead>
-            <tr>
-              <th style="text-align:left; padding:8px 10px;">Name</th>
-              <th style="text-align:left; padding:8px 10px;">Type</th>
-              <th style="text-align:left; padding:8px 10px;">Path</th>
-            </tr>
-          </thead>
-          <tbody>
-          
-            <tr>
-              <td class="mono" style="padding:8px 10px;"><code>dtype_double</code></td>
-              <td style="padding:8px 10px;">
-                <span class="badge badge-sql">
-                  sql
-                </span>
-              </td>
-              <td class="mono" style="padding:8px 10px;"><code>models/macros/types.sql.j2</code></td>
-            </tr>
-          
-          </tbody>
-        </table>
+        <p>No macros found.</p>
       
     </section>
   </div>

@@ -4,7 +4,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from pyspark.sql import DataFrame as SDF, SparkSession
+from fastflowtransform.typing import SDF, SparkSession
 
 
 class SparkFormatHandler(ABC):
