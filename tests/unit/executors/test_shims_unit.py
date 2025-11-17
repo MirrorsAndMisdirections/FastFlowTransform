@@ -6,7 +6,6 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from google.cloud.bigquery import Client
 from sqlalchemy import text as sa_text
 from sqlalchemy.engine import Engine
 
@@ -15,6 +14,7 @@ from fastflowtransform.executors._shims import (
     SAConnShim,
     _rewrite_pg_create_or_replace_table,
 )
+from fastflowtransform.typing import Client
 
 # ---------------------------------------------------------------------------
 # Fakes / helpers
