@@ -4,12 +4,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 import pandas as pd
-from google.api_core.exceptions import BadRequest, NotFound
-from google.cloud import bigquery
-from google.cloud.bigquery import Client, LoadJobConfig
 
 from fastflowtransform.core import Node
 from fastflowtransform.executors.bigquery.base import BigQueryBaseExecutor
+from fastflowtransform.typing import BadRequest, Client, LoadJobConfig, NotFound, bigquery
 
 
 class BigQueryExecutor(BigQueryBaseExecutor[pd.DataFrame]):

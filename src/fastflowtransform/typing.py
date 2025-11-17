@@ -12,9 +12,11 @@ __all__ = [
     "BadRequest",
     "BigQueryOptions",
     "Client",
+    "LoadJobConfig",
     "NotFound",
     "SparkAnalysisException",
     "SparkSession",
+    "WriteDisposition",
     "bf_global_session",
     "bigframes",
     "bigquery",
@@ -37,17 +39,20 @@ else:  # pragma: no cover - runtime import
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from google.cloud import bigquery
-    from google.cloud.bigquery import Client
+    from google.cloud.bigquery import Client, LoadJobConfig, WriteDisposition
 else:  # pragma: no cover - runtime import
     try:
         from google.cloud import bigquery  # type: ignore
-        from google.cloud.bigquery import Client  # type: ignore
+        from google.cloud.bigquery import Client, LoadJobConfig, WriteDisposition  # type: ignore
     except Exception:
         # Minimal stubs so imports don't fail without google installed.
         class _DatasetStub:
             def __init__(self, dataset_id: str):
                 self.dataset_id = dataset_id
                 self.location: str | None = None
+
+        class _WriteDispositionStub:
+            WRITE_TRUNCATE = "WRITE_TRUNCATE"
 
         class _QueryJobConfigStub:
             def __init__(self, **kwargs: Any):
@@ -63,11 +68,15 @@ else:  # pragma: no cover - runtime import
             Any,
             SimpleNamespace(
                 Dataset=_DatasetStub,
+                WriteDisposition=_WriteDispositionStub,
                 QueryJobConfig=_QueryJobConfigStub,
                 ScalarQueryParameter=_ScalarQueryParameterStub,
+                LoadJobConfig=lambda **kwargs: SimpleNamespace(**kwargs),
             ),
         )
         Client = Any
+        LoadJobConfig = Any
+        WriteDisposition = _WriteDispositionStub
 
 # --- BigFrames (BigQuery DataFrames) ---
 if TYPE_CHECKING:  # pragma: no cover - typing only
