@@ -12,12 +12,21 @@ from typing import TYPE_CHECKING, Any, NamedTuple, cast
 from urllib.parse import unquote, urlparse
 
 import pandas as pd
-from pyspark.sql import DataFrame as SDF, SparkSession
 
 from fastflowtransform import storage
 from fastflowtransform.config.seeds import SeedsSchemaConfig, load_seeds_schema
 from fastflowtransform.logging import echo
 from fastflowtransform.settings import EngineType
+
+# Optional Spark dependency
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from pyspark.sql import DataFrame as SDF, SparkSession
+else:  # pragma: no cover - runtime import
+    try:
+        from pyspark.sql import DataFrame as SDF, SparkSession
+    except Exception:  # Spark not installed at runtime
+        SDF = Any  # type: ignore[assignment]
+        SparkSession = Any  # type: ignore[assignment]
 
 # Optional Spark dependency: keep mypy happy by isolating the fallback in runtime branch only.
 if TYPE_CHECKING:  # pragma: no cover - typing only
