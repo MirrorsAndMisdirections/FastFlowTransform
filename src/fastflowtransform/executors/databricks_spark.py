@@ -1,7 +1,7 @@
 # src/fastflowtransform/executors/databricks_spark.py
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -9,12 +9,6 @@ from urllib.parse import unquote, urlparse
 
 from pyspark.sql import DataFrame as SDF, SparkSession
 from pyspark.sql.types import DataType
-
-try:
-    # Enable Delta Lake via delta-spark when available
-    from delta import configure_spark_with_delta_pip
-except Exception:  # pragma: no cover
-    configure_spark_with_delta_pip = None  # type: ignore[assignment]
 
 from fastflowtransform import storage
 from fastflowtransform.core import REGISTRY, Node, relation_for
@@ -24,6 +18,15 @@ from fastflowtransform.logging import echo_debug
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
 from fastflowtransform.table_formats import get_spark_format_handler
 from fastflowtransform.table_formats.base import SparkFormatHandler
+
+# Enable Delta Lake via delta-spark when available
+configure_spark_with_delta_pip: Callable[..., Any] | None
+try:
+    from delta import configure_spark_with_delta_pip as _configure_spark_with_delta_pip
+
+    configure_spark_with_delta_pip = _configure_spark_with_delta_pip
+except Exception:  # pragma: no cover
+    configure_spark_with_delta_pip = None
 
 _DELTA_EXTENSION = "io.delta.sql.DeltaSparkSessionExtension"
 _DELTA_CATALOG = "org.apache.spark.sql.delta.catalog.DeltaCatalog"

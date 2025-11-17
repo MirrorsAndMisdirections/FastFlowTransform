@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterable
 from contextlib import suppress
 from pathlib import Path
 from time import perf_counter
-from typing import Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 from urllib.parse import unquote, urlparse
 
 import pandas as pd
@@ -19,10 +19,16 @@ from fastflowtransform.config.seeds import SeedsSchemaConfig, load_seeds_schema
 from fastflowtransform.logging import echo
 from fastflowtransform.settings import EngineType
 
-try:  # Optional Spark dependency
-    from pyspark.errors.exceptions.base import AnalysisException as _SparkAnalysisException
-except Exception:  # pragma: no cover - Spark not installed
-    _SparkAnalysisException = Exception  # type: ignore
+# Optional Spark dependency: keep mypy happy by isolating the fallback in runtime branch only.
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from pyspark.errors.exceptions.base import AnalysisException as SparkAnalysisException
+else:  # pragma: no cover - runtime import
+    try:
+        from pyspark.errors.exceptions.base import AnalysisException as SparkAnalysisException
+    except Exception:
+
+        class SparkAnalysisException(Exception):
+            """Fallback if pyspark is unavailable."""
 
 
 # ----------------------------- File I/O & Schema (dtypes) -----------------------------
@@ -639,7 +645,7 @@ def _write_spark_seed_to_table(
     try:
         _spark_write_table(sdf, target_identifier, table_format, table_options)
         return cleanup_hint
-    except _SparkAnalysisException as exc:
+    except SparkAnalysisException as exc:
         message = str(exc)
         if target_location and "LOCATION_ALREADY_EXISTS" in message.upper():
             # Attempt to fix by resetting the table location and retrying once.
