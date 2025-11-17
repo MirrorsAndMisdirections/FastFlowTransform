@@ -7,7 +7,17 @@ from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
-from google.api_core.exceptions import BadRequest, NotFound
+
+# Optional dependency: provide lightweight fallbacks when google libs are absent.
+try:
+    from google.api_core.exceptions import BadRequest, NotFound
+except Exception:  # pragma: no cover - when google is not installed
+
+    class BadRequest(Exception):
+        pass
+
+    class NotFound(Exception):
+        pass
 
 # ---------------------------------------------------------------------------
 # Fake types
