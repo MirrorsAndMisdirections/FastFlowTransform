@@ -173,7 +173,7 @@ def exec_factory():
     Returns (executor, fake_builder, fake_spark).
     """
 
-    def _make(**kwargs) -> DatabricksSparkExecutorType:
+    def _make(**kwargs) -> tuple[DatabricksSparkExecutorType, Any, MagicMock]:
         if DatabricksSparkExecutor is None:
             pytest.skip(
                 "pyspark/delta not installed; install fastflowtransform[spark] to run Spark tests"
