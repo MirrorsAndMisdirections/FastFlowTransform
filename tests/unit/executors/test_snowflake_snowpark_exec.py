@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-import snowflake.snowpark as sf
 
 import fastflowtransform.executors.snowflake_snowpark as sf_mod
 from fastflowtransform.executors.snowflake_snowpark import _SFResult
@@ -131,6 +130,7 @@ fake_sf_snowpark_mod.DataFrame = FakeSnowparkDataFrame  # type: ignore[attr-defi
 
 fake_sf_snowpark_mod.DataFrame = FakeSnowparkDataFrame  # type: ignore[attr-defined]
 sys.modules["snowflake.snowpark"] = fake_sf_snowpark_mod
+sf = fake_sf_snowpark_mod
 
 # ---------------------------------------------------------------------------
 # 2) Now we can safely import the module under test
