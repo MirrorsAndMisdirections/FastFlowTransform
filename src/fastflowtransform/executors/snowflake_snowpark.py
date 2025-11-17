@@ -4,11 +4,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from snowflake.snowpark import DataFrame as SNDF, Session
-
 from fastflowtransform.core import Node, relation_for
 from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
+from fastflowtransform.typing import SNDF, SnowparkSession as Session
 
 
 class SnowflakeSnowparkExecutor(BaseExecutor[SNDF]):
@@ -84,7 +83,13 @@ class SnowflakeSnowparkExecutor(BaseExecutor[SNDF]):
         return list(frame.schema.names)
 
     def _is_frame(self, obj: Any) -> bool:
-        return isinstance(obj, SNDF)
+        # Accept real Snowpark DataFrames and test doubles with a compatible surface.
+        schema = getattr(obj, "schema", None)
+        return isinstance(obj, SNDF) or (
+            schema is not None
+            and hasattr(schema, "names")
+            and callable(getattr(obj, "collect", None))
+        )
 
     def _frame_name(self) -> str:
         return "Snowpark"

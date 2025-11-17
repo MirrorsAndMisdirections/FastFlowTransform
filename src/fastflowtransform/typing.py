@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 __all__ = [
     "SDF",
+    "SNDF",
     "BFDataFrame",
     "BadRequest",
     "BigQueryOptions",
@@ -15,6 +16,7 @@ __all__ = [
     "DataType",
     "LoadJobConfig",
     "NotFound",
+    "SnowparkSession",
     "SparkAnalysisException",
     "SparkSession",
     "WriteDisposition",
@@ -147,3 +149,20 @@ else:  # pragma: no cover - runtime import
 
         class SparkAnalysisException(Exception):
             """Fallback if pyspark is unavailable."""
+
+
+# --- Snowflake Snowpark ---
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from snowflake.snowpark import DataFrame as SNDF, Session as SnowparkSession
+else:  # pragma: no cover - runtime import
+    try:
+        from snowflake.snowpark import DataFrame as SNDF, Session as SnowparkSession  # type: ignore
+    except Exception:
+
+        class SnowparkSession:  # type: ignore[misc]
+            """Fallback stub when snowflake.snowpark is unavailable."""
+
+            builder = SimpleNamespace(configs=lambda cfg: SimpleNamespace(create=lambda: None))
+
+        class SNDF:  # type: ignore[misc]
+            """Fallback Snowpark DataFrame stub."""
