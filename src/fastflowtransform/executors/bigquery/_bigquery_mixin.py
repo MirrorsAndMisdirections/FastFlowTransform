@@ -1,8 +1,7 @@
 # fastflowtransform/executors/_bigquery_mixin.py
 from __future__ import annotations
 
-from google.api_core.exceptions import NotFound
-from google.cloud import bigquery
+from fastflowtransform.typing import NotFound, bigquery
 
 
 class BigQueryIdentifierMixin:

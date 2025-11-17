@@ -2,20 +2,17 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any
-
-import bigframes  # Package: google-cloud-bigquery-dataframes
-import bigframes.core.global_session as bf_global_session
-from bigframes._config.bigquery_options import BigQueryOptions
-from google.api_core.exceptions import NotFound
+from typing import Any
 
 from fastflowtransform.core import Node
 from fastflowtransform.executors.bigquery.base import BigQueryBaseExecutor
-
-if TYPE_CHECKING:
-    from bigframes.dataframe import DataFrame as BFDataFrame
-else:
-    BFDataFrame = Any
+from fastflowtransform.typing import (
+    BFDataFrame,
+    BigQueryOptions,
+    NotFound,
+    bf_global_session,
+    bigframes,
+)
 
 
 class BigQueryBFExecutor(BigQueryBaseExecutor[BFDataFrame]):

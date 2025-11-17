@@ -3,15 +3,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from google.cloud.bigquery import Client
-else:
-    Client = Any  # type: ignore[misc,assignment]
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.sql.elements import ClauseElement
+
+from fastflowtransform.typing import Client
 
 
 class BigQueryConnShim:

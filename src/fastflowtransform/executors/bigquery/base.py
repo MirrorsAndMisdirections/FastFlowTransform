@@ -3,15 +3,12 @@ from __future__ import annotations
 
 from typing import Any, TypeVar
 
-from google.api_core.exceptions import BadRequest, NotFound
-from google.cloud import bigquery
-from google.cloud.bigquery import Client
-
 from fastflowtransform.core import Node, relation_for
 from fastflowtransform.executors._shims import BigQueryConnShim
 from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.executors.bigquery._bigquery_mixin import BigQueryIdentifierMixin
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
+from fastflowtransform.typing import BadRequest, Client, NotFound, bigquery
 
 TFrame = TypeVar("TFrame")
 
