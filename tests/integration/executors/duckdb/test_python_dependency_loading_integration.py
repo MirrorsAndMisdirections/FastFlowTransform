@@ -2,12 +2,12 @@ import pandas as pd
 import pytest
 
 from fastflowtransform.core import REGISTRY, Node
-from fastflowtransform.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.executors.duckdb import DuckExecutor
 
 
 @pytest.mark.duckdb
 @pytest.mark.integration
-def test_duckdb_executor_dep_loading_unit(tmp_path):
+def test_duckdbutor_dep_loading_unit(tmp_path):
     ex = DuckExecutor()
     con = ex.con
     con.execute("create table users as select 1::int as id, 'a@example.com'::varchar as email")

@@ -92,7 +92,6 @@ def _mm_id(name: str) -> str:
 
 
 def _quote_label(s: str) -> str:
-    # Nur für Mermaid-Label: <br/> ist ok (mit securityLevel 'loose')
     s = s.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{s}"'
 

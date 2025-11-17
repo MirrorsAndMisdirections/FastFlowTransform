@@ -1,6 +1,6 @@
 #  Incremental, Delta & Iceberg Demo
 
-This example project shows how to use **incremental models** and **Delta-/Iceberg-style merges** in FastFlowTransform across DuckDB, Postgres and Databricks Spark (Parquet, Delta & Iceberg).
+This example project shows how to use **incremental models** and **Delta-/Iceberg-style merges** in FastFlowTransform across DuckDB, Postgres, Databricks Spark (Parquet, Delta & Iceberg), and BigQuery (pandas or BigFrames).
 
 
 It is intentionally small and self-contained so you can copy/paste patterns into your own project.
@@ -24,6 +24,8 @@ incremental_demo/
   .env.dev_postgres
   .env.dev_databricks_delta
   .env.dev_databricks_iceberg
+  .env.dev_bigquery_pandas
+  .env.dev_bigquery_bigframes
   Makefile
   profiles.yml
   project.yml
@@ -44,6 +46,11 @@ incremental_demo/
         fct_events_py_incremental.ff.py
       databricks_spark/
         fct_events_py_incremental.ff.py
+      bigquery/
+        pandas/
+          fct_events_py_incremental.ff.py
+        bigframes/
+          fct_events_py_incremental.ff.py
 ```
 
 *Your actual filenames may differ slightly; the concepts are the same.*
@@ -71,6 +78,7 @@ The demo revolves around a tiny `events` dataset and three different ways to bui
 
      * DuckDB / Postgres: incremental insert/merge in SQL
      * Databricks Spark: `MERGE INTO` for Delta or Iceberg where available (Spark 4), with a fallback full-refresh strategy for other formats
+     * BigQuery: pandas- or BigFrames-backed DataFrame models with incremental merge logic handled by the BigQuery executor
 
 4. **Iceberg profile for Spark 4**
 
@@ -240,6 +248,7 @@ On subsequent runs, the engine evaluates the `delta.sql` snippet and:
 
 * **DuckDB / Postgres**: inserts or merges the resulting rows into the target table
 * **Databricks Spark**: tries a `MERGE INTO` (Delta) and falls back to a full-refresh if necessary
+* **BigQuery**: applies incremental insert/merge logic in SQL via the BigQuery executor
 
 ---
 
@@ -313,6 +322,8 @@ Files:
 models/engines/duckdb/fct_events_py_incremental.ff.py
 models/engines/postgres/fct_events_py_incremental.ff.py
 models/engines/databricks_spark/fct_events_py_incremental.ff.py
+models/engines/bigquery/pandas/fct_events_py_incremental.ff.py
+models/engines/bigquery/bigframes/fct_events_py_incremental.ff.py
 ```
 
 Each engine variant uses the same logical signature:
@@ -550,9 +561,26 @@ FFT_ACTIVE_ENV=dev_postgres fft test . \
   --select tag:example:incremental_demo
 ```
 
-Packen würde ich den Hinweis direkt an die Stelle, wo du schon beschreibst, wie man die Demo auf Databricks startet – also deine aktuelle Sektion:
+### BigQuery
 
-````markdown
+```bash
+# pandas
+FF_ENGINE=bigquery FF_ENGINE_VARIANT=pandas FFT_ACTIVE_ENV=dev_bigquery_pandas fft seed .
+FF_ENGINE=bigquery FF_ENGINE_VARIANT=pandas FFT_ACTIVE_ENV=dev_bigquery_pandas fft run . \
+  --select tag:example:incremental_demo --select tag:engine:bigquery --cache rw
+FF_ENGINE=bigquery FF_ENGINE_VARIANT=pandas FFT_ACTIVE_ENV=dev_bigquery_pandas fft test . \
+  --select tag:example:incremental_demo
+
+# BigFrames
+FF_ENGINE=bigquery FF_ENGINE_VARIANT=bigframes FFT_ACTIVE_ENV=dev_bigquery_bigframes fft seed .
+FF_ENGINE=bigquery FF_ENGINE_VARIANT=bigframes FFT_ACTIVE_ENV=dev_bigquery_bigframes fft run . \
+  --select tag:example:incremental_demo --select tag:engine:bigquery --cache rw
+FF_ENGINE=bigquery FF_ENGINE_VARIANT=bigframes FFT_ACTIVE_ENV=dev_bigquery_bigframes fft test . \
+  --select tag:example:incremental_demo
+```
+
+Ensure the service account credentials pointed to by `GOOGLE_APPLICATION_CREDENTIALS` can create/drop tables in the target dataset.
+
 ### Databricks Spark
 
 ```bash

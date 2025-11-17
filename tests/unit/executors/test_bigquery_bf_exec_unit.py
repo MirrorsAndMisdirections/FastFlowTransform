@@ -5,7 +5,7 @@ import sys
 import types
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 import pytest
 from tests.common.mock.bigquery import (
@@ -17,9 +17,11 @@ from tests.common.mock.bigquery import (
     install_fake_bigquery,
 )
 
-import fastflowtransform.executors._bigquery_mixin as bq_mix_mod
-import fastflowtransform.executors.bigquery_bf_exec as bq_exec_mod
+import fastflowtransform.executors.bigquery._bigquery_mixin as bq_mix_mod
+import fastflowtransform.executors.bigquery.base as bq_base_mod
+import fastflowtransform.executors.bigquery.bigframes as bq_exec_mod
 from fastflowtransform.core import Node
+from fastflowtransform.executors.base import BaseExecutor
 
 # ---------------------- BigFrames-Fakes ------------------------------------
 
@@ -45,7 +47,7 @@ class _FakeBFSession:
 
 @pytest.fixture
 def bq_exec(monkeypatch):
-    _ = install_fake_bigquery(monkeypatch, [bq_exec_mod, bq_mix_mod])
+    _ = install_fake_bigquery(monkeypatch, [bq_exec_mod, bq_mix_mod, bq_base_mod])
 
     fake_bigframes = types.ModuleType("bigframes")
     fake_conf = types.ModuleType("bigframes._config")
@@ -66,9 +68,6 @@ def bq_exec(monkeypatch):
     assert isinstance(ex.session, _FakeBFSession)
 
     ex.client.add_dataset("p1.ds1")
-
-    monkeypatch.setattr(bq_exec_mod, "NotFound", FakeNotFound, raising=True)
-    monkeypatch.setattr(bq_exec_mod, "BadRequest", FakeBadRequest, raising=True)
 
     return ex
 
@@ -121,6 +120,65 @@ def test_materialize_relation_prefers_to_gbq(bq_exec):
     bq_exec._materialize_relation("out_tbl", DF(), Node(name="m", kind="python", path=Path(".")))
     assert called["table_id"] == "p1.ds1.out_tbl"
     assert called["if_exists"] == "replace"
+
+
+@pytest.mark.unit
+@pytest.mark.bigquery
+def test_ensure_dataset_respects_flag(monkeypatch):
+    _ = install_fake_bigquery(monkeypatch, [bq_exec_mod, bq_mix_mod, bq_base_mod])
+
+    fake_bigframes = types.ModuleType("bigframes")
+    fake_conf = types.ModuleType("bigframes._config")
+    fake_conf_bq = types.ModuleType("bigframes._config.bigquery_options")
+    fake_conf_bq.BigQueryOptions = _FakeBigQueryOptions  # type: ignore[attr-defined]
+    fake_bigframes.Session = _FakeBFSession  # type: ignore[attr-defined]
+    sys.modules.setdefault("bigframes", fake_bigframes)
+    sys.modules.setdefault("bigframes._config", fake_conf)
+    sys.modules["bigframes._config.bigquery_options"] = fake_conf_bq
+    monkeypatch.setattr(bq_exec_mod, "bigframes", fake_bigframes, raising=True)
+
+    fake_client = FakeClient(project="p1", location="EU")
+    ex = bq_exec_mod.BigQueryBFExecutor(
+        project="p1",
+        dataset="ds_missing",
+        location="EU",
+        allow_create_dataset=False,
+    )
+    # inject the fake client after construction (session uses fake bigframes)
+    ex.client = cast(Any, fake_client)
+
+    with pytest.raises(FakeNotFound):
+        ex._ensure_dataset()
+
+
+@pytest.mark.unit
+@pytest.mark.bigquery
+def test_ensure_dataset_creates_when_allowed(monkeypatch):
+    _ = install_fake_bigquery(monkeypatch, [bq_exec_mod, bq_mix_mod, bq_base_mod])
+
+    fake_bigframes = types.ModuleType("bigframes")
+    fake_conf = types.ModuleType("bigframes._config")
+    fake_conf_bq = types.ModuleType("bigframes._config.bigquery_options")
+    fake_conf_bq.BigQueryOptions = _FakeBigQueryOptions  # type: ignore[attr-defined]
+    fake_bigframes.Session = _FakeBFSession  # type: ignore[attr-defined]
+    sys.modules.setdefault("bigframes", fake_bigframes)
+    sys.modules.setdefault("bigframes._config", fake_conf)
+    sys.modules["bigframes._config.bigquery_options"] = fake_conf_bq
+    monkeypatch.setattr(bq_exec_mod, "bigframes", fake_bigframes, raising=True)
+
+    fake_client = FakeClient(project="p1", location="EU")
+    ex = bq_exec_mod.BigQueryBFExecutor(
+        project="p1",
+        dataset="ds_new",
+        location="EU",
+        allow_create_dataset=True,
+    )
+    ex.client = cast(Any, fake_client)
+
+    ex._ensure_dataset()
+    ds_id = "p1.ds_new"
+    assert ds_id in fake_client._datasets
+    assert fake_client.get_dataset(ds_id).location == "EU"
 
 
 @pytest.mark.unit
@@ -341,8 +399,8 @@ def test_on_node_built_best_effort(monkeypatch, bq_exec):
     def fake_upsert(ex, name, rel, fp, eng):
         called["upsert"] += 1
 
-    monkeypatch.setattr(bq_exec_mod, "ensure_meta_table", fake_ensure)
-    monkeypatch.setattr(bq_exec_mod, "upsert_meta", fake_upsert)
+    monkeypatch.setattr(bq_base_mod, "ensure_meta_table", fake_ensure)
+    monkeypatch.setattr(bq_base_mod, "upsert_meta", fake_upsert)
 
     bq_exec.on_node_built(Node(name="m", kind="sql", path=Path(".")), "p1.ds1.m", "fp123")
 
@@ -355,12 +413,10 @@ def test_on_node_built_best_effort(monkeypatch, bq_exec):
 def test_bf_apply_sql_materialization_calls_super(monkeypatch, bq_exec):
     monkeypatch.setattr(bq_exec, "_ensure_dataset", lambda: None, raising=True)
 
-    import fastflowtransform.executors.bigquery_bf_exec as bq_bf_mod  # noqa PLC0415
-
     called: dict[str, str] = {}
 
     monkeypatch.setattr(
-        bq_bf_mod.BaseExecutor,
+        BaseExecutor,
         "_apply_sql_materialization",
         lambda self, node, target_sql, select_body, materialization: called.update(
             {
@@ -389,7 +445,7 @@ def test_bf_apply_sql_materialization_calls_super(monkeypatch, bq_exec):
 @pytest.mark.bigquery
 def test_apply_sql_materialization_wraps_badrequest(monkeypatch, bq_exec):
     monkeypatch.setattr(
-        bq_exec_mod.BaseExecutor,
+        BaseExecutor,
         "_apply_sql_materialization",
         lambda *a, **k: (_ for _ in ()).throw(FakeBadRequest("bad SQL")),
         raising=True,

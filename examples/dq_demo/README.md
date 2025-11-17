@@ -1,7 +1,25 @@
-# FastFlowTransform project scaffold
+# Data Quality Demo
 
-This project was created with `fft init`.
-Next steps:
-1. Update `profiles.yml` with real connection details (docs/Profiles.md).
-2. Add sources in `sources.yml` and author models under `models/` (docs/Config_and_Macros.md).
-3. Seed sample data with `fft seed` and execute models with `fft run` (docs/Quickstart.md).
+Run the complete DQ demo (seeds → models → DAG → tests) on DuckDB, Postgres, Databricks Spark, or BigQuery (pandas or BigFrames).
+
+## Quickstart
+From this directory:
+
+1) Pick an engine and copy the matching `.env.dev_*` to `.env` (edit project/dataset if needed):
+   - DuckDB: `.env.dev_duckdb`
+   - Postgres: `.env.dev_postgres`
+   - Databricks Spark: `.env.dev_databricks`
+   - BigQuery (pandas): `.env.dev_bigquery_pandas`
+   - BigQuery (BigFrames): `.env.dev_bigquery_bigframes`
+
+2) Run the demo (set `BQ_FRAME` when using BigQuery):
+   ```sh
+   make demo ENGINE=duckdb
+   make demo ENGINE=postgres
+   make demo ENGINE=databricks_spark
+   make demo ENGINE=bigquery BQ_FRAME=pandas      # or bigframes
+   ```
+
+Artifacts:
+- Target metadata: `.fastflowtransform/target/{manifest.json,run_results.json,catalog.xml}`
+- DAG HTML: `site/dag/index.html`

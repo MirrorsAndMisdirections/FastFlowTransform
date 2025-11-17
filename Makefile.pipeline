@@ -43,7 +43,7 @@ demo: seed run dag demo-open test
 clean:
 	rm -rf .local "$(FF_PROJECT)/docs" dist build *.egg-info
 
-# --- Cache demos (v0.3) ---
+# --- Cache demos ---
 
 cache_rw_first:
 	# first run writes cache and meta

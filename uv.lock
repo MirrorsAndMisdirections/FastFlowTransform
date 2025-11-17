@@ -736,27 +736,26 @@ name = "fastflowtransform"
 version = "0.5.15"
 source = { editable = "." }
 dependencies = [
-    { name = "bigframes" },
-    { name = "delta-spark" },
     { name = "duckdb" },
-    { name = "google-cloud-bigquery" },
     { name = "httpx" },
     { name = "jinja2" },
     { name = "pandas" },
-    { name = "psycopg", extra = ["binary"] },
-    { name = "psycopg2-binary" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "pyspark" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
-    { name = "snowflake" },
-    { name = "snowflake-snowpark-python" },
     { name = "sqlalchemy" },
     { name = "typer" },
 ]
 
 [package.optional-dependencies]
+bigquery = [
+    { name = "google-cloud-bigquery" },
+]
+bigquery-bf = [
+    { name = "bigframes" },
+    { name = "google-cloud-bigquery" },
+]
 dev = [
     { name = "mypy" },
     { name = "pandas-stubs" },
@@ -776,13 +775,39 @@ docs = [
     { name = "mkdocstrings", extra = ["python"] },
     { name = "pymdown-extensions" },
 ]
+full = [
+    { name = "bigframes" },
+    { name = "delta-spark" },
+    { name = "google-cloud-bigquery" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "psycopg2-binary" },
+    { name = "pyspark" },
+    { name = "snowflake" },
+    { name = "snowflake-snowpark-python" },
+]
+postgres = [
+    { name = "psycopg", extra = ["binary"] },
+    { name = "psycopg2-binary" },
+]
+snowflake = [
+    { name = "snowflake" },
+    { name = "snowflake-snowpark-python" },
+]
+spark = [
+    { name = "delta-spark" },
+    { name = "pyspark" },
+]
 
 [package.metadata]
 requires-dist = [
-    { name = "bigframes", specifier = ">=2.24.0" },
-    { name = "delta-spark", specifier = ">=4.0.0" },
+    { name = "bigframes", marker = "extra == 'bigquery-bf'", specifier = ">=2.24.0" },
+    { name = "bigframes", marker = "extra == 'full'", specifier = ">=2.24.0" },
+    { name = "delta-spark", marker = "extra == 'full'", specifier = ">=4.0.0" },
+    { name = "delta-spark", marker = "extra == 'spark'", specifier = ">=4.0.0" },
     { name = "duckdb", specifier = ">=1.0" },
-    { name = "google-cloud-bigquery", specifier = ">=3.25" },
+    { name = "google-cloud-bigquery", marker = "extra == 'bigquery'", specifier = ">=3.25" },
+    { name = "google-cloud-bigquery", marker = "extra == 'bigquery-bf'", specifier = ">=3.25" },
+    { name = "google-cloud-bigquery", marker = "extra == 'full'", specifier = ">=3.25" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6" },
@@ -796,24 +821,29 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.0" },
     { name = "pandas-stubs", marker = "extra == 'dev'", specifier = ">=2.1" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = "==3.*" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
-    { name = "psycopg2-binary", specifier = ">=2.9" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'full'", specifier = ">=3.1" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.1" },
+    { name = "psycopg2-binary", marker = "extra == 'full'", specifier = ">=2.9" },
+    { name = "psycopg2-binary", marker = "extra == 'postgres'", specifier = ">=2.9" },
     { name = "pydantic", specifier = ">=2.8" },
     { name = "pydantic-settings", specifier = ">=2.4" },
     { name = "pymdown-extensions", marker = "extra == 'docs'", specifier = ">=10.0" },
-    { name = "pyspark", specifier = ">=4.0.1" },
+    { name = "pyspark", marker = "extra == 'full'", specifier = ">=4.0.1" },
+    { name = "pyspark", marker = "extra == 'spark'", specifier = ">=4.0.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==8.4.*" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = "==7.0.*" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.14.*" },
-    { name = "snowflake", specifier = ">=1.8.0" },
-    { name = "snowflake-snowpark-python", specifier = ">=1.40.0" },
+    { name = "snowflake", marker = "extra == 'full'", specifier = ">=1.8.0" },
+    { name = "snowflake", marker = "extra == 'snowflake'", specifier = ">=1.8.0" },
+    { name = "snowflake-snowpark-python", marker = "extra == 'full'", specifier = ">=1.40.0" },
+    { name = "snowflake-snowpark-python", marker = "extra == 'snowflake'", specifier = ">=1.40.0" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "typer", specifier = ">=0.12" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12" },
 ]
-provides-extras = ["dev", "docs"]
+provides-extras = ["postgres", "bigquery", "bigquery-bf", "spark", "snowflake", "full", "dev", "docs"]
 
 [[package]]
 name = "filelock"

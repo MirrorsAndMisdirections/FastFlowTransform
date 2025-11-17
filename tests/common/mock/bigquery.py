@@ -1,4 +1,4 @@
-# tests/helpers/fake_bigquery.py
+# tests/common/mock/bigquery.py
 from __future__ import annotations
 
 import sys
@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
+from google.api_core.exceptions import BadRequest, NotFound
 
 # ---------------------------------------------------------------------------
 # Fake types
@@ -68,25 +69,29 @@ class FakeDataset:
         self.location: str | None = None
 
 
-class FakeBadRequest(Exception):
+class FakeBadRequest(BadRequest):
+    """Test helper that behaves like a BadRequest for our wrappers."""
+
     pass
 
 
-class FakeNotFound(Exception):
+class FakeNotFound(NotFound):
+    """Same idea for NotFound, if you need it."""
+
     pass
 
 
 class FakeClient:
     """
-    Gemeinsamer Client für beide Executor-Tests.
-    Kann:
+    Common Client for both Executor-Tests.
+    Can:
       - query(...)
       - list_tables(...)
       - get_table(...)
       - get_dataset(...)
       - create_dataset(...)
-      - load_table_from_dataframe(...)  (für pandas-Executor)
-    und hat:
+      - load_table_from_dataframe(...)  (for pandas-Executor)
+    and has:
       - _datasets: set[str]
       - _tables: dict[str, list[Any]]
     """
@@ -95,12 +100,12 @@ class FakeClient:
         self.project = project
         self.location = location
         self.queries: list[tuple[str, str | None, Any | None]] = []
-        self._datasets: set[str] = set()
+        self._datasets: dict[str, FakeDataset] = {}
         self._tables: dict[str, list[Any]] = {}
 
     # ---- Test helper ----
     def add_dataset(self, ds_id: str) -> None:
-        self._datasets.add(ds_id)
+        self._datasets.setdefault(ds_id, FakeDataset(ds_id))
 
     def add_table(self, dataset_id: str, table_id: str) -> None:
         self._tables.setdefault(dataset_id, []).append(SimpleNamespace(table_id=table_id))
@@ -140,15 +145,18 @@ class FakeClient:
         raise FakeNotFound(f"table {table_ref} not found")
 
     def get_dataset(self, ds_id: str):
-        if ds_id not in self._datasets:
+        ds = self._datasets.get(ds_id)
+        if ds is None:
             raise FakeNotFound(f"dataset {ds_id} not found")
-        return FakeDataset(ds_id)
+        return ds
 
-    def create_dataset(self, ds_obj: Any):
+    def create_dataset(self, ds_obj: Any, exists_ok: bool | None = None):
         ds_id = getattr(ds_obj, "dataset_id", ds_obj)
-        self._datasets.add(ds_id)
-        ds = FakeDataset(ds_id)
+        ds = self._datasets.get(ds_id)
+        if ds is None or not exists_ok:
+            ds = FakeDataset(ds_id)
         ds.location = getattr(ds_obj, "location", None)
+        self._datasets[ds_id] = ds
         return ds
 
     def load_table_from_dataframe(self, df, table_id: str, job_config: Any, location: str | None):
@@ -183,17 +191,34 @@ def make_fake_bigquery_module() -> types.ModuleType:
 
 def install_fake_bigquery(monkeypatch, target_modules: list[types.ModuleType]) -> types.ModuleType:
     """
-    Installiert unser Fake-bigquery sowohl in sys.modules als auch in den angegebenen
-    Zielmodulen (per monkeypatch.setattr(mod, "bigquery", ...)).
-    Gibt das Fake-Modul zurück.
+    Install the fake BigQuery module into sys.modules and optionally patch
+    target modules that expose a top-level ``bigquery`` attribute.
+
+    This ensures that imports like ``from google.cloud import bigquery`` and
+    ``import google.cloud.bigquery as bigquery`` see the fake implementation
+    during tests.
+
+    Args:
+        monkeypatch: pytest's monkeypatch fixture.
+        target_modules: Modules that may reference a top-level ``bigquery``
+            symbol. For each module that actually has such an attribute, it
+            will be replaced with the fake BigQuery module.
+
+    Returns:
+        The fake BigQuery module that was installed.
     """
     fake_bq = make_fake_bigquery_module()
 
+    # Make the fake visible as google.cloud.bigquery
     gc_mod = sys.modules.setdefault("google.cloud", types.ModuleType("google.cloud"))
     gc_mod.bigquery = fake_bq  # type: ignore[attr-defined]
     sys.modules["google.cloud.bigquery"] = fake_bq
 
+    # For backwards compatibility, only patch modules that actually expose
+    # a top-level `bigquery` attribute. After the executor refactor, not
+    # every BigQuery-related module has that symbol anymore.
     for m in target_modules:
-        monkeypatch.setattr(m, "bigquery", fake_bq, raising=True)
+        if hasattr(m, "bigquery"):
+            monkeypatch.setattr(m, "bigquery", fake_bq, raising=True)
 
     return fake_bq

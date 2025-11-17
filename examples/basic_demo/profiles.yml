@@ -25,3 +25,21 @@ dev_databricks:
       spark.hadoop.datanucleus.schema.autoCreateAll: "true"
       spark.hadoop.javax.jdo.option.ConnectionDriverName: "org.apache.derby.jdbc.EmbeddedDriver"
       spark.driver.extraJavaOptions: "-Dderby.stream.error.file={{ project_dir() }}/.local/derby.log"
+
+dev_bigquery_bigframes:
+  engine: bigquery
+  bigquery:
+    project: "{{ env('FF_BQ_PROJECT') }}"
+    dataset: "{{ env('FF_BQ_DATASET', 'basic_demo') }}"
+    location: "{{ env('FF_BQ_LOCATION', 'EU') }}"
+    use_bigframes: true
+    # allow_create_dataset: true   # uncomment to auto-create dataset on first run
+
+dev_bigquery_pandas:
+  engine: bigquery
+  bigquery:
+    project: "{{ env('FF_BQ_PROJECT') }}"
+    dataset: "{{ env('FF_BQ_DATASET', 'basic_demo') }}"
+    location: "{{ env('FF_BQ_LOCATION', 'EU') }}"
+    use_bigframes: false
+    # allow_create_dataset: true   # uncomment to auto-create dataset on first run

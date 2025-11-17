@@ -3,15 +3,58 @@
         http_first http_offline http_cache_clear artifacts dag clean \
 		demo
 
-ENGINE ?= duckdb
-PROFILE_ENV = dev_duckdb
+ENGINE ?= duckdb          # duckdb | postgres | databricks_spark | bigquery
+# BigQuery frame selector (pandas | bigframes)
+BQ_FRAME ?= bigframes
 PROJECT ?= .
 UV ?= uv
+DB ?= .local/cache_demo.duckdb
 
-BASE_ENV = FFT_ACTIVE_ENV=$(PROFILE_ENV)
+ifeq ($(ENGINE),duckdb)
+  PROFILE_ENV = dev_duckdb
+  ENGINE_TAG  = engine:duckdb
+endif
+ifeq ($(ENGINE),postgres)
+  PROFILE_ENV = dev_postgres
+  ENGINE_TAG  = engine:postgres
+endif
+ifeq ($(ENGINE),databricks_spark)
+  PROFILE_ENV = dev_databricks
+  ENGINE_TAG  = engine:databricks_spark
+endif
+ifeq ($(ENGINE),bigquery)
+  ENGINE_TAG  = engine:bigquery
+  ifeq ($(BQ_FRAME),pandas)
+    PROFILE_ENV = dev_bigquery_pandas
+  else
+    PROFILE_ENV = dev_bigquery_bigframes
+  endif
+endif
+ifndef PROFILE_ENV
+  $(error Unsupported ENGINE=$(ENGINE) - pick duckdb|postgres|databricks_spark|bigquery)
+endif
+
+BASE_ENV = FFT_ACTIVE_ENV=$(PROFILE_ENV) FF_ENGINE=$(ENGINE)
+ifeq ($(ENGINE),bigquery)
+  BASE_ENV := $(BASE_ENV) FF_ENGINE_VARIANT=$(BQ_FRAME)
+endif
 RUN_ENV  = $(BASE_ENV)
 
-SELECT_ALL = --select tag:example:cache_demo
+SELECT_ALL = --select tag:example:cache_demo --select tag:$(ENGINE_TAG)
+
+CLEAN_SCRIPT = ../_scripts/cleanup_env.py
+
+ifeq ($(ENGINE),duckdb)
+  CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine duckdb --env "$(PROFILE_ENV)" --project "$(PROJECT)" --duckdb-path "$(DB)"
+else ifeq ($(ENGINE),postgres)
+  CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine postgres --env "$(PROFILE_ENV)" --project "$(PROJECT)"
+else ifeq ($(ENGINE),databricks_spark)
+  CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine databricks_spark --env "$(PROFILE_ENV)" --project "$(PROJECT)"
+else ifeq ($(ENGINE),bigquery)
+  CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine bigquery --env "$(PROFILE_ENV)" --project "$(PROJECT)"
+else
+  $(error Unsupported ENGINE=$(ENGINE) - pick duckdb|postgres|databricks_spark|bigquery)
+endif
 
 seed:
 	env $(BASE_ENV) $(UV) run fft seed "$(PROJECT)" --env $(PROFILE_ENV)
@@ -61,6 +104,7 @@ dag:
 	env $(RUN_ENV) $(UV) run fft dag "$(PROJECT)" --env $(PROFILE_ENV) $(SELECT_ALL) --html
 
 clean:
+	$(CLEAN_CMD)
 	rm -rf .local cache_demo.duckdb site .fastflowtransform
 
 demo: clean

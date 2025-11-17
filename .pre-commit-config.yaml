@@ -23,7 +23,6 @@ repos:
         pass_filenames: false
         types_or: [python]
 
-      # Optional: dieselben Checks auch beim Push fürs „CI-Gefühl“
       - id: prepush-ruff
         name: ruff (pre-push)
         entry: uv run ruff check src tests

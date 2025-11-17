@@ -180,19 +180,33 @@ def test_sa_shim_executes_sqlalchemy_clauseelement():
 def test_bq_shim_executes_single_sql():
     calls: dict[str, Any] = {}
 
+    class FakeJob:
+        def __init__(self) -> None:
+            self.result_called = False
+
+        def result(self):
+            self.result_called = True
+            # Simulate a RowIterator; list is fine for the wrapper.
+            return ["ROW-1"]
+
     class FakeClient:
         def query(self, sql: str, location: str | None = None):
             calls["sql"] = sql
             calls["location"] = location
-            return "JOB-1"
+            return FakeJob()
 
     fake = FakeClient()
     shim = BigQueryConnShim(cast(Client, fake), location="EU")
     res = shim.execute("SELECT 1")
 
-    assert res == "JOB-1"
+    # Shim now returns a cursor-like wrapper
+    assert isinstance(res, BigQueryConnShim._ResultWrapper)
     assert calls["sql"] == "SELECT 1"
-    assert calls["location"] == "EU"
+    # We don't pass location into client.query, so it should be None.
+    assert calls["location"] is None
+    # And fetchone() should give the first row.
+    assert res.fetchone() == "ROW-1"
+    assert res.fetchone() is None
 
 
 @pytest.mark.unit
@@ -214,14 +228,13 @@ def test_bq_shim_executes_sequence_and_returns_last_job():
 
     # should have executed all
     assert seen == ["SELECT 1", "SELECT 2", "SELECT 3"]
-    # and returned the last job
-    assert isinstance(res, FakeJob)
+    # and returned a cursor-like wrapper over the last result
+    assert isinstance(res, BigQueryConnShim._ResultWrapper)
 
 
 def test_bq_shim_raises_on_unsupported_type():
     fake_client = SimpleNamespace(query=lambda *a, **k: None)
 
-    # für den Typchecker so tun, als wäre es ein echter Client
     shim = BigQueryConnShim(client=cast(Client, fake_client))
 
     with pytest.raises(TypeError):

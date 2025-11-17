@@ -1,3 +1,4 @@
+# fastflowtransform/config/project.py
 from __future__ import annotations
 
 from collections.abc import Sequence

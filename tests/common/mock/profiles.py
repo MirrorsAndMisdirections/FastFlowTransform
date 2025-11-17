@@ -4,7 +4,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import cast
 
-# wir brauchen nur den Typ für das cast
 from fastflowtransform.settings import (
     Profile,
 )
@@ -16,6 +15,7 @@ def fake_bigquery_profile(
     dataset: str = "ds1",
     location: str | None = "EU",
     use_bigframes: bool = False,
+    allow_create_dataset: bool = False,
 ) -> Profile:
     """
     Return a shape-compatible fake of a BigQuery profile.
@@ -32,6 +32,7 @@ def fake_bigquery_profile(
             dataset=dataset,
             location=location,
             use_bigframes=use_bigframes,
+            allow_create_dataset=allow_create_dataset,
         ),
     )
     # tell the type checker: "this is good enough to be treated as Profile"

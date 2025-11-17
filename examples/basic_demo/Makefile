@@ -9,6 +9,9 @@ UV ?= uv
 # Engine selector (duckdb|postgres|databricks_spark)
 ENGINE ?= duckdb
 
+# BigQuery frame type selector (pandas | bigframes)
+BQ_FRAME ?= bigframes
+
 # Resolve profile and tags per engine
 ifeq ($(ENGINE),duckdb)
   PROFILE_ENV = dev_duckdb
@@ -22,8 +25,22 @@ ifeq ($(ENGINE),databricks_spark)
   PROFILE_ENV = dev_databricks
   ENGINE_TAG = engine:databricks_spark
 endif
+ifeq ($(ENGINE),bigquery)
+  # Default tags / profile for BigQuery
+  ENGINE_TAG  = engine:bigquery
+  ifeq ($(BQ_FRAME),pandas)
+    PROFILE_ENV = dev_bigquery_pandas
+  else
+    PROFILE_ENV = dev_bigquery_bigframes
+  endif
+endif
 
-BASE_ENV = FFT_ACTIVE_ENV=$(PROFILE_ENV)
+BASE_ENV = FFT_ACTIVE_ENV=$(PROFILE_ENV) FF_ENGINE=$(ENGINE)
+
+ifeq ($(ENGINE),bigquery)
+  BASE_ENV := $(BASE_ENV) FF_ENGINE_VARIANT=$(BQ_FRAME)
+endif
+
 RUN_ENV = $(BASE_ENV)
 
 SELECT_FLAGS = --select tag:example:basic_demo --select tag:$(ENGINE_TAG)
@@ -38,6 +55,8 @@ else ifeq ($(ENGINE),postgres)
   CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine postgres --env "$(PROFILE_ENV)" --project "$(PROJECT)"
 else ifeq ($(ENGINE),databricks_spark)
   CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine databricks_spark --env "$(PROFILE_ENV)" --project "$(PROJECT)"
+else ifeq ($(ENGINE),bigquery)
+  CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine bigquery --env "$(PROFILE_ENV)" --project "$(PROJECT)"
 else
   $(error Unsupported ENGINE=$(ENGINE) - pick duckdb|postgres|databricks_spark)
 endif
@@ -55,7 +74,7 @@ help:
 	@echo "  make demo       ENGINE=$(ENGINE)"
 	@echo "  make clean      ENGINE=$(ENGINE)"
 	@echo
-	@echo "Variables: DB=$(DB) PROJECT=$(PROJECT) UV=$(UV)"
+	@echo "Variables: DB=$(DB) PROJECT=$(PROJECT) UV=$(UV) ENGINE=$(ENGINE) BQ_FRAME=$(BQ_FRAME)"
 
 seed:
 	env $(BASE_ENV) $(UV) run fft seed "$(PROJECT)" --env $(PROFILE_ENV)

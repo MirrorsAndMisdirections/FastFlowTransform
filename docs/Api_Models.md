@@ -306,4 +306,4 @@ fft run . --env dev --select dim_countries_from_api --http-cache ro
 
 - Technical guide: *Developer Guide – Architecture & Internals*
 - Unit tests: `tests/api/test_http_*.py`
-- Runtime & cache: *Parallelism & Cache (v0.3)*
+- Runtime & cache: *Parallelism & Cache*

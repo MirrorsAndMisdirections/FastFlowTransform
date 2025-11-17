@@ -1,8 +1,8 @@
-# FastFlowTransform Modeling Reference (v0.1)
+# FastFlowTransform Modeling Reference
 
 > Authoritative reference for FastFlowTransform’s modeling layer: SQL/Python models, configuration macros, templating helpers, and testing hooks.
-> Works with FastFlowTransform v0.1 (T1–T11). Supported engines: DuckDB, Postgres, BigQuery (pandas & BigFrames), Databricks/Spark, Snowflake/Snowpark.
-> **Execution & Cache (v0.3) quick notes**
+> Supported engines: DuckDB, Postgres, BigQuery (pandas & BigFrames), Databricks/Spark, Snowflake/Snowpark.
+> **Execution & Cache quick notes**
 > - Parallelism is level-wise; use `fft run --jobs N`.
 > - Use `--cache={off|ro|rw|wo}` to control skipping behavior.
 > - Fingerprints include rendered SQL / Python function source, selected `FF_*` env vars, `sources.yml` and upstream fingerprints.
@@ -184,7 +184,7 @@ Call `config()` at the top of SQL models. Python models get the same options via
 ) }}
 ```
 
-Supported keys (v0.1):
+Supported keys:
 
 | Key            | Type            | Description                                                                  |
 |----------------|-----------------|------------------------------------------------------------------------------|
@@ -307,7 +307,7 @@ from {{ ref('users.ff') }};
 
 - Default → materialized as `table`.
 - `materialized='view'` produces an engine-specific temporary table first, then creates/overwrites a view that selects from it.
-- Ephemeral Python models are not supported in v0.1.
+- Ephemeral Python models are not supported.
 
 ---
 

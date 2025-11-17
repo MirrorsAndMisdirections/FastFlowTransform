@@ -17,11 +17,7 @@ from pyspark.sql import functions as F
 )
 def build(events_df: SparkDataFrame) -> SparkDataFrame:
     """
-    Python-Incremental-Beispiel (Databricks Spark).
-
-    Auch hier:
-      - Build-Snapshot im Python-Model
-      - Merge/Delta wird über Konfiguration gesteuert.
+    Python-Incremental-Example (Databricks Spark).
     """
     return events_df.withColumn("value_x10", F.col("value") * F.lit(10)).select(
         "event_id", "updated_at", "value", "value_x10"

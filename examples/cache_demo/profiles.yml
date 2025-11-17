@@ -2,3 +2,38 @@ dev_duckdb:
   engine: duckdb
   duckdb:
     path: "{{ env('FF_DUCKDB_PATH', '.local/cache_demo.duckdb') }}"
+
+dev_postgres:
+  engine: postgres
+  postgres:
+    dsn: "{{ env('FF_PG_DSN') }}"
+    db_schema: "{{ env('FF_PG_SCHEMA', 'public') }}"
+
+dev_databricks:
+  engine: databricks_spark
+  databricks_spark:
+    master: "{{ env('FF_SPARK_MASTER', 'local[*]') }}"
+    app_name: "{{ env('FF_SPARK_APP_NAME', 'cache_demo') }}"
+    warehouse_dir: "{{ project_dir() }}/{{ env('FF_DBR_WAREHOUSE_DIR', '.local/spark_warehouse') }}"
+    database: "{{ env('FF_DBR_DATABASE', 'cache_demo') }}"
+    extra_conf:
+      spark.sql.shuffle.partitions: "{{ env('SPARK_SQL_SHUFFLE_PARTITIONS', '8') }}"
+      spark.driver.extraJavaOptions: "-Dderby.stream.error.file={{ project_dir() }}/.local/derby.log"
+
+dev_bigquery_bigframes:
+  engine: bigquery
+  bigquery:
+    project: "{{ env('FF_BQ_PROJECT') }}"
+    dataset: "{{ env('FF_BQ_DATASET', 'cache_demo') }}"
+    location: "{{ env('FF_BQ_LOCATION', 'EU') }}"
+    use_bigframes: true
+    # allow_create_dataset: true   # uncomment to auto-create dataset on first run
+
+dev_bigquery_pandas:
+  engine: bigquery
+  bigquery:
+    project: "{{ env('FF_BQ_PROJECT') }}"
+    dataset: "{{ env('FF_BQ_DATASET', 'cache_demo') }}"
+    location: "{{ env('FF_BQ_LOCATION', 'EU') }}"
+    use_bigframes: false
+    # allow_create_dataset: true   # uncomment to auto-create dataset on first run

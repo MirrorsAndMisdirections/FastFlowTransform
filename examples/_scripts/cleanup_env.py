@@ -89,6 +89,58 @@ def cleanup_postgres(*, dsn: str | None, schema: str | None, dry_run: bool) -> N
         conn.execute(text(f'CREATE SCHEMA "{schema}"'))
 
 
+def cleanup_bigquery(
+    *,
+    project_id: str | None,
+    dataset: str | None,
+    location: str | None,
+    dry_run: bool,
+) -> None:
+    """
+    Reset a BigQuery demo dataset by dropping and recreating it.
+
+    Reads project/dataset/location from args/env/profile; this is meant for
+    isolated demo datasets (like fft-basic-demo.basic_demo), not shared prod.
+    """
+    if not project_id:
+        raise ValueError("BigQuery cleanup requires FF_BQ_PROJECT or --bq-project")
+    if not dataset:
+        raise ValueError("BigQuery cleanup requires FF_BQ_DATASET or --bq-dataset")
+
+    from google.cloud import bigquery  # local import so other engines don't require it
+
+    client = bigquery.Client(project=project_id, location=location)
+    full_id = f"{project_id}.{dataset}"
+
+    if dry_run:
+        _log(f"[dry-run] Would delete and recreate BigQuery dataset {full_id}")
+        return
+
+    # Try to preserve existing location if not explicitly given
+    ds_location = location
+    try:
+        ds = client.get_dataset(full_id)
+        if not ds_location:
+            ds_location = ds.location
+    except Exception:
+        # Dataset may not exist yet – that's fine, we'll just create it below.
+        pass
+
+    _log(f"Deleting BigQuery dataset {full_id} (if exists, with contents)")
+    client.delete_dataset(
+        full_id,
+        delete_contents=True,
+        not_found_ok=True,
+    )
+
+    ds_obj = bigquery.Dataset(full_id)
+    if ds_location:
+        ds_obj.location = ds_location
+
+    _log(f"Recreating BigQuery dataset {full_id} (location={ds_location or 'default'})")
+    client.create_dataset(ds_obj, exists_ok=True)
+
+
 def _env_flag(name: str, default: bool = False) -> bool:
     val = os.getenv(name)
     if val is None:
@@ -234,7 +286,7 @@ def _load_profile(project: Path, env_name: str, engine: str | None):
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Reset FastFlowTransform example environments.")
     parser.add_argument(
-        "--engine", required=True, choices=["duckdb", "postgres", "databricks_spark"]
+        "--engine", required=True, choices=["duckdb", "postgres", "databricks_spark", "bigquery"]
     )
     parser.add_argument("--project", default=".")
     parser.add_argument("--env", help="Profile environment name (e.g. dev_duckdb).")
@@ -249,6 +301,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--spark-use-hive", action="store_true", help="Force Hive metastore enablement for cleanup."
     )
+    parser.add_argument("--bq-project", help="Override BigQuery project ID (FF_BQ_PROJECT).")
+    parser.add_argument("--bq-dataset", help="Override BigQuery dataset (FF_BQ_DATASET).")
+    parser.add_argument("--bq-location", help="Override BigQuery location (FF_BQ_LOCATION).")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--skip-artifacts",
@@ -262,7 +317,11 @@ def main(argv: list[str] | None = None) -> int:
     env_name = (
         args.env
         or os.getenv("FFT_ACTIVE_ENV")
-        or ("dev_" + args.engine if args.engine in {"duckdb", "postgres"} else "dev")
+        or (
+            "dev_" + args.engine
+            if args.engine in {"duckdb", "postgres", "databricks_spark", "bigquery"}
+            else "dev"
+        )
     )
 
     os.environ["FFT_ACTIVE_ENV"] = env_name
@@ -312,6 +371,22 @@ def main(argv: list[str] | None = None) -> int:
                 catalog=args.spark_catalog or profile_catalog,
                 extra_conf=profile_extra_conf,
                 use_hive=args.spark_use_hive or bool(profile_use_hive),
+                dry_run=args.dry_run,
+            )
+        elif args.engine == "bigquery":
+            profile_bq = getattr(profile, "bigquery", None) if profile else None
+            profile_project = getattr(profile_bq, "project", None) if profile_bq else None
+            profile_dataset = getattr(profile_bq, "dataset", None) if profile_bq else None
+            profile_location = getattr(profile_bq, "location", None) if profile_bq else None
+
+            project_id = args.bq_project or os.getenv("FF_BQ_PROJECT") or profile_project
+            dataset = args.bq_dataset or os.getenv("FF_BQ_DATASET") or profile_dataset
+            location = args.bq_location or os.getenv("FF_BQ_LOCATION") or profile_location
+
+            cleanup_bigquery(
+                project_id=project_id,
+                dataset=dataset,
+                location=location,
                 dry_run=args.dry_run,
             )
     except Exception as exc:

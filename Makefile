@@ -3,7 +3,6 @@
 
 SHELL := /bin/bash
 
-# Defaults (per CLI überschreibbar): make FF_PROJECT=examples/postgres FF_ENV=stg
 FF_PROJECT ?= examples/simple_duckdb
 FF_DB ?= $(FF_PROJECT)/.local/demo.duckdb
 FF_ENV ?= dev

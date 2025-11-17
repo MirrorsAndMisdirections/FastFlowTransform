@@ -12,6 +12,9 @@ UV ?= uv
 # Engine selector (duckdb|postgres|databricks_spark)
 ENGINE ?= duckdb
 
+# BigQuery frame type selector (pandas | bigframes)
+BQ_FRAME ?= bigframes
+
 # HTTP wrapper defaults (override per call if needed)
 # Allowed domains are comma-separated (no https://)
 FF_HTTP_ALLOWED_DOMAINS ?= jsonplaceholder.typicode.com,api.github.com
@@ -41,9 +44,20 @@ ifeq ($(ENGINE),databricks_spark)
   PROFILE_ENV = dev_databricks
   ENGINE_TAG = engine:databricks_spark
 endif
+ifeq ($(ENGINE),bigquery)
+  ENGINE_TAG = engine:bigquery
+  ifeq ($(BQ_FRAME),pandas)
+    PROFILE_ENV = dev_bigquery_pandas
+  else
+    PROFILE_ENV = dev_bigquery_bigframes
+  endif
+endif
 
 
 BASE_ENV = FFT_ACTIVE_ENV=$(PROFILE_ENV)
+ifeq ($(ENGINE),bigquery)
+  BASE_ENV := $(BASE_ENV) FF_ENGINE=$(ENGINE) FF_ENGINE_VARIANT=$(BQ_FRAME)
+endif
 RUN_ENV = $(BASE_ENV)
 
 # Select only API demo models for the active engine (common models carry all engine tags)
@@ -57,6 +71,8 @@ else ifeq ($(ENGINE),postgres)
   CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine postgres --env "$(PROFILE_ENV)" --project "$(PROJECT)"
 else ifeq ($(ENGINE),databricks_spark)
   CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine databricks_spark --env "$(PROFILE_ENV)" --project "$(PROJECT)"
+else ifeq ($(ENGINE),bigquery)
+  CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine bigquery --env "$(PROFILE_ENV)" --project "$(PROJECT)"
 else
   CLEAN_CMD = $(error Unsupported ENGINE=$(ENGINE) for cleanup)
 endif
@@ -108,7 +124,7 @@ demo-open:
 	fi
 
 demo: clean
-	@echo "== 🚀 API Demo (DuckDB) =="
+	@echo "== 🚀 API Demo ($(ENGINE)) =="
 	@echo "Profile=$(PROFILE_ENV)  DB=$(DB)  PROJECT=$(PROJECT)"
 	+$(MAKE) seed
 	+$(MAKE) run
@@ -153,7 +169,7 @@ api-show-http:
 	fi
 
 api-demo: clean
-	@echo "== 🌐 API Demo (DuckDB) =="
+	@echo "== 🌐 API Demo ($(ENGINE)) =="
 	@echo "Profile=$(PROFILE_ENV)  DB=$(DB)  PROJECT=$(PROJECT)"
 	+$(MAKE) run
 	+$(MAKE) dag

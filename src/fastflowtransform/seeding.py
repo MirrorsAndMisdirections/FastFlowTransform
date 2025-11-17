@@ -333,7 +333,6 @@ def _resolve_schema_and_table_by_cfg(
 
 
 def _handle_duckdb(table: str, df: pd.DataFrame, executor: Any, schema: str | None) -> bool:
-    """Versucht DuckDB zu erkennen und zu bedienen. Gibt True zurück, wenn ausgeführt."""
     con = getattr(executor, "con", None)
     if con is None:
         return False
@@ -380,25 +379,104 @@ def _handle_duckdb(table: str, df: pd.DataFrame, executor: Any, schema: str | No
 
 
 def _handle_sqlalchemy(table: str, df: pd.DataFrame, executor: Any, schema: str | None) -> bool:
-    """Versucht SQLAlchemy-Engine/-Connection zu erkennen und zu bedienen."""
     eng = getattr(executor, "engine", None)
     if eng is None:
         return False
-    # heuristik: viele SQLAlchemy-Engines haben 'sqlalchemy' im Modulpfad der Klasse
     if "sqlalchemy" not in getattr(eng.__class__, "__module__", ""):
         return False
 
+    full_name = _qualify(table, schema)
+    dialect_name = getattr(getattr(eng, "dialect", None), "name", "") or ""
+    if dialect_name.lower() == "postgresql":
+        # Postgres blocks DROP TABLE when dependent views exist (e.g. stg_* views).
+        drop_sql = f"DROP TABLE IF EXISTS {full_name} CASCADE"
+        with eng.begin() as conn:
+            conn.exec_driver_sql(drop_sql)
+
     t0 = perf_counter()
-    # pandas übernimmt die DDL/DML — replace-Semantik wie im Original
     df.to_sql(table, eng, if_exists="replace", index=False, schema=schema, method="multi")
     dt_ms = int((perf_counter() - t0) * 1000)
 
-    dialect = getattr(getattr(eng, "dialect", None), "name", "sqlalchemy")
+    dialect = dialect_name or getattr(getattr(eng, "dialect", None), "name", "sqlalchemy")
     _echo_seed_line(
-        full_name=_qualify(table, schema),
+        full_name=full_name,
         rows=len(df),
         cols=df.shape[1],
         engine=dialect,
+        ms=dt_ms,
+        created_schema=False,
+        action="replaced",
+    )
+    return True
+
+
+def _handle_bigquery(table: str, df: pd.DataFrame, executor: Any, schema: str | None) -> bool:
+    """
+    Handle seeding for the BigQuery executor using the official client.
+
+    We detect BigQuery by the presence of an attribute named ``client``
+    that behaves like ``google.cloud.bigquery.Client``. The target dataset
+    is resolved as:
+
+      1) the provided ``schema`` argument (preferred; allows seeds/schema.yml
+         to control datasets explicitly), or
+      2) an executor attribute such as ``dataset`` / ``dataset_id``.
+
+    Notes:
+    - The dataset must already exist; this function does not create it.
+    - We use WRITE_TRUNCATE semantics (replace) to mirror the behavior of
+      the DuckDB / SQLAlchemy handlers.
+    """
+    client = getattr(executor, "client", None)
+    if client is None:
+        return False
+
+    # Prefer explicit schema from the caller / seeds/schema.yml.
+    dataset_id = (
+        schema or getattr(executor, "dataset", None) or getattr(executor, "dataset_id", None)
+    )
+    if not isinstance(dataset_id, str) or not dataset_id.strip():
+        # Not a BigQuery executor we know how to handle.
+        return False
+
+    dataset_id = dataset_id.strip()
+
+    # Project: executor may expose it explicitly; otherwise fall back to the
+    # client project (Application Default Credentials, etc.).
+    project_id = getattr(executor, "project", None)
+    if not isinstance(project_id, str) or not project_id.strip():
+        project_id = getattr(client, "project", None)
+
+    if isinstance(project_id, str) and project_id.strip():
+        table_id = f"{project_id.strip()}.{dataset_id}.{table}"
+        full_name = table_id
+    else:
+        # Dataset-qualified ID still works if a default project is set on the client.
+        table_id = f"{dataset_id}.{table}"
+        full_name = table_id
+
+    try:
+        from google.cloud import bigquery  # noqa PLC0415 type: ignore  # pragma: no cover
+    except Exception as exc:  # pragma: no cover - missing optional dependency
+        raise RuntimeError(
+            "google-cloud-bigquery is required for seeding into BigQuery, "
+            "but it is not installed. Install the BigQuery extras for "
+            "FastFlowTransform or add google-cloud-bigquery to your environment."
+        ) from exc
+
+    job_config = bigquery.LoadJobConfig(write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE)
+
+    t0 = perf_counter()
+    # Let the BigQuery client infer the schema from the pandas DataFrame.
+    load_job = client.load_table_from_dataframe(df, table_id, job_config=job_config)
+    load_job.result()  # Wait for completion
+    dt_ms = int((perf_counter() - t0) * 1000)
+
+    _echo_seed_line(
+        full_name=full_name,
+        rows=len(df),
+        cols=df.shape[1],
+        engine="bigquery",
         ms=dt_ms,
         created_schema=False,
         action="replaced",
@@ -678,11 +756,7 @@ def _handle_spark(
 
 Handler = Callable[[str, pd.DataFrame, Any, str | None], bool]
 
-_HANDLERS: Iterable[Handler] = (
-    _handle_duckdb,
-    _handle_sqlalchemy,
-    _handle_spark,
-)
+_HANDLERS: Iterable[Handler] = (_handle_duckdb, _handle_sqlalchemy, _handle_spark, _handle_bigquery)
 
 
 def materialize_seed(
@@ -690,10 +764,6 @@ def materialize_seed(
 ) -> None:
     """
     Materialize a DataFrame as a database table across engines.
-
-    Engine-spezifische Logik ist in dedizierten Handlern gekapselt
-    (_handle_duckdb/_handle_sqlalchemy/_handle_spark). Der Dispatcher
-    ruft sie der Reihe nach auf, bis einer übernimmt.
     """
     for handler in _HANDLERS:
         if handler(table, df, executor, schema):

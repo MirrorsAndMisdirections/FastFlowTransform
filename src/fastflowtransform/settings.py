@@ -37,6 +37,7 @@ class BigQueryConfig(BaseConfig):
     dataset: str | None = None
     location: str | None = None
     use_bigframes: bool = True
+    allow_create_dataset: bool = False
 
 
 class DatabricksSparkConfig(BaseConfig):
@@ -119,6 +120,7 @@ class EnvSettings(BaseSettings):
     BQ_PROJECT: str | None = None
     BQ_DATASET: str | None = None
     BQ_LOCATION: str | None = None
+    BQ_ALLOW_CREATE_DATASET: int | None = None
 
     # databricks spark
     DBR_MASTER: str | None = None
@@ -249,6 +251,13 @@ def _ov_bigquery(raw: dict[str, Any], env: EnvSettings) -> None:
     if uf is not None:
         bq["use_bigframes"] = uf.lower() in ("1", "true", "yes", "on")
 
+    acd = getattr(env, "BQ_ALLOW_CREATE_DATASET", None)
+    if acd is not None:
+        if isinstance(acd, str):
+            bq["allow_create_dataset"] = acd.strip().lower() in {"1", "true", "yes", "on"}
+        else:
+            bq["allow_create_dataset"] = bool(acd)
+
 
 def _ov_databricks_spark(raw: dict[str, Any], env: EnvSettings) -> None:
     dbr = raw.setdefault("databricks_spark", {})
@@ -269,7 +278,6 @@ def _ov_databricks_spark(raw: dict[str, Any], env: EnvSettings) -> None:
 
 def _ov_snowflake_snowpark(raw: dict[str, Any], env: EnvSettings) -> None:
     sf = raw.setdefault("snowflake_snowpark", {})
-    # Feld heißt überall "schema"
     _set_if(sf, "account", getattr(env, "SF_ACCOUNT", None))
     _set_if(sf, "user", getattr(env, "SF_USER", None))
     _set_if(sf, "password", getattr(env, "SF_PASSWORD", None))

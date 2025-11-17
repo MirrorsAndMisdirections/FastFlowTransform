@@ -158,10 +158,24 @@ def _full_refresh_table(executor: Any, relation: Any, rendered_sql: str) -> None
         full_refresh(relation, rendered_sql)
         return
 
+    # Best-effort qualified identifier for engines that expose it (e.g. BigQuery)
+    target = relation
+    qualify = getattr(executor, "_qualified_identifier", None)
+    if callable(qualify):
+        try:
+            proj = getattr(executor, "project", None)
+            dset = getattr(executor, "dataset", None) or getattr(executor, "schema", None)
+            if proj is not None or dset is not None:
+                target = qualify(relation, project=proj, dataset=dset)
+            else:
+                target = qualify(relation)
+        except Exception:
+            target = relation
+
     try:
         executor.create_table_as(relation, rendered_sql)
     except Exception:
-        _exec_sql(executor, f"create or replace table {relation} as {rendered_sql}")
+        _exec_sql(executor, f"create or replace table {target} as {rendered_sql}")
 
 
 UniqueKey = str | Sequence[str] | None

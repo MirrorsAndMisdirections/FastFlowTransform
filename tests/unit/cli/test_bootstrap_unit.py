@@ -177,9 +177,14 @@ def test_make_executor_bigquery_uses_correct_executor(monkeypatch):
         def run_python(self, *a, **k):
             pass
 
-    # patch BOTH BF and normal - code branches on use_bigframes
-    monkeypatch.setattr(bootstrap, "BigQueryExecutor", _FakeBQExec, raising=True)
-    monkeypatch.setattr(bootstrap, "BigQueryBFExecutor", _FakeBQExec, raising=True)
+    original_import = bootstrap._import_optional
+
+    def _fake_import(module_path: str, attr: str, *, extra: str | None = None):
+        if attr in {"BigQueryExecutor", "BigQueryBFExecutor"}:
+            return _FakeBQExec
+        return original_import(module_path, attr, extra=extra)
+
+    monkeypatch.setattr(bootstrap, "_import_optional", _fake_import, raising=True)
 
     prof = fake_bigquery_profile(use_bigframes=False)
     jenv = Environment()
@@ -202,7 +207,14 @@ def test_make_executor_duckdb(monkeypatch, tmp_path: Path):
         def run_python(self, *a, **k):
             pass
 
-    monkeypatch.setattr(bootstrap, "DuckExecutor", _FakeDuckExec, raising=True)
+    original_import = bootstrap._import_optional
+
+    def _fake_import(module_path: str, attr: str, *, extra: str | None = None):
+        if attr == "DuckExecutor":
+            return _FakeDuckExec
+        return original_import(module_path, attr, extra=extra)
+
+    monkeypatch.setattr(bootstrap, "_import_optional", _fake_import, raising=True)
 
     prof = fake_duckdb_profile(path=str(tmp_path / "test.duckdb"), schema="demo", catalog="demo")
     jenv = Environment()

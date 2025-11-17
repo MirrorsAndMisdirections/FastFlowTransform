@@ -1,4 +1,4 @@
-# tests/unit/executors/test_databricks_spark_exec_unit.py
+# tests/unit/executors/test_databricks_spark_unit.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,8 +8,8 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 
 from fastflowtransform.core import REGISTRY, Node
-from fastflowtransform.executors import databricks_spark_exec as mod
-from fastflowtransform.executors.databricks_spark_exec import (
+from fastflowtransform.executors import databricks_spark as mod
+from fastflowtransform.executors.databricks_spark import (
     _SparkConnShim,
     _split_db_table,
 )
@@ -347,7 +347,6 @@ def test_validate_required_no_requires_is_noop(exec_minimal):
 @pytest.mark.unit
 @pytest.mark.databricks_spark
 def test_materialize_relation_rejects_non_frame(exec_minimal, monkeypatch):
-    # für diesen Test brauchen wir das echte Verhalten
     monkeypatch.setattr(exec_minimal, "_is_frame", lambda obj: False)
     node = Node(name="x", kind="python", path=Path("."))
     with pytest.raises(TypeError, match="Spark model must return a Spark DataFrame"):
@@ -412,7 +411,7 @@ def test_storage_meta_prefers_node_storage(exec_minimal):
 @pytest.mark.unit
 @pytest.mark.databricks_spark
 def test_storage_meta_uses_global_lookup_when_node_empty(exec_minimal):
-    with patch("fastflowtransform.executors.databricks_spark_exec.storage.get_model_storage") as gm:
+    with patch("fastflowtransform.executors.databricks_spark.storage.get_model_storage") as gm:
         gm.return_value = {"path": "/tmp/global"}
         meta = exec_minimal._storage_meta(None, "some_relation")
     assert meta == {"path": "/tmp/global"}
@@ -432,7 +431,7 @@ def test_storage_meta_falls_back_to_registry_scan(exec_minimal, monkeypatch):
     REGISTRY.nodes = {"orders.ff": reg_node}
 
     # 2) relation_for(...) so patchen, dass es "orders" ergibt
-    with patch("fastflowtransform.executors.databricks_spark_exec.relation_for") as rel_for:
+    with patch("fastflowtransform.executors.databricks_spark.relation_for") as rel_for:
         rel_for.return_value = "orders"
 
         meta = exec_minimal._storage_meta(None, "orders")
@@ -452,8 +451,8 @@ def test_storage_meta_registry_scan_then_global(exec_minimal, monkeypatch):
     REGISTRY.nodes = {"orders.ff": reg_node}
 
     with (
-        patch("fastflowtransform.executors.databricks_spark_exec.relation_for") as rel_for,
-        patch("fastflowtransform.executors.databricks_spark_exec.storage.get_model_storage") as gm,
+        patch("fastflowtransform.executors.databricks_spark.relation_for") as rel_for,
+        patch("fastflowtransform.executors.databricks_spark.storage.get_model_storage") as gm,
     ):
         rel_for.return_value = "orders"
         gm.return_value = {"path": "/tmp/from_global"}
@@ -471,7 +470,7 @@ def test_format_relation_for_ref_iceberg(exec_minimal):
     exec_minimal.spark.catalog.currentDatabase.return_value = "demo"
     exec_minimal._format_handler = IcebergFormatHandler(exec_minimal.spark)
 
-    with patch("fastflowtransform.executors.databricks_spark_exec.relation_for") as rel_for:
+    with patch("fastflowtransform.executors.databricks_spark.relation_for") as rel_for:
         rel_for.return_value = "events_base"
         out = exec_minimal._format_relation_for_ref("events_base.ff")
 

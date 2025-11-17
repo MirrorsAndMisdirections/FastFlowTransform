@@ -9,7 +9,7 @@ FastFlowTransform’s CLI is the entry point for seeding data, running DAGs, gen
 | `fft seed <project> [--env dev]` | Materialize CSV/Parquet seeds into the configured engine. |
 | `fft run <project> [--env dev]` | Execute the DAG (obeys cache + parallel flags). |
 | `fft dag <project> --html` | Render the DAG graph/site for quick inspection. |
-| `fft docgen <project> --out site/docs` | Generate the full documentation bundle (graph + model pages + optional JSON). |
+| `fft docgen <project> [--out site/docs] [--emit-json path] [--open-source]` | Generate the full documentation bundle (graph + model pages + optional JSON). Default output is `<project>/site/docs`. |
 | `fft test <project> [--env dev]` | Run schema/data-quality tests defined in `project.yml` or schema YAML files. |
 | `fft utest <project>` | Execute unit tests defined under `tests/unit/*.yml`. |
 | `fft sync-db-comments <project>` | Push model/column descriptions into Postgres or Snowflake comments. |

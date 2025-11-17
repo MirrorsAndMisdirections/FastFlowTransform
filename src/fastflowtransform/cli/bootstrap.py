@@ -1,6 +1,7 @@
 # fastflowtransform/cli/bootstrap.py
 from __future__ import annotations
 
+import importlib
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -14,14 +15,6 @@ from jinja2 import Environment
 
 from fastflowtransform.core import REGISTRY
 from fastflowtransform.errors import DependencyNotFoundError
-from fastflowtransform.executors import (
-    BigQueryBFExecutor,
-    BigQueryExecutor,
-    DatabricksSparkExecutor,
-    DuckExecutor,
-    PostgresExecutor,
-    SnowflakeSnowparkExecutor,
-)
 from fastflowtransform.executors._shims import BigQueryConnShim, SAConnShim
 from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.logging import echo
@@ -73,6 +66,19 @@ def _resolve_project_path(project_arg: str) -> Path:
 def _die(msg: str, code: int = 1) -> NoReturn:
     echo(f"\n❌ {msg}")
     raise typer.Exit(code)
+
+
+def _import_optional(module_path: str, attr: str, *, extra: str | None = None) -> Any:
+    try:
+        module = importlib.import_module(module_path)
+        return getattr(module, attr)
+    except ModuleNotFoundError as exc:  # pragma: no cover - import guard
+        if extra:
+            _die(
+                f"Optional dependency for '{attr}' not found ({exc.name}).\n"
+                f"Install it with `pip install fastflowtransform[{extra}]`."
+            )
+        raise
 
 
 def _load_project_and_env(project_arg: str) -> tuple[Path, Environment]:
@@ -285,6 +291,9 @@ def _get_test_con(executor: Any) -> Any:
 def _make_executor(prof: Profile, jenv: Environment) -> tuple[Any, Callable, Callable]:
     ex: BaseExecutor
     if prof.engine == "duckdb":
+        DuckExecutor = _import_optional(
+            "fastflowtransform.executors.duckdb", "DuckExecutor", extra=None
+        )
         ex = DuckExecutor(
             db_path=prof.duckdb.path,
             schema=getattr(prof.duckdb, "db_schema", None),
@@ -296,6 +305,9 @@ def _make_executor(prof: Profile, jenv: Environment) -> tuple[Any, Callable, Cal
         if prof.postgres.dsn is None:
             raise RuntimeError("Postgres DSN must be set")
 
+        PostgresExecutor = _import_optional(
+            "fastflowtransform.executors.postgres", "PostgresExecutor", extra="postgres"
+        )
         ex = PostgresExecutor(dsn=prof.postgres.dsn, schema=prof.postgres.db_schema)
         return ex, (lambda n: ex.run_sql(n, jenv)), ex.run_python
 
@@ -304,20 +316,37 @@ def _make_executor(prof: Profile, jenv: Environment) -> tuple[Any, Callable, Cal
             raise RuntimeError("BigQuery dataset must be set")
 
         if prof.bigquery.use_bigframes:
+            BigQueryBFExecutor = _import_optional(
+                "fastflowtransform.executors.bigquery.bigframes",
+                "BigQueryBFExecutor",
+                extra="bigquery_bf",
+            )
             ex = BigQueryBFExecutor(
                 project=prof.bigquery.project or "",
                 dataset=prof.bigquery.dataset,
                 location=prof.bigquery.location,
+                allow_create_dataset=prof.bigquery.allow_create_dataset,
             )
         else:
+            BigQueryExecutor = _import_optional(
+                "fastflowtransform.executors.bigquery.pandas",
+                "BigQueryExecutor",
+                extra="bigquery",
+            )
             ex = BigQueryExecutor(
                 project=prof.bigquery.project or "",
                 dataset=prof.bigquery.dataset,
                 location=prof.bigquery.location,
+                allow_create_dataset=prof.bigquery.allow_create_dataset,
             )
         return ex, (lambda n: ex.run_sql(n, jenv)), ex.run_python
 
     if prof.engine == "databricks_spark":
+        DatabricksSparkExecutor = _import_optional(
+            "fastflowtransform.executors.databricks_spark",
+            "DatabricksSparkExecutor",
+            extra="spark",
+        )
         ex = DatabricksSparkExecutor(
             master=prof.databricks_spark.master,
             app_name=prof.databricks_spark.app_name,
@@ -342,6 +371,11 @@ def _make_executor(prof: Profile, jenv: Environment) -> tuple[Any, Callable, Cal
         }
         if prof.snowflake_snowpark.role:
             cfg["role"] = prof.snowflake_snowpark.role
+        SnowflakeSnowparkExecutor = _import_optional(
+            "fastflowtransform.executors.snowflake_snowpark",
+            "SnowflakeSnowparkExecutor",
+            extra="snowflake",
+        )
         ex = SnowflakeSnowparkExecutor(cfg)
         return ex, (lambda n: ex.run_sql(n, jenv)), ex.run_python
 

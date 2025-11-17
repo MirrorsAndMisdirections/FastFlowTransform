@@ -1,4 +1,4 @@
-# 🧭 FastFlowTransform – Technical Developer Documentation (v0.4)
+# 🧭 FastFlowTransform – Technical Developer Documentation
 
 > Status: latest updates from your context dump. This document consolidates project structure, architecture, core APIs, error handling, CLI, examples, and roadmap into a print/git-friendly Markdown.
 >
@@ -53,64 +53,7 @@
 
 ### Project Layout
 
-```text
-fastflowtransform/
-├── pyproject.toml
-├── src/
-│   └── fastflowtransform/
-│       ├── __init__.py
-│       ├── cli.py
-│       ├── core.py
-│       ├── dag.py
-│       ├── docs.py
-│       ├── errors.py
-│       ├── settings.py
-│       ├── seeding.py
-│       ├── testing.py
-│       ├── validation.py
-│       ├── decorators.py                 # optional, if not kept in core.py
-│       ├── docs/
-│       │   └── templates/
-│       │       ├── index.html.j2
-│       │       └── model.html.j2
-│       ├── executors/
-│       │   ├── __init__.py
-│       │   ├── base.py
-│       │   ├── duckdb_exec.py
-│       │   ├── postgres_exec.py
-│       │   ├── bigquery_exec.py          # pandas + BigQuery client
-│       │   ├── bigquery_bf_exec.py       # BigQuery DataFrames (bigframes)
-│       │   ├── databricks_spark_exec.py  # PySpark (without pandas)
-│       │   └── snowflake_snowpark_exec.py# Snowpark (without pandas)
-│       └── streaming/
-│           ├── __init__.py
-│           ├── file_tail.py
-│           └── sessionizer.py
-│
-├── examples/
-│   ├── simple_duckdb/
-│   │   ├── models/
-│   │   │   ├── users.ff.sql
-│   │   │   ├── users_enriched.ff.py
-│   │   │   ├── orders.ff.sql
-│   │   │   ├── mart_orders_enriched.ff.py
-│   │   │   └── mart_users.ff.sql
-│   │   ├── seeds/
-│   │   │   ├── seed_users.csv
-│   │   │   └── seed_orders.csv
-│   │   ├── sources.yml
-│   │   ├── project.yml
-│   │   ├── Makefile
-│   │   └── .local/demo.duckdb  (after make seed/run)
-│   └── postgres/                # similar structure if needed
-│
-├── tests/
-│   ├── conftest.py
-│   ├── duckdb/ …                # end-to-end + unit
-│   ├── postgres/ …
-│   └── streaming/ …
-└── README.md
-```
+For an up-to-date view, browse the repository tree or run `find . -maxdepth 2` from the root; all examples live under `examples/` with their own READMEs.
 
 ### Example Projects and Seeds
 
@@ -144,20 +87,6 @@ Need to understand profile precedence, `.env` layering, or the Pydantic models t
 ### Parallel Execution and Cache
 
 Level-wise parallelism, cache modes, fingerprint formula, and the `_ff_meta` audit table are documented in [Cache_and_Parallelism.md](./Cache_and_Parallelism.md). Use that reference for CLI examples (`--jobs`, `--cache`, `--rebuild`), skip conditions, and troubleshooting tips related to concurrency.
-
-### Roadmap Snapshot
-
-| Version | Content                                           |
-|---------|---------------------------------------------------|
-| 0.2     | `config(materialized=...)`, Jinja macros, variables |
-| 0.3     | Parallel execution, cache                         |
-| 0.4     | Incremental models                                |
-| 0.5     | Streaming connectors (Kafka, S3)                  |
-| 1.0     | Stable API, plugin SDK                            |
-
-> See also: feature pyramid & roadmap phases (OSS/SaaS) in the separate document.
-
----
 
 ### Cross-Table Reconciliations
 
@@ -293,13 +222,13 @@ class BaseExecutor(ABC):
     def _materialize_relation(self, relation: str, df: pd.DataFrame, node: Node) -> None: ...
 ```
 
-**DuckDB (`duckdb_exec.py`)**
+**DuckDB (`duckdb.py`)**
 
 - `run_sql(node, env)` renders Jinja (`ref/source`) and executes the SQL.
 - `_read_relation` loads a table as `DataFrame`; surfaces actionable errors when a dependency is missing.
 - `_materialize_relation` writes the `DataFrame` as a table (`create or replace table ...`).
 
-**Postgres (`postgres_exec.py`)**
+**Postgres (`postgres.py`)**
 
 - `_SAConnShim` (compatible with `testing._exec`).
 - `run_sql` renders SQL and rewrites `CREATE OR REPLACE TABLE` to `DROP + CREATE AS`.
@@ -357,41 +286,7 @@ def seed_project(project_dir: Path, executor, schema: Optional[str] = None) -> i
 
 ### CLI Implementation
 
-Operational usage lives in [CLI Flows](#cli-flows). This section drills into the Typer command definitions in `cli.py`.
-
-**Commands:**
-
-- `fft run <project> [--env dev] [--engine ...]`
-- `fft dag <project> [--env dev] [--html] [--select ...] [--with-schema/--no-schema]`
-- `fft docgen <project> [--env dev] [--out dir] [--emit-json path] [--open-source]`
-- `fft test <project> [--env dev] [--select batch|streaming|tag:...]`
-- `fft seed <project> [--env dev]`
-- `fft sync-db-comments <project> [--env dev] [--dry-run]`
-- `fft utest <project> [--env dev] [--cache off|ro|rw] [--reuse-meta]`
-- `fft --version`
-
-**Key components:**
-
-```python
-def _load_project_and_env(project_arg) -> tuple[Path, Environment]: ...
-def _resolve_profile(env_name, engine, proj) -> tuple[EnvSettings, Profile]: ...
-def _get_test_con(executor: Any) -> Any: ...
-```
-
-**Test summary (exit 2 on failures):**
-
-```
-Data Quality Summary
-────────────────────
-✅ not_null           users.email                              (3ms)
-❌ unique             users.id                                 (2ms)
-   ↳ users.id has 1 duplicate
-
-Totals
-──────
-✓ passed: 1
-✗ failed: 1
-```
+Operational usage lives in [CLI Flows](#cli-flows) and the dedicated [CLI Guide](CLI_Guide.md). For implementation details, see the Typer commands in `src/fastflowtransform/cli/`.
 
 ---
 
@@ -436,7 +331,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 from fastflowtransform.core import REGISTRY
 from fastflowtransform.dag import topo_sort
-from fastflowtransform.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.executors.duckdb import DuckExecutor
 
 proj = Path("examples/simple_duckdb").resolve()
 REGISTRY.load_project(proj)

@@ -4,6 +4,7 @@ DB ?= .local/macros_demo.duckdb
 PROJECT ?= .
 UV ?= uv
 ENGINE ?= duckdb
+BQ_FRAME ?= bigframes
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -24,8 +25,21 @@ ifeq ($(ENGINE),databricks_spark)
   PROFILE_ENV = dev_databricks
   ENGINE_TAG = engine:databricks_spark
 endif
+ifeq ($(ENGINE),bigquery)
+  ENGINE_TAG = engine:bigquery
+  ifeq ($(BQ_FRAME),pandas)
+    PROFILE_ENV = dev_bigquery_pandas
+  else
+    PROFILE_ENV = dev_bigquery_bigframes
+  endif
+endif
 
-BASE_ENV = FFT_ACTIVE_ENV=$(PROFILE_ENV)
+BASE_ENV = FFT_ACTIVE_ENV=$(PROFILE_ENV) FF_ENGINE=$(ENGINE)
+
+ifeq ($(ENGINE),bigquery)
+  BASE_ENV := $(BASE_ENV) FF_ENGINE_VARIANT=$(BQ_FRAME)
+endif
+
 RUN_ENV = $(BASE_ENV)
 SELECT_FLAGS = --select tag:example:macros_demo --select tag:$(ENGINE_TAG)
 
@@ -36,6 +50,8 @@ else ifeq ($(ENGINE),postgres)
   CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine postgres --env "$(PROFILE_ENV)" --project "$(PROJECT)"
 else ifeq ($(ENGINE),databricks_spark)
   CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine databricks_spark --env "$(PROFILE_ENV)" --project "$(PROJECT)"
+else ifeq ($(ENGINE),bigquery)
+  CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine bigquery --env "$(PROFILE_ENV)" --project "$(PROJECT)"
 else
   CLEAN_CMD = $(error Unsupported ENGINE=$(ENGINE) for cleanup)
 endif

@@ -16,7 +16,7 @@ from sqlalchemy import text
 
 from fastflowtransform import utest
 from fastflowtransform.core import REGISTRY
-from fastflowtransform.executors.databricks_spark_exec import DatabricksSparkExecutor
+from fastflowtransform.executors.databricks_spark import DatabricksSparkExecutor
 from tests.common.utils import ROOT, run
 
 
@@ -123,7 +123,7 @@ def pg_seeded(pg_project, pg_env):
 # ---- Spark ----
 @pytest.fixture
 def exec_minimal(monkeypatch):
-    with patch("fastflowtransform.executors.databricks_spark_exec.SparkSession") as SP:
+    with patch("fastflowtransform.executors.databricks_spark.SparkSession") as SP:
         fake_spark = MagicMock()
         SP.builder.master.return_value.appName.return_value.getOrCreate.return_value = fake_spark
         ex = DatabricksSparkExecutor()
@@ -141,7 +141,7 @@ def exec_factory():
     """
 
     def _make(**kwargs):
-        with patch("fastflowtransform.executors.databricks_spark_exec.SparkSession") as SP:
+        with patch("fastflowtransform.executors.databricks_spark.SparkSession") as SP:
             fake_builder = SP.builder.master.return_value.appName.return_value
             # make .config(...) chainable
             fake_builder.config.return_value = fake_builder
@@ -210,7 +210,7 @@ def fake_registry(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def duckdb_executor():
+def duckdbutor():
     """
     Fake-Executor:
     - has .con
@@ -236,9 +236,9 @@ def duckdb_executor():
 
 
 @pytest.fixture
-def postgres_executor():
+def postgresutor():
     """
-    Fake-Executor für den Postgres-Zweig in _read_result.
+    Fake-Executor for Postgres in _read_result.
     """
     engine = MagicMock()
 
@@ -264,7 +264,7 @@ def duckdb_engine_env(tmp_path_factory):
 
 @pytest.fixture(scope="session")
 def postgres_engine_env():
-    """Basic env für Postgres. Skipped if DSN is missing or DB not reachable."""
+    """Basic env for Postgres. Skipped if DSN is missing or DB not reachable."""
     dsn = os.environ.get(
         "FF_PG_DSN",
         "postgresql+psycopg://postgres:postgres@localhost:5432/ffdb",
@@ -302,3 +302,30 @@ def spark_engine_env(tmp_path_factory):
         "FF_DBR_DATABASE": "ff_examples_ci",
         "FF_SPARK_WAREHOUSE_DIR": str(warehouse),
     }
+
+
+@pytest.fixture(scope="session")
+def bigquery_engine_env():
+    """
+    Basic env for BigQuery examples. Skips if required env vars are missing.
+    """
+    project = os.environ.get("FF_BQ_PROJECT")
+    dataset = os.environ.get("FF_BQ_DATASET")
+    location = os.environ.get("FF_BQ_LOCATION")
+
+    if not (project and dataset and location):
+        pytest.skip("FF_BQ_PROJECT/FF_BQ_DATASET/FF_BQ_LOCATION not set for BigQuery tests")
+
+    env = {
+        "FF_ENGINE": "bigquery",
+        "FF_ENGINE_VARIANT": os.environ.get("FF_ENGINE_VARIANT", "bigframes"),
+        "FF_BQ_PROJECT": project,
+        "FF_BQ_DATASET": dataset,
+        "FF_BQ_LOCATION": location,
+    }
+
+    creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if creds:
+        env["GOOGLE_APPLICATION_CREDENTIALS"] = creds
+
+    return env

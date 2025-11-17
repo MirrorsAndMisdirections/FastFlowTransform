@@ -55,6 +55,7 @@ def model(
     name: str | None = None,
     deps: Sequence[str] | None = None,
     require: Any | None = None,
+    requires: Any | None = None,
     *,
     tags: Sequence[str] | None = None,
     kind: str = "python",
@@ -67,7 +68,7 @@ def model(
     Args:
         name: Logical node name in the DAG (defaults to function name).
         deps: Upstream node names (e.g., ['users.ff']).
-        require:
+        require / requires:
             - Single dependency: Iterable[str] of required columns from that dependency.
             - Multiple dependencies: Mapping[dep_name, Iterable[str]]
               (dep_name = logical name or physical relation).
@@ -76,6 +77,11 @@ def model(
         materialized: Shorthand for meta['materialized']; mirrors config(materialized='...').
         meta: Arbitrary metadata for executors/docs (merged with materialized if provided).
     """
+    # Normalize the alias: allow only one of require/requires
+    if require is not None and requires is not None:
+        raise TypeError("Pass at most one of 'require' or 'requires', not both")
+
+    effective_require = require if require is not None else requires
 
     def deco(func: Callable[P, R_co]) -> HasFFMeta[P, R_co]:
         f_any = cast(Any, func)
@@ -88,7 +94,7 @@ def model(
         f_any.__ff_deps__ = fdeps
 
         # Normalize require and mirror it on the function and inside the registry
-        req_norm = _normalize_require(fdeps, require)
+        req_norm = _normalize_require(fdeps, effective_require)
         f_any.__ff_require__ = req_norm  # useful for tooling/loaders
         REGISTRY.py_requires[fname] = req_norm  # executors read this directly
 
@@ -120,14 +126,52 @@ def model(
 
 
 def engine_model(
-    *, only: str | tuple[str, ...], **model_kwargs: Any
-) -> Callable[[Callable[P, R_co]], HasFFMeta[P, R_co]]:
-    allowed = {only} if isinstance(only, str) else {e.lower() for e in only}
+    *,
+    only: str | Iterable[str] | None = None,
+    env_match: Mapping[str, str] | None = None,
+    **model_kwargs: Any,
+) -> Callable[[Callable[P, R_co]], HasFFMeta[P, R_co] | Callable[P, R_co]]:
+    """
+    Env-aware decorator to register a Python model only when the current
+    environment matches.
 
-    def deco(fn):
-        current = os.getenv("FF_ENGINE", "").lower()
-        if current in allowed:
+    Args:
+        only:
+            Backwards compatible engine filter based on FF_ENGINE
+            (e.g. only="bigquery" or only=("duckdb", "postgres")).
+        env_match:
+            Arbitrary environment match, e.g.:
+                env_match={"FF_ENGINE": "bigquery", "FF_ENGINE_VARIANT": "bigframes"}
+    """
+
+    # Normalize "only" → allowed engine names (lowercased)
+    allowed_engines: set[str] | None = None
+    if only is not None:
+        if isinstance(only, str):
+            allowed_engines = {only.lower()}
+        else:
+            allowed_engines = {str(e).lower() for e in only}
+
+    def should_register() -> bool:
+        # 1) Check env_match if provided
+        if env_match:
+            for key, expected in env_match.items():
+                if os.getenv(key) != expected:
+                    return False
+
+        # 2) Check FF_ENGINE against "only" if provided
+        if allowed_engines is not None:
+            current = os.getenv("FF_ENGINE", "").lower()
+            if current not in allowed_engines:
+                return False
+
+        return True
+
+    def deco(fn: Callable[P, R_co]) -> HasFFMeta[P, R_co] | Callable[P, R_co]:
+        if should_register():
+            # Register in REGISTRY and attach __ff_* metadata
             return model(**model_kwargs)(fn)
-        return fn  # stays undecorated → no registry entry
+        # No registration in this env → return the plain function
+        return fn
 
     return deco

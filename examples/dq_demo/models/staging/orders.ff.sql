@@ -5,7 +5,8 @@
         'scope:staging',
         'engine:duckdb',
         'engine:postgres',
-        'engine:databricks_spark'
+        'engine:databricks_spark',
+        'engine:bigquery'
     ],
 ) }}
 
