@@ -261,6 +261,7 @@ jobs:
       - name: Load example env defaults
         run: |
           set -a
+          unset FF_PG_DSN FF_PG_SCHEMA
           if [ -f "${{ matrix.env_file }}" ]; then
             source "${{ matrix.env_file }}"
           fi
