@@ -123,12 +123,79 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # DuckDB examples
           - engine: duckdb
             extra: ""
+            example: api_demo
+          - engine: duckdb
+            extra: ""
+            example: basic_demo
+          - engine: duckdb
+            extra: ""
+            example: cache_demo
+          - engine: duckdb
+            extra: ""
+            example: dq_demo
+          - engine: duckdb
+            extra: ""
+            example: incremental_demo
+          - engine: duckdb
+            extra: ""
+            example: macros_demo
+          - engine: duckdb
+            extra: ""
+            example: materializations_demo
+          # Postgres examples
           - engine: postgres
             extra: "postgres"
+            example: api_demo
+          - engine: postgres
+            extra: "postgres"
+            example: basic_demo
+          - engine: postgres
+            extra: "postgres"
+            example: cache_demo
+          - engine: postgres
+            extra: "postgres"
+            example: dq_demo
+          - engine: postgres
+            extra: "postgres"
+            example: incremental_demo
+          - engine: postgres
+            extra: "postgres"
+            example: macros_demo
+          - engine: postgres
+            extra: "postgres"
+            example: materializations_demo
+          # Spark examples
           - engine: databricks_spark
             extra: "spark"
+            example: api_demo
+            java: true
+          - engine: databricks_spark
+            extra: "spark"
+            example: basic_demo
+            java: true
+          - engine: databricks_spark
+            extra: "spark"
+            example: cache_demo
+            java: true
+          - engine: databricks_spark
+            extra: "spark"
+            example: dq_demo
+            java: true
+          - engine: databricks_spark
+            extra: "spark"
+            example: incremental_demo
+            java: true
+          - engine: databricks_spark
+            extra: "spark"
+            example: macros_demo
+            java: true
+          - engine: databricks_spark
+            extra: "spark"
+            example: materializations_demo
+            java: true
 
     services:
       postgres:
@@ -175,15 +242,8 @@ jobs:
           FF_PG_DSN: postgresql+psycopg://postgres:postgres@localhost:5432/fastflowtransform
           FF_PG_SCHEMA: ci_examples
         run: |
-          echo "Running integration tests for engine=${{ matrix.engine }}"
-          case "${{ matrix.engine }}" in
-            duckdb)
-              uv run pytest -m "integration and duckdb" --maxfail=1 -q tests
-              ;;
-            postgres)
-              uv run pytest -m "integration and postgres" --maxfail=1 -q tests
-              ;;
-            databricks_spark)
-              uv run pytest -m "integration and databricks_spark" --maxfail=1 -q tests
-              ;;
-          esac
+          echo "Running integration tests for engine=${{ matrix.engine }} example=${{ matrix.example }}"
+          uv run pytest -m "integration and ${{ matrix.engine }}" \
+            -vv --show-capture=all --log-cli-level=INFO \
+            -k "${{ matrix.example }} and ${{ matrix.engine }}" \
+            --maxfail=1 -q tests/integration/examples/test_examples_matrix.py
