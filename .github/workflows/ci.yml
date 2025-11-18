@@ -265,6 +265,8 @@ jobs:
           if [ -f "${{ matrix.env_file }}" ]; then
             source "${{ matrix.env_file }}"
           fi
+          # Fallback: ensure schema defaults to the example name if not set by env file
+          export FF_PG_SCHEMA=${FF_PG_SCHEMA:-${{ matrix.example }}}
           set +a
 
       - name: Run example/integration tests for engine
