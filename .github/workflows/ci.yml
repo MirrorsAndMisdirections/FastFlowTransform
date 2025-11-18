@@ -265,8 +265,11 @@ jobs:
           if [ -f "${{ matrix.env_file }}" ]; then
             source "${{ matrix.env_file }}"
           fi
-          # Fallback: ensure schema defaults to the example name if not set by env file
-          export FF_PG_SCHEMA=${FF_PG_SCHEMA:-${{ matrix.example }}}
+          # Normalize Postgres settings per example to avoid cross-job leakage
+          if [ "${{ matrix.engine }}" = "postgres" ]; then
+            export FF_PG_SCHEMA="${{ matrix.example }}"
+            export FF_PG_DSN=${FF_PG_DSN:-postgresql+psycopg://postgres:postgres@localhost:5432/fastflowtransform}
+          fi
           set +a
 
       - name: Run example/integration tests for engine
