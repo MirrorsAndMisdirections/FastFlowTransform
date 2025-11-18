@@ -1,8 +1,20 @@
-from pyspark.sql import DataFrame
-from pyspark.sql import Window
-from pyspark.sql import functions as F
-
 from fastflowtransform import engine_model
+
+try:
+    from pyspark.sql import DataFrame
+    from pyspark.sql import Window
+    from pyspark.sql import functions as F
+except Exception:  # pragma: no cover - optional dep guard
+    from typing import Any
+
+    DataFrame = Any  # type: ignore[misc]
+    Window = None  # type: ignore[assignment]
+    F = None  # type: ignore[assignment]
+    _spark_import_error = RuntimeError(
+        "pyspark is required for this model. Install fastflowtransform[spark]."
+    )
+else:
+    _spark_import_error = None
 
 
 @engine_model(
@@ -19,6 +31,9 @@ from fastflowtransform import engine_model
 )
 def build(users_clean: DataFrame) -> DataFrame:
     """Return the latest signup per email domain using PySpark DataFrame operations."""
+    if _spark_import_error:
+        raise _spark_import_error
+
     window = Window.partitionBy("email_domain").orderBy(F.col("signup_date").desc())
 
     latest = (

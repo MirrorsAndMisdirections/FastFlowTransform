@@ -1,6 +1,18 @@
 from fastflowtransform import engine_model
-from pyspark.sql import DataFrame as SparkDataFrame
-from pyspark.sql import SparkSession
+
+try:
+    from pyspark.sql import DataFrame as SparkDataFrame
+    from pyspark.sql import SparkSession
+except Exception:  # pragma: no cover - optional dep guard
+    from typing import Any
+
+    SparkDataFrame = Any  # type: ignore[misc]
+    SparkSession = None  # type: ignore[assignment]
+    _spark_import_error = RuntimeError(
+        "pyspark is required for this model. Install fastflowtransform[spark]."
+    )
+else:
+    _spark_import_error = None
 
 try:
     import httpx
@@ -19,6 +31,9 @@ def fetch(users_df: SparkDataFrame) -> SparkDataFrame:
     Plain requests-based HTTP fetch that returns a Spark DataFrame.
     Useful when you need full control over authentication, retries, etc.
     """
+    if _spark_import_error:
+        raise _spark_import_error
+
     spark = (
         users_df.sparkSession
         if isinstance(users_df, SparkDataFrame)

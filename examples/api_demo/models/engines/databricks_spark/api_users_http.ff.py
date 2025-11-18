@@ -1,7 +1,19 @@
 from fastflowtransform import engine_model
 from fastflowtransform.api.http import get_df
-from pyspark.sql import DataFrame as SparkDataFrame
-from pyspark.sql import SparkSession
+
+try:
+    from pyspark.sql import DataFrame as SparkDataFrame
+    from pyspark.sql import SparkSession
+except Exception:  # pragma: no cover - optional dep guard
+    from typing import Any
+
+    SparkDataFrame = Any  # type: ignore[misc]
+    SparkSession = None  # type: ignore[assignment]
+    _spark_import_error = RuntimeError(
+        "pyspark is required for this model. Install fastflowtransform[spark]."
+    )
+else:
+    _spark_import_error = None
 
 
 @engine_model(
@@ -15,6 +27,9 @@ def fetch(users_df: SparkDataFrame) -> SparkDataFrame:
     Fetch demo users via the FFT HTTP helper and return a Spark DataFrame.
     Leverages get_df(..., output='spark') to stay entirely in Spark.
     """
+    if _spark_import_error:
+        raise _spark_import_error
+
     spark = (
         users_df.sparkSession
         if isinstance(users_df, SparkDataFrame)

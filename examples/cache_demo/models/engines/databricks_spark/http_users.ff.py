@@ -1,5 +1,16 @@
-from pyspark.sql import DataFrame
-from pyspark.sql.functions import col
+try:
+    from pyspark.sql import DataFrame
+    from pyspark.sql.functions import col
+except Exception:  # pragma: no cover - optional dep guard
+    from typing import Any
+
+    DataFrame = Any  # type: ignore[misc]
+    col = None  # type: ignore[assignment]
+    _spark_import_error = RuntimeError(
+        "pyspark is required for this model. Install fastflowtransform[spark]."
+    )
+else:
+    _spark_import_error = None
 
 from fastflowtransform import engine_model
 from fastflowtransform.api.http import get_df
@@ -15,6 +26,9 @@ from fastflowtransform.api.http import get_df
     },
 )
 def fetch(_: DataFrame) -> DataFrame:
+    if _spark_import_error:
+        raise _spark_import_error
+
     df = get_df(
         url="https://jsonplaceholder.typicode.com/users",
         record_path=None,

@@ -1,10 +1,19 @@
 from __future__ import annotations
 
-import bigframes.pandas as bpd
 from fastflowtransform import engine_model
 from fastflowtransform.api.http import get_df
 
-BFDataFrame = bpd.DataFrame
+try:
+    import bigframes.pandas as bpd
+except Exception:  # pragma: no cover - optional dep guard
+    bpd = None  # type: ignore[assignment]
+    BFDataFrame = object  # type: ignore[misc,assignment]
+    _bf_import_error = RuntimeError(
+        "bigframes is required for this model. Install fastflowtransform[bigquery_bf]."
+    )
+else:
+    BFDataFrame = bpd.DataFrame
+    _bf_import_error = None
 
 
 @engine_model(
@@ -20,6 +29,9 @@ def fetch(_: BFDataFrame) -> BFDataFrame:
     """
     Fetch users via the FFT HTTP helper and return a BigFrames DataFrame.
     """
+    if _bf_import_error:
+        raise _bf_import_error
+
     df = get_df(
         url="https://jsonplaceholder.typicode.com/users",
         record_path=None,
