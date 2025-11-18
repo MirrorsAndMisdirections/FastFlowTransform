@@ -275,6 +275,10 @@ jobs:
       - name: Run example/integration tests for engine
         run: |
           echo "Running integration tests for engine=${{ matrix.engine }} example=${{ matrix.example }}"
+          if [ "${{ matrix.engine }}" = "postgres" ]; then
+            export FF_PG_SCHEMA="${{ matrix.example }}"
+            export FF_PG_DSN="${FF_PG_DSN:-postgresql+psycopg://postgres:postgres@localhost:5432/fastflowtransform}"
+          fi
           uv run pytest -m "integration and ${{ matrix.engine }}" \
             -vv --show-capture=all --log-cli-level=INFO \
             -k "${{ matrix.example }} and ${{ matrix.engine }}" \
