@@ -3,9 +3,9 @@ from pyspark.sql import DataFrame as SparkDataFrame
 from pyspark.sql import SparkSession
 
 try:
-    import requests
+    import httpx
 except Exception as _e:  # pragma: no cover
-    raise RuntimeError("Please install 'requests' to run this model") from _e
+    raise RuntimeError("Please install 'httpx' to run this model") from _e
 
 
 @engine_model(
@@ -27,7 +27,7 @@ def fetch(users_df: SparkDataFrame) -> SparkDataFrame:
     if spark is None:
         spark = SparkSession.builder.getOrCreate()
 
-    resp = requests.get("https://jsonplaceholder.typicode.com/users", timeout=30)
+    resp = httpx.get("https://jsonplaceholder.typicode.com/users", timeout=30.0)
     resp.raise_for_status()
     rows = resp.json()
 

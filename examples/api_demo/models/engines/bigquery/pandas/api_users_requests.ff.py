@@ -2,9 +2,9 @@ from fastflowtransform import engine_model
 import pandas as pd
 
 try:
-    import requests
+    import httpx
 except Exception as _e:  # pragma: no cover
-    raise RuntimeError("Please install 'requests' to run this model") from _e
+    raise RuntimeError("Please install 'httpx' to run this model") from _e
 
 
 @engine_model(
@@ -17,9 +17,9 @@ except Exception as _e:  # pragma: no cover
     tags=["example:api_demo", "scope:engine", "engine:bigquery"],
 )
 def fetch(_: pd.DataFrame) -> pd.DataFrame:
-    """Fetch users via plain requests (pandas client)."""
+    """Fetch users via plain httpx (pandas client)."""
     url = "https://jsonplaceholder.typicode.com/users"
-    resp = requests.get(url, timeout=30)
+    resp = httpx.get(url, timeout=30.0)
     resp.raise_for_status()
     data = resp.json()
 

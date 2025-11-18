@@ -6,9 +6,9 @@ from fastflowtransform import engine_model
 BFDataFrame = bpd.DataFrame
 
 try:
-    import requests
+    import httpx
 except Exception as _e:  # pragma: no cover
-    raise RuntimeError("Please install 'requests' to run this model") from _e
+    raise RuntimeError("Please install 'httpx' to run this model") from _e
 
 
 @engine_model(
@@ -21,8 +21,8 @@ except Exception as _e:  # pragma: no cover
     tags=["example:api_demo", "scope:engine", "engine:bigquery"],
 )
 def fetch(_: BFDataFrame) -> BFDataFrame:
-    """Fetch users via plain requests and return a BigFrames DataFrame."""
-    resp = requests.get("https://jsonplaceholder.typicode.com/users", timeout=30)
+    """Fetch users via plain httpx and return a BigFrames DataFrame."""
+    resp = httpx.get("https://jsonplaceholder.typicode.com/users", timeout=30.0)
     resp.raise_for_status()
     df = bpd.DataFrame(resp.json())  # accepts a JSON-serialisable list of dicts
     return df.loc[:, ["id", "email", "username", "name"]].rename(  # type: ignore[arg-type]
