@@ -1,6 +1,6 @@
 # Data Quality Demo Project
 
-The **Data Quality Demo** shows how to use **all built-in FFT data quality tests** on a small, understandable model:
+The **Data Quality Demo** shows how to use **all built-in FFT data quality tests** plus **custom DQ tests (Python & SQL)** on a small, understandable model:
 
 * Column checks:
 
@@ -17,6 +17,11 @@ The **Data Quality Demo** shows how to use **all built-in FFT data quality tests
   * `reconcile_ratio_within`
   * `reconcile_diff_within`
   * `reconcile_coverage`
+
+* Custom tests (demo):
+
+  * `min_positive_share` (Python-based)
+  * `no_future_orders` (SQL-based)
 
 It uses a simple **customers / orders / mart** setup so you can see exactly what each test does and how it fails when something goes wrong.
 
@@ -66,6 +71,11 @@ examples/dq_demo/
       orders.ff.sql
     marts/
       mart_orders_agg.ff.sql
+
+  tests/
+    dq/
+      min_positive_share.ff.py
+      no_future_orders.ff.sql
 ```
 
 ### Seeds
@@ -218,6 +228,23 @@ tests:
     column: last_order_ts
     max_delay_minutes: 100000000
     tags: [example:dq_demo, batch]
+
+  # 7) Custom Python test: ensure at least a given share of positive amounts
+  - type: min_positive_share
+    table: orders
+    column: amount
+    params:
+      min_share: 0.75
+      where: "amount <> 0"
+    tags: [example:dq_demo, batch]
+
+  # 8) Custom SQL test: no future orders allowed
+  - type: no_future_orders
+    table: orders
+    column: order_ts
+    params:
+      where: "amount <> 0"
+    tags: [example:dq_demo, batch]
 ```
 
 ### Cross-table reconciliations
@@ -273,6 +300,133 @@ tests:
 ```
 
 This set of tests touches **all available test types** and ties directly back to the simple data model.
+
+---
+
+## Custom DQ tests (Python & SQL)
+
+The demo also shows how to define **custom data quality tests** that integrate with:
+
+* the `project.yml → tests:` block,
+* the `fft test` CLI,
+* and the same summary output as built-in tests.
+
+### Python-based test: `min_positive_share`
+
+File: `examples/dq_demo/tests/dq/min_positive_share.ff.py`
+
+```python
+from __future__ import annotations
+
+from typing import Any
+
+from fastflowtransform.decorators import dq_test
+from fastflowtransform.testing import base as testing
+
+
+@dq_test("min_positive_share")
+def min_positive_share(
+    con: Any,
+    table: str,
+    column: str | None,
+    params: dict[str, Any],
+) -> tuple[bool, str | None, str | None]:
+    """
+    Custom DQ test: require that at least `min_share` of rows have column > 0.
+
+    Parameters (from project.yml → tests → params):
+      - min_share: float in [0,1], e.g. 0.75
+      - where: optional filter (string) to restrict the population
+    """
+    if column is None:
+        example = f"select count(*) from {table} where <column> > 0"
+        return False, "min_positive_share requires a 'column' parameter", example
+
+    # Params come from project.yml under `params:`
+    cfg: dict[str, Any] = params.get("params") or params  # project.yml wrapper
+    min_share: float = cfg["min_share"]
+    where: str | None = cfg.get("where")
+
+    where_clause = f" where {where}" if where else ""
+
+    total_sql = f"select count(*) from {table}{where_clause}"
+    if where:
+        pos_sql = f"select count(*) from {table}{where_clause} and {column} > 0"
+    else:
+        pos_sql = f"select count(*) from {table} where {column} > 0"
+
+    total = testing._scalar(con, total_sql)
+    positives = testing._scalar(con, pos_sql)
+
+    example_sql = f"{pos_sql};  -- positives\n{total_sql}; -- total"
+
+    if not total:
+        return False, f"min_positive_share: table {table} is empty", example_sql
+
+    share = float(positives or 0) / float(total)
+    if share < min_share:
+        msg = (
+            f"min_positive_share failed: positive share {share:.4f} "
+            f"< required {min_share:.4f} "
+            f"({positives} of {total} rows have {column} > 0)"
+        )
+        return False, msg, example_sql
+
+    return True, None, example_sql
+````
+
+This test is wired up from `project.yml` like this:
+
+```yaml
+- type: min_positive_share
+  table: orders
+  column: amount
+  params:
+    min_share: 0.75
+    where: "amount <> 0"
+  tags: [example:dq_demo, batch]
+```
+
+### SQL-based test: `no_future_orders`
+
+File: `examples/dq_demo/tests/dq/no_future_orders.ff.sql`
+
+```sql
+{{ config(
+    type="no_future_orders",
+    params=["where"]
+) }}
+
+-- Custom DQ test: fail if any row has a timestamp in the future.
+--
+-- Conventions:
+--   - {{ table }}  : table name (e.g. "orders")
+--   - {{ column }} : timestamp column (e.g. "order_ts")
+--   - {{ where }}  : optional filter, passed via params["where"]
+
+select count(*) as failures
+from {{ table }}
+where {{ column }} > current_timestamp
+  {%- if where %} and ({{ where }}){%- endif %}
+```
+
+And the corresponding `project.yml` test:
+
+```yaml
+- type: no_future_orders
+  table: orders
+  column: order_ts
+  params:
+    where: "amount <> 0"
+  tags: [example:dq_demo, batch]
+```
+
+At runtime:
+
+* The SQL file is discovered under `tests/**/*.ff.sql`.
+* `{{ config(...) }}` tells FFT the logical `type` and allowed `params`.
+* `fft test` validates your `params:` from `project.yml` against this schema and
+  then executes the rendered SQL as a “violation count” query (`0` = pass, `>0` = fail).
 
 ---
 

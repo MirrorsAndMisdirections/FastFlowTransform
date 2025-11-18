@@ -15,7 +15,7 @@ from ._version import __version__  # re-export for `from fastflowtransform impor
 try:
     from fastflowtransform.core import REGISTRY, Node, relation_for
     from fastflowtransform.dag import levels, mermaid, topo_sort
-    from fastflowtransform.decorators import engine_model, model
+    from fastflowtransform.decorators import dq_test, engine_model, model
     from fastflowtransform.fingerprint import (
         EnvCtx,
         build_env_ctx,
@@ -35,6 +35,7 @@ __all__ = [
     "Node",
     "__version__",
     "build_env_ctx",
+    "dq_test",
     "engine_model",
     "fingerprint_py",
     "fingerprint_sql",

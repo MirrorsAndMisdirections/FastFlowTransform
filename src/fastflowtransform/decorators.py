@@ -7,8 +7,11 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, ParamSpec, Protocol, TypeVar, cast
 
+from pydantic import BaseModel
+
 from fastflowtransform.core import REGISTRY, relation_for
 from fastflowtransform.errors import ModuleLoadError
+from fastflowtransform.testing.registry import DQParamsBase, Runner, register_python_test
 
 P = ParamSpec("P")
 R_co = TypeVar("R_co", covariant=True)
@@ -176,3 +179,68 @@ def engine_model(
         return fn
 
     return deco
+
+
+def dq_test(
+    name: str | None = None,
+    *,
+    overwrite: bool = False,
+    params_model: type[BaseModel] | None = None,
+) -> Callable[[Callable[..., Any]], Runner]:
+    """
+    Decorator to register a custom data-quality test runner.
+
+    Usage:
+
+        from fastflowtransform import dq_test
+
+        @dq_test("email_domain_allowed")
+        def email_domain_allowed(con, table, column, params):
+            ...
+            return True, None, "select ..."
+
+    If `name` is omitted, the function name is used:
+
+        @dq_test()
+        def email_sanity(con, table, column, params):
+            ...
+
+        # In project.yml / schema.yml: type: email_sanity
+
+    Params model:
+
+        class EmailTestParams(DQParamsBase):
+            allowed_domains: list[str]
+
+        @dq_test("email_domain_allowed", params_model=EmailTestParams)
+        def email_domain_allowed(con, table, column, params: EmailTestParams):
+            ...
+
+    Args:
+        name: Optional explicit test name. If None, fn.__name__ is used.
+        overwrite: If True, allow overriding an existing test name.
+        params_model: Optional Pydantic model to validate `params`.
+                      If omitted, DQParamsBase (extra='forbid') is used.
+    """
+
+    def decorator(fn: Callable[..., Any]) -> Runner:
+        # Prefer attribute __name__ when available; fallback is just a placeholder.
+        if name is not None:
+            reg_name: str = name
+        else:
+            reg_name = cast(str, getattr(fn, "__name__", "<anonymous_test>"))
+
+        pm = params_model or DQParamsBase
+
+        # Central registration so test_cmd can pick up the params schema
+        register_python_test(reg_name, fn, params_model=pm, overwrite=overwrite)
+
+        # Attach a bit of metadata (not required, but can be handy for debugging/introspection)
+        fn_any = cast(Any, fn)
+        fn_any.__ff_test_name__ = reg_name
+        fn_any.__ff_test_params_model__ = pm
+
+        # Type-wise, fn already matches Runner's call signature at runtime
+        return cast(Runner, fn)
+
+    return decorator

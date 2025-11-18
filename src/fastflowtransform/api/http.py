@@ -189,9 +189,22 @@ def get(
 
         tries = max(_DEF_MAX_RETRIES, 1)
         for i in range(tries):
-            status, resp_headers, resp_body = _http_request(
-                method, url_, params=params_, headers=headers, timeout=timeout
-            )
+            try:
+                status, resp_headers, resp_body = _http_request(
+                    method, url_, params=params_, headers=headers, timeout=timeout
+                )
+            except _HTTP.TimeoutException as exc:
+                if i < tries - 1:
+                    _backoff_sleep(i)
+                    continue
+                raise RuntimeError(
+                    f"HTTP timeout after {timeout or _DEF_TIMEOUT}s for {url_}"
+                ) from exc
+            except _HTTP.RequestError as exc:
+                if i < tries - 1:
+                    _backoff_sleep(i)
+                    continue
+                raise RuntimeError(f"HTTP request error for {url_}: {exc}") from exc
             if status in (429, 500, 502, 503, 504) and i < tries - 1:
                 # honor Retry-After (seconds) if present
                 ra = resp_headers.get("Retry-After")

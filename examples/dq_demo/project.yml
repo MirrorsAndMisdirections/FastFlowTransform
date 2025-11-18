@@ -114,3 +114,18 @@ tests:
     target:
       table: customers
       key: "customer_id"
+
+  # --- Custom tests --------------------------------------------------
+  - type: no_future_orders
+    table: orders
+    column: order_ts
+    where: "order_ts is not null"
+    tags: [example:dq_demo, batch]
+
+  - type: min_positive_share
+    table: orders
+    column: amount
+    params:
+      min_share: 0.75
+      where: "amount <> 0"
+    tags: [example:dq_demo, batch]

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -439,7 +439,40 @@ class ReconcileCoverageTestConfig(BaseProjectTestConfig):
     target_where: str | None = None
 
 
-ProjectTestConfig = Annotated[
+class CustomProjectTestConfig(BaseProjectTestConfig):
+    """
+    Catch-all config for user-defined tests declared in project.yml under `tests:`.
+
+    - `type`: any non-empty string (must NOT match a built-in test type if you want
+      this class to be used; built-ins still win first).
+    - `table` / `column`: optional; for tests that don't need them, you can omit.
+    - Extra keys are allowed and preserved (e.g. threshold, pattern, window_days).
+    """
+
+    # Allow arbitrary extra keys; they'll be visible in model_dump().
+    model_config = ConfigDict(extra="allow")
+
+    type: str
+    table: str | None = None
+    column: str | None = None
+
+
+# ProjectTestConfig = Annotated[
+#     NotNullTestConfig
+#     | UniqueTestConfig
+#     | AcceptedValuesTestConfig
+#     | GreaterEqualTestConfig
+#     | NonNegativeSumTestConfig
+#     | RowCountBetweenTestConfig
+#     | FreshnessTestConfig
+#     | ReconcileEqualTestConfig
+#     | ReconcileRatioWithinTestConfig
+#     | ReconcileDiffWithinTestConfig
+#     | ReconcileCoverageTestConfig,
+#     Field(discriminator="type"),
+# ]
+
+ProjectTestConfig = (
     NotNullTestConfig
     | UniqueTestConfig
     | AcceptedValuesTestConfig
@@ -450,9 +483,9 @@ ProjectTestConfig = Annotated[
     | ReconcileEqualTestConfig
     | ReconcileRatioWithinTestConfig
     | ReconcileDiffWithinTestConfig
-    | ReconcileCoverageTestConfig,
-    Field(discriminator="type"),
-]
+    | ReconcileCoverageTestConfig
+    | CustomProjectTestConfig
+)
 
 
 # ---------------------------------------------------------------------------
