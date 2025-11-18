@@ -267,9 +267,6 @@ jobs:
           set +a
 
       - name: Run example/integration tests for engine
-        env:
-          FF_PG_DSN: postgresql+psycopg://postgres:postgres@localhost:5432/fastflowtransform
-          FF_PG_SCHEMA: ci_examples
         run: |
           echo "Running integration tests for engine=${{ matrix.engine }} example=${{ matrix.example }}"
           uv run pytest -m "integration and ${{ matrix.engine }}" \
