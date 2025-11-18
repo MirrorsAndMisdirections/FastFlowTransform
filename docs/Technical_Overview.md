@@ -88,6 +88,15 @@ Need to understand profile precedence, `.env` layering, or the Pydantic models t
 
 Level-wise parallelism, cache modes, fingerprint formula, and the `_ff_meta` audit table are documented in [Cache_and_Parallelism.md](./Cache_and_Parallelism.md). Use that reference for CLI examples (`--jobs`, `--cache`, `--rebuild`), skip conditions, and troubleshooting tips related to concurrency.
 
+### Roadmap Snapshot
+
+Lightweight glance at near-term priorities:
+
+- **Docs & UX:** tighten CLI help/autocomplete, add more cookbook-style recipes.
+- **Engines:** polish Databricks/Spark parity (Unity Catalog, Delta) and Snowpark SQL coverage.
+- **Reliability:** concurrency/caching hardening and better error surfacing in auto-docs.
+- **DX:** richer typing for Python models plus template improvements for examples/macros.
+
 ### Cross-Table Reconciliations
 
 Reconciliation tests (`reconcile_equal`, `reconcile_ratio_within`, `reconcile_diff_within`, `reconcile_coverage`) are fully documented in the [Data Quality Test Reference](./Data_Quality_Tests.md#cross-table-reconciliations). Use that guide for YAML schemas, tolerance parameters, and engine notes before wiring the checks into `fft test`.

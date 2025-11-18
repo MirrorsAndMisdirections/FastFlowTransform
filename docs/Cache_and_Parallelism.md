@@ -13,7 +13,7 @@ FastFlowTransform introduces a level-wise parallel scheduler and a build cache d
 - [Fingerprint Formula](#fingerprint-formula)
 - [Meta Table Schema](#meta-table-schema)
 - [CLI Recipes](#cli-recipes)
-- [Troubleshooting & FAQ](#troubleshooting--faq)
+- [Troubleshooting & FAQ](#troubleshooting-faq)
 - [Example: simple_duckdb](#example-simple_duckdb)
 - [Appendix: Environment Inputs](#appendix-environment-inputs)
 

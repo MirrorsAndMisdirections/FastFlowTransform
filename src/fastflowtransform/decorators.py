@@ -68,7 +68,8 @@ def model(
     Args:
         name: Logical node name in the DAG (defaults to function name).
         deps: Upstream node names (e.g., ['users.ff']).
-        require / requires:
+        require: Required columns per dependency; accepted shapes mirror `requires`.
+        requires: Alias for `require` (only one of require/requires may be set).
             - Single dependency: Iterable[str] of required columns from that dependency.
             - Multiple dependencies: Mapping[dep_name, Iterable[str]]
               (dep_name = logical name or physical relation).
