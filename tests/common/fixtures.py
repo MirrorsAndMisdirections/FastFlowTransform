@@ -338,9 +338,7 @@ def spark_engine_env(tmp_path_factory):
     return {
         "FF_ENGINE": "databricks_spark",
         "FF_SPARK_MASTER": "local[*]",
-        "FF_SPARK_APP_NAME": "fft_examples_ci",
         "FF_DBR_ENABLE_HIVE": "1",
-        "FF_DBR_DATABASE": "ff_examples_ci",
         "FF_SPARK_WAREHOUSE_DIR": str(warehouse),
     }
 
