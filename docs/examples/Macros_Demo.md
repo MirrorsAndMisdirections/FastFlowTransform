@@ -1,6 +1,6 @@
 # Macros Demo
 
-**Goal:** Showcase **SQL Jinja macros** and **Python render-time macros** working together across engines (DuckDB, Postgres, Databricks Spark).
+**Goal:** Showcase **SQL Jinja macros** and **Python render-time macros** working together across engines (DuckDB, Postgres, Databricks Spark, BigQuery).
 You’ll see reusable SQL helpers, engine-aware SQL generation, and Python functions exposed as Jinja globals/filters.
 
 ---
@@ -20,24 +20,29 @@ examples/macros_demo/
   seeds/
     seed_users.csv
     seed_orders.csv
-  models/
-    macros/
-      utils.sql
-      star.sql
-    macros_py/
-      helpers.py
-    common/
-      stg_users.ff.sql
-      stg_orders.ff.sql
-      dim_users.ff.sql
-      fct_user_sales.ff.sql
-    engines/
-      duckdb/
-        py_example.ff.py
-      postgres/
-        py_example.ff.py
-      databricks_spark/
-        py_example.ff.py
+    models/
+      macros/
+        utils.sql
+        star.sql
+      macros_py/
+        helpers.py
+      common/
+        stg_users.ff.sql
+        stg_orders.ff.sql
+        dim_users.ff.sql
+        fct_user_sales.ff.sql
+      engines/
+        duckdb/
+          py_example.ff.py
+        postgres/
+          py_example.ff.py
+        databricks_spark/
+          py_example.ff.py
+        bigquery/
+          bigframes/
+            py_example.ff.py
+          pandas/
+            py_example.ff.py
 ```
 
 ---

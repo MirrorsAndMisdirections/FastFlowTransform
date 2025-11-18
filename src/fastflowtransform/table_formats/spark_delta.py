@@ -1,12 +1,26 @@
 # fastflowtransform/table_formats/spark_delta.py
 from __future__ import annotations
 
-from typing import Any
-
-from delta.tables import DeltaTable
-from pyspark.sql import DataFrame as SDF, SparkSession
+from typing import TYPE_CHECKING, Any
 
 from fastflowtransform.table_formats.base import SparkFormatHandler
+from fastflowtransform.typing import SDF, SparkSession
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from delta.tables import DeltaTable
+else:  # pragma: no cover - runtime import
+    try:
+        from delta.tables import DeltaTable  # type: ignore
+    except Exception:
+
+        class DeltaTable:  # type: ignore[misc]
+            """Fallback stub when delta-spark is unavailable."""
+
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                raise ImportError(
+                    "delta-spark is required for DeltaFormatHandler. "
+                    "Install fastflowtransform[spark] or delta-spark."
+                )
 
 
 class DeltaFormatHandler(SparkFormatHandler):

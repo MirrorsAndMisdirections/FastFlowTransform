@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from fastflowtransform.core import REGISTRY
-from fastflowtransform.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.executors.duckdb import DuckExecutor
 
 
 @pytest.mark.duckdb

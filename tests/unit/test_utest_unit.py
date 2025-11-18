@@ -78,7 +78,6 @@ def test_extract_defaults_inputs_missing_returns_empty():
 
 @pytest.mark.unit
 def test_fingerprint_case_inputs_merges_defaults_and_case(tmp_path, monkeypatch):
-    # wir brauchen einen existierenden CSV-Pfad für die Hash-Pfade
     csv_file = tmp_path / "seed.csv"
     csv_file.write_text("id,name\n1,A\n", encoding="utf-8")
 
@@ -89,9 +88,7 @@ def test_fingerprint_case_inputs_merges_defaults_and_case(tmp_path, monkeypatch)
     )
     case = SimpleNamespace(
         inputs={
-            # überschreibt defaults.src
             "src": {"rows": [{"id": 2}]},
-            # neue relation via CSV
             "dim": {"csv": "seed.csv"},
         }
     )
@@ -323,7 +320,6 @@ def test_discover_unit_specs_basic(tmp_path, fake_registry):
     s = specs[0]
     assert s.model == "model_a"
     assert len(s.cases) == 1
-    # merge muss greifen: expect.rows aus case überschreibt defaults
     assert s.cases[0].expect["rows"] == [{"id": 2}]
 
 
@@ -344,25 +340,21 @@ def test_discover_unit_specs_only_model_filter(tmp_path, fake_registry):
 
 
 # ---------------------------------------------------------------------------
-# _load_relation_from_rows  (duckdb-pfad)
+# _load_relation_from_rows  (duckdb path)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
 @pytest.mark.duckdb
-def test_load_relation_from_rows_duckdb(duckdb_executor):
+def test_load_relation_from_rows_duckdb(duckdbutor):
     rows = [{"id": 1}, {"id": 2}]
-    # wir lassen unregister fehlschlagen, damit der Fallback getriggert wird
-    duckdb_executor.con.unregister.side_effect = Exception("no unregister in this version")
+    duckdbutor.con.unregister.side_effect = Exception("no unregister in this version")
 
-    utest._load_relation_from_rows(duckdb_executor, "tmp_tbl", rows)
+    utest._load_relation_from_rows(duckdbutor, "tmp_tbl", rows)
 
-    # register mit tmp-name
-    assert duckdb_executor.con.register.call_count == 1
-    # er muss create or replace table ... ausführen
-    executed_sqls = [c.args[0] for c in duckdb_executor.con.execute.call_args_list]
+    assert duckdbutor.con.register.call_count == 1
+    executed_sqls = [c.args[0] for c in duckdbutor.con.execute.call_args_list]
     assert any("create or replace table" in sql.lower() for sql in executed_sqls)
-    # fallback drop view
     assert any("drop view if exists" in sql.lower() for sql in executed_sqls)
 
 
@@ -373,7 +365,7 @@ def test_load_relation_from_rows_duckdb(duckdb_executor):
 
 @pytest.mark.unit
 @pytest.mark.duckdb
-def test_load_relation_from_csv_calls_rows(monkeypatch, tmp_path, duckdb_executor):
+def test_load_relation_from_csv_calls_rows(monkeypatch, tmp_path, duckdbutor):
     csv_path = tmp_path / "data.csv"
     csv_path.write_text("id,value\n1,a\n2,b\n", encoding="utf-8")
 
@@ -385,7 +377,7 @@ def test_load_relation_from_csv_calls_rows(monkeypatch, tmp_path, duckdb_executo
 
     monkeypatch.setattr(utest, "_load_relation_from_rows", fake_rows)
 
-    utest._load_relation_from_csv(duckdb_executor, "my_rel", csv_path)
+    utest._load_relation_from_csv(duckdbutor, "my_rel", csv_path)
 
     assert called["rel"] == "my_rel"
     expected_row_count = 2
@@ -400,15 +392,15 @@ def test_load_relation_from_csv_calls_rows(monkeypatch, tmp_path, duckdb_executo
 
 @pytest.mark.unit
 @pytest.mark.duckdb
-def test_read_result_duckdb(duckdb_executor):
-    df = utest._read_result(duckdb_executor, "some_table")
+def test_read_result_duckdb(duckdbutor):
+    df = utest._read_result(duckdbutor, "some_table")
     assert isinstance(df, pd.DataFrame)
     assert list(df.columns) == ["id"]
 
 
 @pytest.mark.unit
 @pytest.mark.postgres
-def test_read_result_postgres(monkeypatch, postgres_executor):
+def test_read_result_postgres(monkeypatch, postgresutor):
     # wir patchen pandas.read_sql_query, damit er keine DB braucht
     fake_df = pd.DataFrame([{"x": 1}])
 
@@ -417,7 +409,7 @@ def test_read_result_postgres(monkeypatch, postgres_executor):
 
     monkeypatch.setattr(utest.pd, "read_sql_query", fake_read_sql)
 
-    df = utest._read_result(postgres_executor, "target_table")
+    df = utest._read_result(postgresutor, "target_table")
     assert isinstance(df, pd.DataFrame)
     assert list(df.columns) == ["x"]
 
@@ -579,11 +571,11 @@ def test_fingerprint_case_and_maybe_skip(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 @pytest.mark.duckdb
-def test_execute_and_update_cache_success(fake_registry, duckdb_executor):
+def test_execute_and_update_cache_success(fake_registry, duckdbutor):
     env_ctx = utest._make_env_ctx("duckdb")
     cache = MagicMock()
     ctx = utest.UtestCtx(
-        executor=duckdb_executor,
+        executor=duckdbutor,
         jenv=MagicMock(),
         engine_name="duckdb",
         env_ctx=env_ctx,
@@ -598,12 +590,12 @@ def test_execute_and_update_cache_success(fake_registry, duckdb_executor):
 
 @pytest.mark.unit
 @pytest.mark.duckdb
-def test_execute_and_update_cache_failure(fake_registry, duckdb_executor):
+def test_execute_and_update_cache_failure(fake_registry, duckdbutor):
     # wir machen executor kaputt
-    duckdb_executor.run_sql = MagicMock(side_effect=RuntimeError("boom"))
+    duckdbutor.run_sql = MagicMock(side_effect=RuntimeError("boom"))
     env_ctx = utest._make_env_ctx("duckdb")
     ctx = utest.UtestCtx(
-        executor=duckdb_executor,
+        executor=duckdbutor,
         jenv=MagicMock(),
         engine_name="duckdb",
         env_ctx=env_ctx,
@@ -623,10 +615,10 @@ def test_execute_and_update_cache_failure(fake_registry, duckdb_executor):
 
 @pytest.mark.unit
 @pytest.mark.duckdb
-def test_read_and_assert_ok(fake_registry, duckdb_executor):
+def test_read_and_assert_ok(fake_registry, duckdbutor):
     env_ctx = utest._make_env_ctx("duckdb")
     ctx = utest.UtestCtx(
-        executor=duckdb_executor,
+        executor=duckdbutor,
         jenv=MagicMock(),
         engine_name="duckdb",
         env_ctx=env_ctx,
@@ -641,11 +633,11 @@ def test_read_and_assert_ok(fake_registry, duckdb_executor):
 
 @pytest.mark.unit
 @pytest.mark.duckdb
-def test_read_and_assert_mismatch(fake_registry, duckdb_executor, monkeypatch):
+def test_read_and_assert_mismatch(fake_registry, duckdbutor, monkeypatch):
     # actual ist id=1, expected ist id=2 -> mismatch
     env_ctx = utest._make_env_ctx("duckdb")
     ctx = utest.UtestCtx(
-        executor=duckdb_executor,
+        executor=duckdbutor,
         jenv=MagicMock(),
         engine_name="duckdb",
         env_ctx=env_ctx,
@@ -665,7 +657,7 @@ def test_read_and_assert_mismatch(fake_registry, duckdb_executor, monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.duckdb
-def test_run_unit_specs_happy(tmp_path, fake_registry, duckdb_executor, monkeypatch):
+def test_run_unit_specs_happy(tmp_path, fake_registry, duckdbutor, monkeypatch):
     # wir bauen uns per Hand einen spec
     spec = utest.UnitSpec(
         model="model_a",
@@ -682,5 +674,5 @@ def test_run_unit_specs_happy(tmp_path, fake_registry, duckdb_executor, monkeypa
         project_dir=tmp_path,
     )
     # jenv ist hier egal
-    failures = utest.run_unit_specs([spec], duckdb_executor, jenv=MagicMock(), cache_mode="off")
+    failures = utest.run_unit_specs([spec], duckdbutor, jenv=MagicMock(), cache_mode="off")
     assert failures == 0

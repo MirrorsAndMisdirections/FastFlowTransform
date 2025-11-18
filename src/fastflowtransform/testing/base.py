@@ -276,7 +276,7 @@ def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None
     # 2) Decide which SQL to use based on the connection type.
     #
     # We cannot rely on a formal engine flag here, but the Databricks/Spark
-    # test connection lives in the databricks_spark_exec module and/or wraps
+    # test connection lives in the databricks_spark module and/or wraps
     # a SparkSession. We use a simple heuristic on the connection type name
     # and module to detect "Spark-like" behaviour.
     con_type = type(con)
@@ -285,6 +285,11 @@ def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None
     mod_l = mod.lower()
     name_l = name.lower()
     is_spark_like = any(token in mod_l or token in name_l for token in ("spark", "databricks"))
+    is_bigquery = (
+        "bigquery" in mod_l
+        or "bigquery" in name_l
+        or str(getattr(con, "marker", "")).upper() == "BQ_SHIM"
+    )
 
     # Primary SQL (Postgres / DuckDB style)
     sql_primary = (
@@ -295,6 +300,12 @@ def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None
     sql_spark = (
         "select "
         f"(unix_timestamp(current_timestamp()) - unix_timestamp(max({ts_col}))) / 60.0 "
+        f"as delay_min from {table}"
+    )
+
+    # BigQuery: TIMESTAMP_DIFF returns integer minutes; keep float compatibility
+    sql_bigquery = (
+        f"select cast(TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), max({ts_col}), MINUTE) as float64) "
         f"as delay_min from {table}"
     )
 
@@ -309,6 +320,13 @@ def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None
             delay = _scalar(con, sql_spark)
         except Exception as e:
             raise _wrap_db_error("freshness", table, ts_col, sql_spark, e) from e
+    elif is_bigquery:
+        sql_used = sql_bigquery
+        try:
+            delay = _scalar(con, sql_bigquery)
+        except Exception as e:
+            # BigQuery error messages don't mention EXTRACT/EPOCH; surface directly.
+            raise _wrap_db_error("freshness", table, ts_col, sql_bigquery, e) from e
     else:
         # Non-Spark engines: try the Postgres/DuckDB expression first.
         sql_used = sql_primary

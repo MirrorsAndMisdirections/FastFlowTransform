@@ -1,4 +1,4 @@
-# tests/unit/executors/test_snowflake_snowpark_exec_unit.py
+# tests/unit/executors/test_snowflake_snowpark_unit.py
 from __future__ import annotations
 
 import sys
@@ -8,10 +8,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-import snowflake.snowpark as sf
 
-import fastflowtransform.executors.snowflake_snowpark_exec as sf_mod
-from fastflowtransform.executors.snowflake_snowpark_exec import _SFResult
+import fastflowtransform.executors.snowflake_snowpark as sf_mod
+from fastflowtransform.executors.snowflake_snowpark import _SFResult
 
 # ---------------------------------------------------------------------------
 # 1) Install a fake snowflake.snowpark BEFORE importing the executor module
@@ -131,13 +130,14 @@ fake_sf_snowpark_mod.DataFrame = FakeSnowparkDataFrame  # type: ignore[attr-defi
 
 fake_sf_snowpark_mod.DataFrame = FakeSnowparkDataFrame  # type: ignore[attr-defined]
 sys.modules["snowflake.snowpark"] = fake_sf_snowpark_mod
+sf = fake_sf_snowpark_mod
 
 # ---------------------------------------------------------------------------
 # 2) Now we can safely import the module under test
 # ---------------------------------------------------------------------------
-import fastflowtransform.executors.snowflake_snowpark_exec as sf_exec_mod  # noqa: E402
+import fastflowtransform.executors.snowflake_snowpark as sf_exec_mod  # noqa: E402
 from fastflowtransform.core import Node  # noqa: E402
-from fastflowtransform.executors.snowflake_snowpark_exec import (  # noqa: E402
+from fastflowtransform.executors.snowflake_snowpark import (  # noqa: E402
     SnowflakeSnowparkExecutor,
     _SFCursorShim,
 )

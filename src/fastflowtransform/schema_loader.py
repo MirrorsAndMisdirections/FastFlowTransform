@@ -15,8 +15,8 @@ Severity = Literal["error", "warn"]
 @dataclass(frozen=True)
 class TestSpec:
     """
-    Normalisierte Test-Spezifikation für die CLI.
-    Beispiel: not_null(users_enriched.email), unique(users_enriched.id),
+    Normalized test spec for CLI.
+    Example: not_null(users_enriched.email), unique(users_enriched.id),
               accepted_values(users_enriched.email, values=[...]) …
     """
 
@@ -39,8 +39,8 @@ class TestSpec:
 
 def load_schema_tests(project_dir: Path) -> list[TestSpec]:
     """
-    Lädt dbt-ähnliche Schema-YAMLs (version: 2) unter models/**.yml (& schema.yml),
-    und gibt normalisierte TestSpec-Objekte zurück.
+    Loads schema yamls (version: 2) in models/**.yml (& schema.yml),
+    and returns normalized TestSpec objects.
     """
     project_dir = Path(project_dir)
     models_dir = project_dir / "models"

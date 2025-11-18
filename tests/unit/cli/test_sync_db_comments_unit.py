@@ -71,7 +71,7 @@ def test_sync_comments_postgres_dry_run(capsys):
 
 
 @pytest.mark.unit
-def test_sync_comments_postgres_executes_on_engine(capsys):
+def test_sync_comments_postgresutes_on_engine(capsys):
     # fake sqlalchemy engine
     fake_conn = MagicMock()
     fake_engine = MagicMock()
@@ -84,10 +84,8 @@ def test_sync_comments_postgres_executes_on_engine(capsys):
 
     mod._sync_comments_postgres(fake_exec, intents, schema="public", dry_run=False)
 
-    # sollte genau 1 statement ausführen
     assert fake_conn.execute.call_count == 1
-    stmt_arg = fake_conn.execute.call_args[0][0]  # sa_text(...)
-    # sqlalchemy.text hat .text oder .textual?
+    stmt_arg = fake_conn.execute.call_args[0][0]
     assert 'COMMENT ON TABLE "public"."users" IS \'Users table\';' in str(stmt_arg)
 
     out = capsys.readouterr().out
@@ -153,20 +151,13 @@ def test_sync_comments_snowflake_with_execute_method():
 
 @pytest.mark.unit
 def test_sync_db_comments_no_intents_exits(monkeypatch):
-    """
-    Fall: es gibt gar keine Descriptions -> sofort Exit(0) mit gelb.
-    """
-    # fake context
     fake_ctx = SimpleNamespace(
         project=Path("."),
         profile=SimpleNamespace(engine="postgres", postgres=SimpleNamespace(db_schema="public")),
         make_executor=lambda: (MagicMock(), None, None),
     )
-    # REGISTRY ohne Nodes
     monkeypatch.setattr(mod, "REGISTRY", SimpleNamespace(nodes={}))
-    # docs metadata -> leer
     monkeypatch.setattr(mod, "read_docs_metadata", lambda _: {})
-    # keine Spalten gefunden
     monkeypatch.setattr(mod, "_collect_columns", lambda _: {})
 
     monkeypatch.setattr(mod, "_prepare_context", lambda *a, **k: fake_ctx)
@@ -178,7 +169,6 @@ def test_sync_db_comments_no_intents_exits(monkeypatch):
 
 @pytest.mark.unit
 def test_sync_db_comments_postgres_path(monkeypatch):
-    # 1) Kontext vorbereiten
     fake_exec = MagicMock()
     fake_ctx = SimpleNamespace(
         project=Path("."),
@@ -187,14 +177,11 @@ def test_sync_db_comments_postgres_path(monkeypatch):
     )
     monkeypatch.setattr(mod, "_prepare_context", lambda *a, **k: fake_ctx)
 
-    # 2) Registry mit einem Node
     fake_node = SimpleNamespace(name="users.ff")
     monkeypatch.setattr(mod, "REGISTRY", SimpleNamespace(nodes={"users.ff": fake_node}))
 
-    # 3) relation_for -> "users"
     monkeypatch.setattr(mod, "relation_for", lambda name: "users")
 
-    # 4) docs metadata: model-beschreibung + column-beschreibung
     monkeypatch.setattr(
         mod,
         "read_docs_metadata",
@@ -206,11 +193,9 @@ def test_sync_db_comments_postgres_path(monkeypatch):
         },
     )
 
-    # 5) _collect_columns: table "users" has column "id"
     col = SimpleNamespace(name="id")
     monkeypatch.setattr(mod, "_collect_columns", lambda _: {"users": [col]})
 
-    # 6) _sync_comments_postgres beobachten
     called = {}
 
     def fake_sync_pg(execu, intents, schema, dry_run):
@@ -228,7 +213,6 @@ def test_sync_db_comments_postgres_path(monkeypatch):
     # Assertions
     assert called["execu"] is fake_exec
     assert called["schema"] == "public"
-    # wir erwarten 2 intents: table + column
     kinds = {i["kind"] for i in called["intents"]}
     assert kinds == {"table", "column"}
 
@@ -288,7 +272,6 @@ def test_sync_db_comments_unsupported_engine(monkeypatch, capsys):
     )
     monkeypatch.setattr(mod, "_prepare_context", lambda *a, **k: fake_ctx)
 
-    # mindestens ein Node, sonst würden wir vorher returnen
     monkeypatch.setattr(mod, "REGISTRY", SimpleNamespace(nodes={"n": SimpleNamespace(name="n")}))
     monkeypatch.setattr(mod, "relation_for", lambda name: "N")
     monkeypatch.setattr(

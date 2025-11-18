@@ -1,8 +1,0 @@
-vars:
-  run_date: "2025-01-01"
-
-tests:
-  - type: not_null
-    table: users
-    column: email
-    tags: [batch]

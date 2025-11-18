@@ -13,7 +13,7 @@ FastFlowTransform introduces a level-wise parallel scheduler and a build cache d
 - [Fingerprint Formula](#fingerprint-formula)
 - [Meta Table Schema](#meta-table-schema)
 - [CLI Recipes](#cli-recipes)
-- [Troubleshooting & FAQ](#troubleshooting--faq)
+- [Troubleshooting & FAQ](#troubleshooting-faq)
 - [Example: simple_duckdb](#example-simple_duckdb)
 - [Appendix: Environment Inputs](#appendix-environment-inputs)
 
@@ -233,6 +233,6 @@ FF_RUN_DATE=2025-01-01 fft run . --env dev --cache=rw
 @@ -10,6 +10,7 @@
  - [User Guide – Operational](./Technical_Overview.md#part-i--operational-guide)
  - [Modeling Reference](./Config_and_Macros.md)
- - [Parallelism & Cache (v0.3)](./Cache_and_Parallelism.md)
+- [Parallelism & Cache](./Cache_and_Parallelism.md)
  - [Developer Guide – Architecture & Internals](./Technical_Overview.md#part-ii--architecture--internals)
 ````

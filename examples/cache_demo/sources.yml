@@ -1,6 +1,7 @@
 version: 2
 sources:
   - name: crm
+    schema: cache_demo
     tables:
       - name: users
         identifier: seed_users

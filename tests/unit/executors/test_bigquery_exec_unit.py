@@ -17,9 +17,11 @@ from tests.common.mock.bigquery import (
     install_fake_bigquery,
 )
 
-import fastflowtransform.executors._bigquery_mixin as bq_mix_mod
-import fastflowtransform.executors.bigquery_exec as bq_exec_mod
+import fastflowtransform.executors.bigquery._bigquery_mixin as bq_mix_mod
+import fastflowtransform.executors.bigquery.base as bq_base_mod
+import fastflowtransform.executors.bigquery.pandas as bq_exec_mod
 from fastflowtransform.core import Node
+from fastflowtransform.executors.base import BaseExecutor
 
 
 @pytest.fixture
@@ -169,15 +171,51 @@ def test_format_source_reference(bq_exec):
 
 @pytest.mark.unit
 @pytest.mark.bigquery
+def test_ensure_dataset_respects_flag(monkeypatch):
+    _ = install_fake_bigquery(monkeypatch, [bq_exec_mod, bq_mix_mod])
+    fake_client = FakeClient(project="p1", location="EU")
+
+    ex = bq_exec_mod.BigQueryExecutor(
+        project="p1",
+        dataset="ds_missing",
+        location="EU",
+        client=cast(Any, fake_client),
+        allow_create_dataset=False,
+    )
+
+    with pytest.raises(FakeNotFound):
+        ex._ensure_dataset()
+
+
+@pytest.mark.unit
+@pytest.mark.bigquery
+def test_ensure_dataset_creates_when_allowed(monkeypatch):
+    _ = install_fake_bigquery(monkeypatch, [bq_exec_mod, bq_mix_mod])
+    fake_client = FakeClient(project="p1", location="EU")
+
+    ex = bq_exec_mod.BigQueryExecutor(
+        project="p1",
+        dataset="ds_new",
+        location="EU",
+        client=cast(Any, fake_client),
+        allow_create_dataset=True,
+    )
+
+    ex._ensure_dataset()
+    ds_id = "p1.ds_new"
+    assert ds_id in fake_client._datasets
+    assert fake_client.get_dataset(ds_id).location == "EU"
+
+
+@pytest.mark.unit
+@pytest.mark.bigquery
 def test_apply_sql_materialization_calls_super_and_ensures_dataset(monkeypatch, bq_exec):
     monkeypatch.setattr(bq_exec, "_ensure_dataset", lambda: None, raising=True)
-
-    import fastflowtransform.executors.bigquery_exec as bq_exec_mod  # noqa PLC0415
 
     called: dict[str, str] = {}
 
     monkeypatch.setattr(
-        bq_exec_mod.BaseExecutor,
+        BaseExecutor,
         "_apply_sql_materialization",
         lambda self, node, target_sql, select_body, materialization: called.update(
             {
@@ -208,7 +246,7 @@ def test_apply_sql_materialization_calls_super_and_ensures_dataset(monkeypatch, 
 @pytest.mark.bigquery
 def test_apply_sql_materialization_wraps_badrequest(monkeypatch, bq_exec):
     monkeypatch.setattr(
-        bq_exec_mod.BaseExecutor,
+        BaseExecutor,
         "_apply_sql_materialization",
         lambda *a, **k: (_ for _ in ()).throw(FakeBadRequest("bq exploded")),
         raising=True,
@@ -269,8 +307,8 @@ def test_on_node_built_best_effort(monkeypatch, bq_exec):
     def fake_upsert(ex, name, rel, fp, eng):
         called["upsert"] += 1
 
-    monkeypatch.setattr(bq_exec_mod, "ensure_meta_table", fake_ensure)
-    monkeypatch.setattr(bq_exec_mod, "upsert_meta", fake_upsert)
+    monkeypatch.setattr(bq_base_mod, "ensure_meta_table", fake_ensure)
+    monkeypatch.setattr(bq_base_mod, "upsert_meta", fake_upsert)
 
     bq_exec.on_node_built(Node(name="m", kind="sql", path=Path(".")), "p1.ds1.m", "fp123")
 

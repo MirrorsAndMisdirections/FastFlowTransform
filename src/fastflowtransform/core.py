@@ -806,11 +806,9 @@ def _iter_public_attrs(obj: object) -> Iterable[tuple[str, object]]:
 def _is_jinja_macro(obj: object) -> bool:
     if obj is None:
         return False
-    # 1) Klassenname-Match (funktioniert ohne direkten Import)
     cls = getattr(obj, "__class__", None)
     if getattr(cls, "__name__", "") == "Macro":
         return True
-    # 2) isinstance gegen jinja2.runtime.Macro (falls vorhanden)
     MacroClass = getattr(jinja2.runtime, "Macro", None)
     if MacroClass is not None:
         with suppress(Exception, TypeError):

@@ -407,7 +407,6 @@ def test_columns_postgres_collects_from_engine():
 
 @pytest.mark.unit
 def test_columns_snowflake_collects_from_session():
-    # snowflake .collect() liefert list[Row], aber wir können dicts nehmen
     class FakeDF:
         def __init__(self, rows):
             self._rows = rows

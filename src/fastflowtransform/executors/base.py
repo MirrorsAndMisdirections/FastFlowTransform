@@ -86,14 +86,14 @@ TFrame = TypeVar("TFrame")
 
 class _ThisProxy:
     """
-    Jinja-kompatibler Proxy für {{ this }}:
-    - Als String verwendbar ({{ this }}) -> physischer Relationsname.
-    - Attribute verfügbar ({{ this.name }}, {{ this.materialized }}, ...)
+    Jinja compatible proxy for {{ this }}:
+    - Use as string ({{ this }}) -> physical relation name.
+    - attributes available ({{ this.name }}, {{ this.materialized }}, ...)
     """
 
     def __init__(self, relation: str, materialized: str, schema: str | None, database: str | None):
         self.name = relation  # Back-compat: {{ this.name }}
-        self.relation = relation  # Alias, falls jemand {{ this.relation }} nutzt
+        self.relation = relation  # alias, if someone uses {{ this.relation }}
         self.materialized = materialized
         self.schema = schema
         self.database = database
@@ -138,9 +138,9 @@ class BaseExecutor[TFrame](ABC):
             return cfg
 
         def _config_hook(**kwargs: Any) -> str:
-            cfg = get_render_cfg()  # garantiert ein Dict
-            cfg.update(kwargs)  # gleiche Referenz, kein erneutes set() nötig
-            return ""  # nichts in SQL emittieren
+            cfg = get_render_cfg()
+            cfg.update(kwargs)
+            return ""
 
         if "config" not in env.globals:
             env.globals["config"] = _config_hook
@@ -479,7 +479,7 @@ class BaseExecutor[TFrame](ABC):
         raw = func(*args)
         if not self._is_frame(raw):
             raise TypeError(
-                f"Python-Modell '{node.name}' muss {self._frame_name()} DataFrame zurückgeben."
+                f"Python model '{node.name}' must return {self._frame_name()} DataFrame."
             )
         return cast(TFrame, raw)
 

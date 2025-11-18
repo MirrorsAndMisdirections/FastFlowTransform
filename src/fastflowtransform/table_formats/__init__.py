@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pyspark.sql import SparkSession
+from fastflowtransform.typing import SparkSession
 
 from .base import SparkFormatHandler
 from .spark_default import DefaultSparkFormatHandler

@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from fastflowtransform.core import Node
-from fastflowtransform.executors.duckdb_exec import DuckExecutor, _q
+from fastflowtransform.executors.duckdb import DuckExecutor, _q
 
 
 @pytest.fixture
@@ -185,7 +185,7 @@ def test_on_node_built_best_effort(duck_exec: DuckExecutor, monkeypatch: pytest.
         called["upsert"] += 1
 
     # patch the functions used in on_node_built
-    import fastflowtransform.executors.duckdb_exec as duck_mod  # noqa PLC0415
+    import fastflowtransform.executors.duckdb as duck_mod  # noqa PLC0415
 
     monkeypatch.setattr(duck_mod, "ensure_meta_table", fake_ensure, raising=True)
     monkeypatch.setattr(duck_mod, "upsert_meta", fake_upsert, raising=True)

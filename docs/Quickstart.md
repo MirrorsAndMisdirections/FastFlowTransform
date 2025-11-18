@@ -15,10 +15,31 @@ The command is non-interactive, refuses to overwrite existing directories, and l
 ## 1. Install & bootstrap
 
 ```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -e ./fastflowtransform
+python3 -m venv .venv
+. .venv/bin/activate  # or source .venv/bin/activate
+pip install --upgrade pip
+pip install -e .      # run from the repo root; use `uv pip install --editable .` if you prefer uv
 fft --help
+```
+
+Choose extras if you target other engines (combine as needed):
+
+```bash
+# Postgres
+pip install -e .[postgres]
+
+# BigQuery (pandas) or BigFrames
+pip install -e .[bigquery]     # pandas
+pip install -e .[bigquery_bf]  # BigFrames
+
+# Databricks/Spark + Delta
+pip install -e .[spark]
+
+# Snowflake Snowpark
+pip install -e .[snowflake]
+
+# Everything
+pip install -e .[full]
 ```
 
 ## 2. Create project layout
@@ -47,12 +68,19 @@ cat <<'SQL' > demo/models/users.ff.sql
 select id, email
 from {{ source('raw', 'users') }}
 SQL
+
+cat <<'YAML' > demo/profiles.yml
+dev:
+  engine: duckdb
+  duckdb:
+    path: ".local/demo.duckdb"
+YAML
 ```
 
 ## 3. Seed static inputs
 
 ```bash
-fft seed demo --profile dev
+fft seed demo --env dev
 ```
 
 This materializes the CSV into the configured engine (DuckDB by default) using `seed_users` as the physical table.
@@ -60,7 +88,7 @@ This materializes the CSV into the configured engine (DuckDB by default) using `
 ## 4. Run the pipeline
 
 ```bash
-fft run demo --cache off
+fft run demo --env dev --cache off
 ```
 
 You should see log lines similar to `✓ L01 [DUCK] users.ff`. The resulting table lives in the target schema (`staging` in this example).
@@ -80,5 +108,6 @@ You should see log lines similar to `✓ L01 [DUCK] users.ff`. The resulting tab
 - Add `project.yml` for reusable `vars:` and metadata
 - Explore `fft docs` to generate HTML documentation
 - Use engine profiles under `profiles.yml` to target Postgres, BigQuery, or Databricks (path-based sources supported via `format` + `location` overrides)
+- Render the DAG site for this project: `fft dag demo --env dev --html` (find it under `demo/site/dag/index.html`)
 
 Refer to `docs/Config_and_Macros.md` for advanced configuration options.

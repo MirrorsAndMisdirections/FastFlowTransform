@@ -208,7 +208,6 @@ def setup(
             if h.get_name() == "ff_console":
                 root.removeHandler(h)
         except Exception:
-            # get_name gibt es ab 3.8 - fallback über .name
             if getattr(h, "name", None) == "ff_console":
                 root.removeHandler(h)
 

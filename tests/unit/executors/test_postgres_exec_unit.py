@@ -1,4 +1,4 @@
-# tests/unit/executors/test_postgres_exec_unit.py
+# tests/unit/executors/test_postgres_unit.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,10 +8,10 @@ import pandas as pd
 import pytest
 
 # Wichtig: wir testen genau dieses Modul
-import fastflowtransform.executors.postgres_exec as pgmod
+import fastflowtransform.executors.postgres as pgmod
 from fastflowtransform.core import Node
 from fastflowtransform.errors import ModelExecutionError, ProfileConfigError
-from fastflowtransform.executors.postgres_exec import PostgresExecutor
+from fastflowtransform.executors.postgres import PostgresExecutor
 
 # ---------------------------------------------------------------------------
 # Hilfs-Fakes

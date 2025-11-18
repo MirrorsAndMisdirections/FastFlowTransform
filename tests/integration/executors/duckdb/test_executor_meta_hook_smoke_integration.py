@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from fastflowtransform.core import Node
-from fastflowtransform.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.executors.duckdb import DuckExecutor
 
 
 @pytest.mark.integration

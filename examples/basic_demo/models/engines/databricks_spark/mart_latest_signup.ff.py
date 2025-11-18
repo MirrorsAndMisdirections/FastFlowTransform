@@ -1,8 +1,26 @@
-from pyspark.sql import DataFrame
-from pyspark.sql import Window
-from pyspark.sql import functions as F
+from typing import TYPE_CHECKING, Any
 
 from fastflowtransform import engine_model
+
+if TYPE_CHECKING:
+    from pyspark.sql import DataFrame
+    from pyspark.sql import WindowSpec
+    from pyspark.sql import functions as F
+else:
+    DataFrame = Any
+    WindowSpec = Any
+    F = Any
+
+
+def _get_spark_utils() -> tuple[Any, Any]:
+    try:
+        from pyspark.sql import Window as _Window
+        from pyspark.sql import functions as _F
+    except Exception as exc:  # pragma: no cover - optional dep guard
+        raise RuntimeError(
+            "pyspark is required for this model. Install fastflowtransform[spark]."
+        ) from exc
+    return _Window, _F
 
 
 @engine_model(
@@ -19,6 +37,7 @@ from fastflowtransform import engine_model
 )
 def build(users_clean: DataFrame) -> DataFrame:
     """Return the latest signup per email domain using PySpark DataFrame operations."""
+    Window, F = _get_spark_utils()
     window = Window.partitionBy("email_domain").orderBy(F.col("signup_date").desc())
 
     latest = (

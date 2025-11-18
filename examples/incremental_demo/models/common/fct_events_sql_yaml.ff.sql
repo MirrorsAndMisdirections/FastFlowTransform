@@ -7,7 +7,8 @@
         'inc:type:yaml-config',
         'engine:duckdb',
         'engine:postgres',
-        'engine:databricks_spark'
+        'engine:databricks_spark',
+        'engine:bigquery'
     ],
 ) }}
 

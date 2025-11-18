@@ -1,13 +1,15 @@
+# fastflowtransform/executors/_shims.py
 from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
 from typing import Any
 
-from google.cloud.bigquery import Client
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.sql.elements import ClauseElement
+
+from fastflowtransform.typing import Client
 
 
 class BigQueryConnShim:
@@ -30,17 +32,37 @@ class BigQueryConnShim:
         self.project = project
         self.dataset = dataset
 
+    class _ResultWrapper:
+        """
+        Minimal wrapper around a BigQuery RowIterator so that testing helpers
+        can call .fetchone() like on a DB-API cursor.
+        """
+
+        def __init__(self, row_iter: Any):
+            self._iter = iter(row_iter)
+
+        def fetchone(self):
+            try:
+                return next(self._iter)
+            except StopIteration:
+                return None
+
     def execute(self, sql_or_stmts: Any) -> Any:
         if isinstance(sql_or_stmts, str):
-            return self.client.query(sql_or_stmts, location=self.location)
+            # Execute the query and return a cursor-like wrapper with .fetchone()
+            job = self.client.query(sql_or_stmts)
+            rows = job.result()
+            return BigQueryConnShim._ResultWrapper(rows)
+
         if isinstance(sql_or_stmts, Sequence) and not isinstance(
             sql_or_stmts, (bytes, bytearray, str)
         ):
-            job = None
+            # Execute a sequence of statements; return wrapper for the last result.
+            last_rows: Any = None
             for stmt in sql_or_stmts:
-                job = self.client.query(str(stmt), location=self.location)
-                job.result()
-            return job
+                job = self.client.query(str(stmt))
+                last_rows = job.result()
+            return BigQueryConnShim._ResultWrapper(last_rows or [])
         raise TypeError(f"Unsupported sql argument type for BigQuery shim: {type(sql_or_stmts)}")
 
 

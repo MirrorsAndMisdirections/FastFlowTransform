@@ -101,7 +101,7 @@ def _run_level(
     name_width: int,
     name_formatter: Callable[[str], str] | None,
 ) -> tuple[bool, int, int, int]:
-    """Führt eine Ebene aus und loggt. Rückgabe: (had_error, ok_count, fail_count, lvl_ms)."""
+    """Executes one level and logs. Returns: (had_error, ok_count, fail_count, lvl_ms)."""
     if not names:
         return False, 0, 0, 0
 

@@ -61,6 +61,18 @@ pytest -q
 make demo
 ```
 
+For engines behind optional extras, run targeted installs/tests in a matrix (local or CI) to catch import/runtime gaps without pulling every dependency:
+
+```bash
+uv pip install -e .[duckdb]        # core
+uv pip install -e .[postgres]
+uv pip install -e .[bigquery]
+uv pip install -e .[bigquery_bf]
+uv pip install -e .[spark]
+uv pip install -e .[snowflake]
+# or uv pip install -e .[full] for an all-in-one sweep
+```
+
 ---
 
 ## 🧑‍🤝‍🧑 Code of Conduct

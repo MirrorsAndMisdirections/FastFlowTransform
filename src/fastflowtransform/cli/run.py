@@ -209,9 +209,10 @@ class _RunEngine:
             except Exception:
                 fmt = None
 
-        # For database engines (DuckDB/Postgres), we do not show a format suffix
-        # at all to avoid misleading '[parquet]' labels.
-        if engine in {"duckdb", "postgres", "postgresql"}:
+        # For database engines (DuckDB/Postgres/BigQuery), we do not show a format suffix
+        # at all to avoid misleading '[parquet]' labels (these engines don't expose
+        # a user-selectable table file format in FFT).
+        if engine in {"duckdb", "postgres", "postgresql", "bigquery"}:
             fmt_suffix = ""
         else:
             fmt_suffix = f" [{fmt}]" if fmt else ""

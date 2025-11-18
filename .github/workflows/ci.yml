@@ -46,17 +46,6 @@ jobs:
           git rev-parse --short HEAD
           git log -1 --stat
 
-      - name: "Debug: ensure pyproject present"
-        run: |
-          test -f pyproject.toml || (echo "pyproject.toml fehlt!" && exit 1)
-          ls -la
-
-      - name: "Debug: Ruff version & scope"
-        run: |
-          uv run ruff --version
-          echo "---- Ruff will lint these files (no cache) ----"
-          uv run ruff check src tests --no-cache --show-files
-
       - name: Ruff (lint)
         run: uv run ruff check src tests --no-cache --output-format=github
 
@@ -66,7 +55,54 @@ jobs:
       - name: Unit tests (fast)
         env:
           PYTHONWARNINGS: default
-        run: uv run pytest -q tests -m unit --maxfail=1
+        run: uv run pytest -q tests -m "unit and not (postgres or databricks_spark or bigquery or snowflake)" --maxfail=1
+
+  # ---------- Engine-specific unit slices (require optional extras) ----------
+  unit-matrix:
+    runs-on: ubuntu-latest
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: postgres
+            extra: postgres
+            marker: "unit and postgres"
+          - name: databricks_spark
+            extra: spark
+            marker: "unit and databricks_spark"
+            java: true
+          - name: bigquery
+            extra: bigquery_bf
+            marker: "unit and bigquery"
+          - name: snowflake
+            extra: snowflake
+            marker: "unit and snowflake"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv (and Python)
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync deps (dev + extra)
+        run: uv sync --extra dev --extra ${{ matrix.extra }} --frozen
+
+      - name: Setup Java for Spark
+        if: matrix.java == true
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Run unit tests for engine
+        env:
+          PYTHONWARNINGS: default
+        run: uv run pytest -q tests -m "${{ matrix.marker }}" --maxfail=1
 
   # ---------- Examples: Integration Tests ----------
   examples-matrix:
@@ -75,7 +111,101 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine: [duckdb, postgres, databricks_spark]
+        include:
+          # DuckDB examples
+          - engine: duckdb
+            extra: ""
+            example: api_demo
+            env_file: examples/api_demo/.env.dev_duckdb
+          - engine: duckdb
+            extra: ""
+            example: basic_demo
+            env_file: examples/basic_demo/.env.dev_duckdb
+          - engine: duckdb
+            extra: ""
+            example: cache_demo
+            env_file: examples/cache_demo/.env.dev_duckdb
+          - engine: duckdb
+            extra: ""
+            example: dq_demo
+            env_file: examples/dq_demo/.env.dev_duckdb
+          - engine: duckdb
+            extra: ""
+            example: incremental_demo
+            env_file: examples/incremental_demo/.env.dev_duckdb
+          - engine: duckdb
+            extra: ""
+            example: macros_demo
+            env_file: examples/macros_demo/.env.dev_duckdb
+          - engine: duckdb
+            extra: ""
+            example: materializations_demo
+            env_file: examples/materializations_demo/.env.dev_duckdb
+          # Postgres examples
+          - engine: postgres
+            extra: "postgres"
+            example: api_demo
+            env_file: examples/api_demo/.env.dev_postgres
+          - engine: postgres
+            extra: "postgres"
+            example: basic_demo
+            env_file: examples/basic_demo/.env.dev_postgres
+          - engine: postgres
+            extra: "postgres"
+            example: cache_demo
+            env_file: examples/cache_demo/.env.dev_postgres
+          - engine: postgres
+            extra: "postgres"
+            example: dq_demo
+            env_file: examples/dq_demo/.env.dev_postgres
+          - engine: postgres
+            extra: "postgres"
+            example: incremental_demo
+            env_file: examples/incremental_demo/.env.dev_postgres
+          - engine: postgres
+            extra: "postgres"
+            example: macros_demo
+            env_file: examples/macros_demo/.env.dev_postgres
+          - engine: postgres
+            extra: "postgres"
+            example: materializations_demo
+            env_file: examples/materializations_demo/.env.dev_postgres
+          # Spark examples
+          - engine: databricks_spark
+            extra: "spark"
+            example: api_demo
+            java: true
+            env_file: examples/api_demo/.env.dev_databricks
+          - engine: databricks_spark
+            extra: "spark"
+            example: basic_demo
+            java: true
+            env_file: examples/basic_demo/.env.dev_databricks
+          - engine: databricks_spark
+            extra: "spark"
+            example: cache_demo
+            java: true
+            env_file: examples/cache_demo/.env.dev_databricks
+          - engine: databricks_spark
+            extra: "spark"
+            example: dq_demo
+            java: true
+            env_file: examples/dq_demo/.env.dev_databricks
+          - engine: databricks_spark
+            extra: "spark"
+            example: incremental_demo
+            java: true
+            env_file: examples/incremental_demo/.env.dev_databricks
+          - engine: databricks_spark
+            extra: "spark"
+            example: macros_demo
+            java: true
+            env_file: examples/macros_demo/.env.dev_databricks
+          - engine: databricks_spark
+            extra: "spark"
+            example: materializations_demo
+            java: true
+            env_file: examples/materializations_demo/.env.dev_databricks
 
     services:
       postgres:
@@ -102,8 +232,13 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
-      - name: Sync deps (dev)
-        run: uv sync --extra dev --frozen
+      - name: Sync deps (dev + extra)
+        run: |
+          extras="--extra dev"
+          if [ -n "${{ matrix.extra }}" ]; then
+            extras="$extras --extra ${{ matrix.extra }}"
+          fi
+          uv sync $extras --frozen
 
       - name: Setup Java for Spark
         if: matrix.engine == 'databricks_spark'
@@ -113,19 +248,19 @@ jobs:
           java-version: '17'
 
       - name: Run example/integration tests for engine
-        env:
-          FF_PG_DSN: postgresql+psycopg://postgres:postgres@localhost:5432/fastflowtransform
-          FF_PG_SCHEMA: ci_examples
         run: |
-          echo "Running integration tests for engine=${{ matrix.engine }}"
-          case "${{ matrix.engine }}" in
-            duckdb)
-              uv run pytest -m "integration and duckdb" --maxfail=1 -q tests
-              ;;
-            postgres)
-              uv run pytest -m "integration and postgres" --maxfail=1 -q tests
-              ;;
-            databricks_spark)
-              uv run pytest -m "integration and databricks_spark" --maxfail=1 -q tests
-              ;;
-          esac
+          echo "Running integration tests for engine=${{ matrix.engine }} example=${{ matrix.example }}"
+          set -a
+          unset FF_PG_DSN FF_PG_SCHEMA
+          if [ -f "${{ matrix.env_file }}" ]; then
+            source "${{ matrix.env_file }}"
+          fi
+          if [ "${{ matrix.engine }}" = "postgres" ]; then
+            export FF_PG_SCHEMA="${{ matrix.example }}"
+            export FF_PG_DSN="${FF_PG_DSN:-postgresql+psycopg://postgres:postgres@localhost:5432/fastflowtransform}"
+          fi
+          set +a
+          uv run pytest -m "integration and ${{ matrix.engine }}" \
+            -vv --show-capture=all --log-cli-level=INFO \
+            -k "${{ matrix.example }} and ${{ matrix.engine }}" \
+            --maxfail=1 -q tests/integration/examples/test_examples_matrix.py

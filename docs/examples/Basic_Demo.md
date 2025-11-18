@@ -1,10 +1,12 @@
 # Basic Demo Project
 
-The `examples/basic_demo` project shows the smallest end-to-end FastFlowTransform pipeline. It combines one seed, a staging model, and a final mart while staying portable across DuckDB, Postgres, and Databricks Spark.
+The `examples/basic_demo` project shows the smallest end-to-end FastFlowTransform pipeline. It combines one seed, a staging model, and a final mart while staying portable across DuckDB, Postgres, Databricks Spark, and BigQuery.
 
 ## Why it exists
+
 - **Start small** – demonstrate the minimum folder structure (`seeds/`, `models/`, `profiles.yml`) needed to run `fft`.
 - **Engine parity** – prove that a single project can target multiple engines by swapping profiles.
+- **Cloud & local** – show that the same project runs both on local engines (DuckDB/Postgres/Spark) and in a cloud warehouse (BigQuery).
 - **Understand outputs** – show where documentation and manifests land after a run.
 
 Use it as a sandbox before adding your own sources, macros, or Python models.
@@ -13,12 +15,12 @@ Use it as a sandbox before adding your own sources, macros, or Python models.
 
 | Path | Purpose |
 |------|---------|
-| `seeds/seed_users.csv` | Sample CRM-style user data. `fft seed` materializes it as `crm.users`. |
+| `seeds/seed_users.csv` | Sample CRM-style user data. `fft seed` materializes it as a physical `seed_users` table in the active engine (schema/dataset depends on the profile). |
 | `models/staging/users_clean.ff.sql` | Normalizes emails, casts types, and tags the model for all engines. |
 | `models/marts/mart_users_by_domain.ff.sql` | Aggregates users per email domain and records the first/last signup dates. |
-| `models/engines/*/mart_latest_signup.ff.py` | Engine-specific Python models (pandas for DuckDB/Postgres, PySpark for Databricks) selecting the most recent signup per domain from the staging view. |
-| `profiles.yml` | Declares `dev_duckdb`, `dev_postgres`, and `dev_databricks` profiles driven by environment variables. |
-| `.env.dev_*` | Template environment files you can `source` per engine. |
+| `models/engines/*/mart_latest_signup.ff.py` | Engine-specific Python models selecting the most recent signup per domain from the staging view:<br>• pandas for DuckDB/Postgres<br>• PySpark for Databricks<br>• BigQuery DataFrames (BigFrames) for BigQuery. |
+| `profiles.yml` | Declares `dev_duckdb`, `dev_postgres`, `dev_databricks`, and `dev_bigquery` profiles driven by environment variables. |
+| `.env.dev_*` | Template environment files you can `source` per engine (`.env.dev_duckdb`, `.env.dev_postgres`, `.env.dev_databricks`, `.env.dev_bigquery`). |
 | `Makefile` | One command (`make demo ENGINE=…`) to seed, run, document, test, and preview results. |
 
 ## Running the demo
@@ -26,24 +28,61 @@ Use it as a sandbox before adding your own sources, macros, or Python models.
 1. `cd examples/basic_demo`
 2. Choose an engine and export its environment variables:
    ```bash
+   # DuckDB
    set -a; source .env.dev_duckdb; set +a
-   # swap to .env.dev_postgres or .env.dev_databricks for other engines
+
+   # Postgres
+   # set -a; source .env.dev_postgres; set +a
+
+   # Databricks Spark
+   # set -a; source .env.dev_databricks; set +a
+
+   # BigQuery (choose one)
+   # set -a; source .env.dev_bigquery_pandas; set +a      # pandas client
+   # set -a; source .env.dev_bigquery_bigframes; set +a   # BigFrames
    ```
-3. Execute the full flow:
+
+3. Execute the full flow for the selected engine:
+
    ```bash
+   # DuckDB / Postgres / Databricks
    make demo ENGINE=duckdb
+   # make demo ENGINE=postgres
+   # make demo ENGINE=databricks_spark
+
+   # BigQuery (set BQ_FRAME to choose pandas vs bigframes)
+   # builds into <FF_BQ_PROJECT>.<FF_BQ_DATASET>.*
+   # requires a GCP project, dataset, and credentials (see BigQuery setup docs)
+   # set profiles.yml → bigquery.allow_create_dataset: true if the dataset should be auto-created
+   # make demo ENGINE=bigquery BQ_FRAME=bigframes
+   # make demo ENGINE=bigquery BQ_FRAME=pandas
    ```
-   The Makefile runs `fft seed`, `fft run`, `fft dag`, `fft test`, and `fft show basic_demo.mart_users_by_domain`. To preview the Python mart, run `make show ENGINE=duckdb SHOW_MODEL=mart_latest_signup` (or swap `ENGINE` as needed).
+
+   The Makefile runs `fft seed`, `fft run`, `fft dag`, and `fft test`.
+
+   To open the rendered DAG site after a run:
+
+   ```bash
+   make show ENGINE=duckdb
+   make show ENGINE=bigquery
+   ```
 4. Inspect artifacts:
-   - `.fastflowtransform/target/manifest.json` and `run_results.json`
-   - `site/dag/index.html` for the rendered model graph
-   - CLI output from `fft show` displaying the aggregated mart
 
-The demo also enables baseline data quality checks in `project.yml`. Running `fft test` (or `make test`) verifies that primary keys remain unique/not-null across `seed_users`, `users_clean`, `mart_users_by_domain`, and the Python mart, while ensuring aggregate metrics such as `user_count` never drop below zero and each domain appears only once in `mart_latest_signup`.
+   * `.fastflowtransform/target/manifest.json` and `run_results.json`
+   * `site/dag/index.html` for the rendered model graph
+   * Use your engine’s client (or `fft run` logs) to inspect the mart outputs
 
-## Next steps
+## Data quality tests
 
-- Add more CSVs under `seeds/` and declare them in `sources.yml`.
-- Create additional staging models so marts can reuse normalized data.
-- Introduce Python models or macros mirroring how the API demo scales up.
-- Update `.env.dev_*` with real credentials once you connect to shared databases.
+The demo enables baseline data quality checks in `project.yml`. Running `fft test` (or `make test ENGINE=…`) verifies that:
+
+* Primary keys remain unique/not-null across:
+
+  * `seed_users`
+  * `users_clean`
+  * `mart_users_by_domain`
+  * the Python mart `mart_latest_signup`
+* Aggregate metrics such as `user_count` never drop below zero.
+* Each email domain appears only once in `mart_latest_signup`.
+
+These tests run against whatever engine/profile is active — including BigQuery, where they execute as standard SQL queries on the configured dataset.

@@ -304,7 +304,7 @@ def get_df(
         Controls the returned frame type. "pandas" (default) yields a pandas DataFrame.
         "spark" materialises a pyspark.sql.DataFrame using the provided session
         (or an active/builder session).
-        "bigframes" is reserved for future integration and currently raises NotImplementedError.
+        "bigframes" returns a BigFrames DataFrame (requires `bigframes`).
     session : Any | None
         Optional backend handle. For Spark, pass a SparkSession;
         otherwise the active session or a new one is used.
@@ -374,10 +374,13 @@ def get_df(
                 spark = SparkSession.builder.getOrCreate()
             return spark.createDataFrame(pdf)
         if mode == "bigframes":
-            raise NotImplementedError(
-                "get_df(..., output='bigframes') is not implemented yet. "
-                "Open an issue if you need this backend."
-            )
+            try:
+                import bigframes.pandas as bpd  # noqa: PLC0415
+            except Exception as exc:  # pragma: no cover - bigframes optional dependency
+                raise RuntimeError(
+                    "get_df(..., output='bigframes') requires the 'bigframes' package."
+                ) from exc
+            return bpd.DataFrame(pdf)
         raise ValueError(
             f"Unsupported output backend '{output}' (expected pandas|spark|bigframes)."
         )

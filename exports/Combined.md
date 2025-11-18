@@ -105,9 +105,10 @@ The command is non-interactive, refuses to overwrite existing directories, and l
 ## 1. Install & bootstrap
 
 ```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -e ./fastflowtransform
+python3 -m venv .venv
+. .venv/bin/activate  # or source .venv/bin/activate
+pip install --upgrade pip
+pip install -e .      # run from the repo root; use `uv pip install --editable .` if you prefer uv
 fft --help
 ```
 
@@ -137,12 +138,19 @@ cat <<'SQL' > demo/models/users.ff.sql
 select id, email
 from {{ source('raw', 'users') }}
 SQL
+
+cat <<'YAML' > demo/profiles.yml
+dev:
+  engine: duckdb
+  duckdb:
+    path: ".local/demo.duckdb"
+YAML
 ```
 
 ## 3. Seed static inputs
 
 ```bash
-fft seed demo --profile dev
+fft seed demo --env dev
 ```
 
 This materializes the CSV into the configured engine (DuckDB by default) using `seed_users` as the physical table.
@@ -150,7 +158,7 @@ This materializes the CSV into the configured engine (DuckDB by default) using `
 ## 4. Run the pipeline
 
 ```bash
-fft run demo --cache off
+fft run demo --env dev --cache off
 ```
 
 You should see log lines similar to `✓ L01 [DUCK] users.ff`. The resulting table lives in the target schema (`staging` in this example).
@@ -170,6 +178,7 @@ You should see log lines similar to `✓ L01 [DUCK] users.ff`. The resulting tab
 - Add `project.yml` for reusable `vars:` and metadata
 - Explore `fft docs` to generate HTML documentation
 - Use engine profiles under `profiles.yml` to target Postgres, BigQuery, or Databricks (path-based sources supported via `format` + `location` overrides)
+- Render the DAG site for this project: `fft dag demo --env dev --html` (find it under `demo/site/dag/index.html`)
 
 Refer to `docs/Config_and_Macros.md` for advanced configuration options.
 
@@ -177,7 +186,7 @@ Refer to `docs/Config_and_Macros.md` for advanced configuration options.
 
 <!-- >>> FILE: Technical_Overview.md >>> -->
 
-# 🧭 FastFlowTransform – Technical Developer Documentation (v0.4)
+# 🧭 FastFlowTransform – Technical Developer Documentation
 
 > Status: latest updates from your context dump. This document consolidates project structure, architecture, core APIs, error handling, CLI, examples, and roadmap into a print/git-friendly Markdown.
 >
@@ -232,64 +241,7 @@ Refer to `docs/Config_and_Macros.md` for advanced configuration options.
 
 ### Project Layout
 
-```text
-fastflowtransform/
-├── pyproject.toml
-├── src/
-│   └── fastflowtransform/
-│       ├── __init__.py
-│       ├── cli.py
-│       ├── core.py
-│       ├── dag.py
-│       ├── docs.py
-│       ├── errors.py
-│       ├── settings.py
-│       ├── seeding.py
-│       ├── testing.py
-│       ├── validation.py
-│       ├── decorators.py                 # optional, if not kept in core.py
-│       ├── docs/
-│       │   └── templates/
-│       │       ├── index.html.j2
-│       │       └── model.html.j2
-│       ├── executors/
-│       │   ├── __init__.py
-│       │   ├── base.py
-│       │   ├── duckdb_exec.py
-│       │   ├── postgres_exec.py
-│       │   ├── bigquery_exec.py          # pandas + BigQuery client
-│       │   ├── bigquery_bf_exec.py       # BigQuery DataFrames (bigframes)
-│       │   ├── databricks_spark_exec.py  # PySpark (without pandas)
-│       │   └── snowflake_snowpark_exec.py# Snowpark (without pandas)
-│       └── streaming/
-│           ├── __init__.py
-│           ├── file_tail.py
-│           └── sessionizer.py
-│
-├── examples/
-│   ├── simple_duckdb/
-│   │   ├── models/
-│   │   │   ├── users.ff.sql
-│   │   │   ├── users_enriched.ff.py
-│   │   │   ├── orders.ff.sql
-│   │   │   ├── mart_orders_enriched.ff.py
-│   │   │   └── mart_users.ff.sql
-│   │   ├── seeds/
-│   │   │   ├── seed_users.csv
-│   │   │   └── seed_orders.csv
-│   │   ├── sources.yml
-│   │   ├── project.yml
-│   │   ├── Makefile
-│   │   └── .local/demo.duckdb  (after make seed/run)
-│   └── postgres/                # similar structure if needed
-│
-├── tests/
-│   ├── conftest.py
-│   ├── duckdb/ …                # end-to-end + unit
-│   ├── postgres/ …
-│   └── streaming/ …
-└── README.md
-```
+For an up-to-date view, browse the repository tree or run `find . -maxdepth 2` from the root; all examples live under `examples/` with their own READMEs.
 
 ### Example Projects and Seeds
 
@@ -323,20 +275,6 @@ Need to understand profile precedence, `.env` layering, or the Pydantic models t
 ### Parallel Execution and Cache
 
 Level-wise parallelism, cache modes, fingerprint formula, and the `_ff_meta` audit table are documented in [Cache_and_Parallelism.md](./Cache_and_Parallelism.md). Use that reference for CLI examples (`--jobs`, `--cache`, `--rebuild`), skip conditions, and troubleshooting tips related to concurrency.
-
-### Roadmap Snapshot
-
-| Version | Content                                           |
-|---------|---------------------------------------------------|
-| 0.2     | `config(materialized=...)`, Jinja macros, variables |
-| 0.3     | Parallel execution, cache                         |
-| 0.4     | Incremental models                                |
-| 0.5     | Streaming connectors (Kafka, S3)                  |
-| 1.0     | Stable API, plugin SDK                            |
-
-> See also: feature pyramid & roadmap phases (OSS/SaaS) in the separate document.
-
----
 
 ### Cross-Table Reconciliations
 
@@ -472,13 +410,13 @@ class BaseExecutor(ABC):
     def _materialize_relation(self, relation: str, df: pd.DataFrame, node: Node) -> None: ...
 ```
 
-**DuckDB (`duckdb_exec.py`)**
+**DuckDB (`duckdb.py`)**
 
 - `run_sql(node, env)` renders Jinja (`ref/source`) and executes the SQL.
 - `_read_relation` loads a table as `DataFrame`; surfaces actionable errors when a dependency is missing.
 - `_materialize_relation` writes the `DataFrame` as a table (`create or replace table ...`).
 
-**Postgres (`postgres_exec.py`)**
+**Postgres (`postgres.py`)**
 
 - `_SAConnShim` (compatible with `testing._exec`).
 - `run_sql` renders SQL and rewrites `CREATE OR REPLACE TABLE` to `DROP + CREATE AS`.
@@ -536,41 +474,7 @@ def seed_project(project_dir: Path, executor, schema: Optional[str] = None) -> i
 
 ### CLI Implementation
 
-Operational usage lives in [CLI Flows](#cli-flows). This section drills into the Typer command definitions in `cli.py`.
-
-**Commands:**
-
-- `fft run <project> [--env dev] [--engine ...]`
-- `fft dag <project> [--env dev] [--html] [--select ...] [--with-schema/--no-schema]`
-- `fft docgen <project> [--env dev] [--out dir] [--emit-json path] [--open-source]`
-- `fft test <project> [--env dev] [--select batch|streaming|tag:...]`
-- `fft seed <project> [--env dev]`
-- `fft sync-db-comments <project> [--env dev] [--dry-run]`
-- `fft utest <project> [--env dev] [--cache off|ro|rw] [--reuse-meta]`
-- `fft --version`
-
-**Key components:**
-
-```python
-def _load_project_and_env(project_arg) -> tuple[Path, Environment]: ...
-def _resolve_profile(env_name, engine, proj) -> tuple[EnvSettings, Profile]: ...
-def _get_test_con(executor: Any) -> Any: ...
-```
-
-**Test summary (exit 2 on failures):**
-
-```
-Data Quality Summary
-────────────────────
-✅ not_null           users.email                              (3ms)
-❌ unique             users.id                                 (2ms)
-   ↳ users.id has 1 duplicate
-
-Totals
-──────
-✓ passed: 1
-✗ failed: 1
-```
+Operational usage lives in [CLI Flows](#cli-flows) and the dedicated [CLI Guide](CLI_Guide.md). For implementation details, see the Typer commands in `src/fastflowtransform/cli/`.
 
 ---
 
@@ -615,7 +519,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 from fastflowtransform.core import REGISTRY
 from fastflowtransform.dag import topo_sort
-from fastflowtransform.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.executors.duckdb import DuckExecutor
 
 proj = Path("examples/simple_duckdb").resolve()
 REGISTRY.load_project(proj)
@@ -950,17 +854,17 @@ fft run . --env dev --select dim_countries_from_api --http-cache ro
 
 - Technical guide: *Developer Guide – Architecture & Internals*
 - Unit tests: `tests/api/test_http_*.py`
-- Runtime & cache: *Parallelism & Cache (v0.3)*
+- Runtime & cache: *Parallelism & Cache*
 
 
 
 <!-- >>> FILE: Config_and_Macros.md >>> -->
 
-# FastFlowTransform Modeling Reference (v0.1)
+# FastFlowTransform Modeling Reference
 
 > Authoritative reference for FastFlowTransform’s modeling layer: SQL/Python models, configuration macros, templating helpers, and testing hooks.
-> Works with FastFlowTransform v0.1 (T1–T11). Supported engines: DuckDB, Postgres, BigQuery (pandas & BigFrames), Databricks/Spark, Snowflake/Snowpark.
-> **Execution & Cache (v0.3) quick notes**
+> Supported engines: DuckDB, Postgres, BigQuery (pandas & BigFrames), Databricks/Spark, Snowflake/Snowpark.
+> **Execution & Cache quick notes**
 > - Parallelism is level-wise; use `fft run --jobs N`.
 > - Use `--cache={off|ro|rw|wo}` to control skipping behavior.
 > - Fingerprints include rendered SQL / Python function source, selected `FF_*` env vars, `sources.yml` and upstream fingerprints.
@@ -1142,7 +1046,7 @@ Call `config()` at the top of SQL models. Python models get the same options via
 ) }}
 ```
 
-Supported keys (v0.1):
+Supported keys:
 
 | Key            | Type            | Description                                                                  |
 |----------------|-----------------|------------------------------------------------------------------------------|
@@ -1265,7 +1169,7 @@ from {{ ref('users.ff') }};
 
 - Default → materialized as `table`.
 - `materialized='view'` produces an engine-specific temporary table first, then creates/overwrites a view that selects from it.
-- Ephemeral Python models are not supported in v0.1.
+- Ephemeral Python models are not supported.
 
 ---
 
@@ -1597,7 +1501,7 @@ FF_RUN_DATE=2025-01-01 fft run . --env dev --cache=rw
 @@ -10,6 +10,7 @@
  - [User Guide – Operational](./Technical_Overview.md#part-i--operational-guide)
  - [Modeling Reference](./Config_and_Macros.md)
- - [Parallelism & Cache (v0.3)](./Cache_and_Parallelism.md)
+- [Parallelism & Cache](./Cache_and_Parallelism.md)
  - [Developer Guide – Architecture & Internals](./Technical_Overview.md#part-ii--architecture--internals)
 ````
 
@@ -2756,7 +2660,7 @@ FastFlowTransform’s CLI is the entry point for seeding data, running DAGs, gen
 | `fft seed <project> [--env dev]` | Materialize CSV/Parquet seeds into the configured engine. |
 | `fft run <project> [--env dev]` | Execute the DAG (obeys cache + parallel flags). |
 | `fft dag <project> --html` | Render the DAG graph/site for quick inspection. |
-| `fft docgen <project> --out site/docs` | Generate the full documentation bundle (graph + model pages + optional JSON). |
+| `fft docgen <project> [--out site/docs] [--emit-json path] [--open-source]` | Generate the full documentation bundle (graph + model pages + optional JSON). Default output is `<project>/site/docs`. |
 | `fft test <project> [--env dev]` | Run schema/data-quality tests defined in `project.yml` or schema YAML files. |
 | `fft utest <project>` | Execute unit tests defined under `tests/unit/*.yml`. |
 | `fft sync-db-comments <project>` | Push model/column descriptions into Postgres or Snowflake comments. |
@@ -3128,11 +3032,13 @@ Error types map to the classes documented in `docs/Technical_Overview.md#core-mo
 
 # Basic Demo Project
 
-The `examples/basic_demo` project shows the smallest end-to-end FastFlowTransform pipeline. It combines one seed, a staging model, and a final mart while staying portable across DuckDB, Postgres, and Databricks Spark.
+The `examples/basic_demo` project shows the smallest end-to-end FastFlowTransform pipeline. It combines one seed, a staging model, and a final mart while staying portable across DuckDB, Postgres, Databricks Spark, and BigQuery.
 
 ## Why it exists
+
 - **Start small** – demonstrate the minimum folder structure (`seeds/`, `models/`, `profiles.yml`) needed to run `fft`.
 - **Engine parity** – prove that a single project can target multiple engines by swapping profiles.
+- **Cloud & local** – show that the same project runs both on local engines (DuckDB/Postgres/Spark) and in a cloud warehouse (BigQuery).
 - **Understand outputs** – show where documentation and manifests land after a run.
 
 Use it as a sandbox before adding your own sources, macros, or Python models.
@@ -3141,12 +3047,12 @@ Use it as a sandbox before adding your own sources, macros, or Python models.
 
 | Path | Purpose |
 |------|---------|
-| `seeds/seed_users.csv` | Sample CRM-style user data. `fft seed` materializes it as `crm.users`. |
+| `seeds/seed_users.csv` | Sample CRM-style user data. `fft seed` materializes it as a physical `seed_users` table in the active engine (schema/dataset depends on the profile). |
 | `models/staging/users_clean.ff.sql` | Normalizes emails, casts types, and tags the model for all engines. |
 | `models/marts/mart_users_by_domain.ff.sql` | Aggregates users per email domain and records the first/last signup dates. |
-| `models/engines/*/mart_latest_signup.ff.py` | Engine-specific Python models (pandas for DuckDB/Postgres, PySpark for Databricks) selecting the most recent signup per domain from the staging view. |
-| `profiles.yml` | Declares `dev_duckdb`, `dev_postgres`, and `dev_databricks` profiles driven by environment variables. |
-| `.env.dev_*` | Template environment files you can `source` per engine. |
+| `models/engines/*/mart_latest_signup.ff.py` | Engine-specific Python models selecting the most recent signup per domain from the staging view:<br>• pandas for DuckDB/Postgres<br>• PySpark for Databricks<br>• BigQuery DataFrames (BigFrames) for BigQuery. |
+| `profiles.yml` | Declares `dev_duckdb`, `dev_postgres`, `dev_databricks`, and `dev_bigquery` profiles driven by environment variables. |
+| `.env.dev_*` | Template environment files you can `source` per engine (`.env.dev_duckdb`, `.env.dev_postgres`, `.env.dev_databricks`, `.env.dev_bigquery`). |
 | `Makefile` | One command (`make demo ENGINE=…`) to seed, run, document, test, and preview results. |
 
 ## Running the demo
@@ -3154,27 +3060,64 @@ Use it as a sandbox before adding your own sources, macros, or Python models.
 1. `cd examples/basic_demo`
 2. Choose an engine and export its environment variables:
    ```bash
+   # DuckDB
    set -a; source .env.dev_duckdb; set +a
-   # swap to .env.dev_postgres or .env.dev_databricks for other engines
+
+   # Postgres
+   # set -a; source .env.dev_postgres; set +a
+
+   # Databricks Spark
+   # set -a; source .env.dev_databricks; set +a
+
+   # BigQuery (choose one)
+   # set -a; source .env.dev_bigquery_pandas; set +a      # pandas client
+   # set -a; source .env.dev_bigquery_bigframes; set +a   # BigFrames
    ```
-3. Execute the full flow:
+
+3. Execute the full flow for the selected engine:
+
    ```bash
+   # DuckDB / Postgres / Databricks
    make demo ENGINE=duckdb
+   # make demo ENGINE=postgres
+   # make demo ENGINE=databricks_spark
+
+   # BigQuery (set BQ_FRAME to choose pandas vs bigframes)
+   # builds into <FF_BQ_PROJECT>.<FF_BQ_DATASET>.*
+   # requires a GCP project, dataset, and credentials (see BigQuery setup docs)
+   # set profiles.yml → bigquery.allow_create_dataset: true if the dataset should be auto-created
+   # make demo ENGINE=bigquery BQ_FRAME=bigframes
+   # make demo ENGINE=bigquery BQ_FRAME=pandas
    ```
-   The Makefile runs `fft seed`, `fft run`, `fft dag`, `fft test`, and `fft show basic_demo.mart_users_by_domain`. To preview the Python mart, run `make show ENGINE=duckdb SHOW_MODEL=mart_latest_signup` (or swap `ENGINE` as needed).
+
+   The Makefile runs `fft seed`, `fft run`, `fft dag`, and `fft test`.
+
+   To open the rendered DAG site after a run:
+
+   ```bash
+   make show ENGINE=duckdb
+   make show ENGINE=bigquery
+   ```
 4. Inspect artifacts:
-   - `.fastflowtransform/target/manifest.json` and `run_results.json`
-   - `site/dag/index.html` for the rendered model graph
-   - CLI output from `fft show` displaying the aggregated mart
 
-The demo also enables baseline data quality checks in `project.yml`. Running `fft test` (or `make test`) verifies that primary keys remain unique/not-null across `seed_users`, `users_clean`, `mart_users_by_domain`, and the Python mart, while ensuring aggregate metrics such as `user_count` never drop below zero and each domain appears only once in `mart_latest_signup`.
+   * `.fastflowtransform/target/manifest.json` and `run_results.json`
+   * `site/dag/index.html` for the rendered model graph
+   * Use your engine’s client (or `fft run` logs) to inspect the mart outputs
 
-## Next steps
+## Data quality tests
 
-- Add more CSVs under `seeds/` and declare them in `sources.yml`.
-- Create additional staging models so marts can reuse normalized data.
-- Introduce Python models or macros mirroring how the API demo scales up.
-- Update `.env.dev_*` with real credentials once you connect to shared databases.
+The demo enables baseline data quality checks in `project.yml`. Running `fft test` (or `make test ENGINE=…`) verifies that:
+
+* Primary keys remain unique/not-null across:
+
+  * `seed_users`
+  * `users_clean`
+  * `mart_users_by_domain`
+  * the Python mart `mart_latest_signup`
+* Aggregate metrics such as `user_count` never drop below zero.
+* Each email domain appears only once in `mart_latest_signup`.
+
+These tests run against whatever engine/profile is active — including BigQuery, where they execute as standard SQL queries on the configured dataset.
 
 
 
@@ -4432,10 +4375,10 @@ Together, these features make iterative development **fast, reliable, and reprod
 
 <!-- >>> FILE: examples/Incremental_Demo.md >>> -->
 
-````markdown
-# Incremental & Delta Demo
+#  Incremental, Delta & Iceberg Demo
 
-This example project shows how to use **incremental models** and **Delta-style merges** in FastFlowTransform across DuckDB, Postgres and Databricks Spark.
+This example project shows how to use **incremental models** and **Delta-/Iceberg-style merges** in FastFlowTransform across DuckDB, Postgres, Databricks Spark (Parquet, Delta & Iceberg), and BigQuery (pandas or BigFrames).
+
 
 It is intentionally small and self-contained so you can copy/paste patterns into your own project.
 
@@ -4456,7 +4399,10 @@ incremental_demo/
   .env
   .env.dev_duckdb
   .env.dev_postgres
-  .env.dev_databricks
+  .env.dev_databricks_delta
+  .env.dev_databricks_iceberg
+  .env.dev_bigquery_pandas
+  .env.dev_bigquery_bigframes
   Makefile
   profiles.yml
   project.yml
@@ -4477,6 +4423,11 @@ incremental_demo/
         fct_events_py_incremental.ff.py
       databricks_spark/
         fct_events_py_incremental.ff.py
+      bigquery/
+        pandas/
+          fct_events_py_incremental.ff.py
+        bigframes/
+          fct_events_py_incremental.ff.py
 ```
 
 *Your actual filenames may differ slightly; the concepts are the same.*
@@ -4503,7 +4454,14 @@ The demo revolves around a tiny `events` dataset and three different ways to bui
    * A Python model that returns a DataFrame; the executor applies incremental behaviour based on model `meta` (unique key + updated-at timestamp) and the target engine:
 
      * DuckDB / Postgres: incremental insert/merge in SQL
-     * Databricks Spark: `MERGE INTO` for Delta where available, with a fallback full-refresh strategy
+     * Databricks Spark: `MERGE INTO` for Delta or Iceberg where available (Spark 4), with a fallback full-refresh strategy for other formats
+     * BigQuery: pandas- or BigFrames-backed DataFrame models with incremental merge logic handled by the BigQuery executor
+
+4. **Iceberg profile for Spark 4**
+
+   * Optional Databricks/Spark profile that uses the built-in **Iceberg catalog**.
+   * Seeds and models are materialized as Iceberg tables in a local warehouse directory.
+   * `ref()` and `source()` automatically point to the Iceberg catalog when the `databricks_spark.table_format` is set to `iceberg`.
 
 ---
 
@@ -4667,6 +4625,7 @@ On subsequent runs, the engine evaluates the `delta.sql` snippet and:
 
 * **DuckDB / Postgres**: inserts or merges the resulting rows into the target table
 * **Databricks Spark**: tries a `MERGE INTO` (Delta) and falls back to a full-refresh if necessary
+* **BigQuery**: applies incremental insert/merge logic in SQL via the BigQuery executor
 
 ---
 
@@ -4740,6 +4699,8 @@ Files:
 models/engines/duckdb/fct_events_py_incremental.ff.py
 models/engines/postgres/fct_events_py_incremental.ff.py
 models/engines/databricks_spark/fct_events_py_incremental.ff.py
+models/engines/bigquery/pandas/fct_events_py_incremental.ff.py
+models/engines/bigquery/bigframes/fct_events_py_incremental.ff.py
 ```
 
 Each engine variant uses the same logical signature:
@@ -4789,9 +4750,9 @@ The executor uses the `meta.incremental` / `meta.unique_key` / `meta.updated_at`
 
 ---
 
-## Delta variant (Databricks / Spark)
+## Delta & Iceberg variants (Databricks / Spark)
 
-In addition to the “regular” incremental models, the demo also includes a **Delta Lake variant**
+In addition to the “regular” incremental models, the demo also includes **Delta Lake** and **Iceberg** variants
 that shows how to:
 
 - route a model to **Delta tables** via `project.yml`  
@@ -4802,7 +4763,7 @@ This is optional and only relevant for the `databricks_spark` engine.
 
 ---
 
-### Storage configuration for the Delta model
+### Storage configuration for the Delta / Iceberg models
 
 In `project.yml`, the Delta variant gets its own storage entry, separate from the Parquet fact table:
 
@@ -4818,6 +4779,12 @@ models:
     fct_events_sql_inline_delta:
       path: ".local/spark_delta/fct_events_sql_inline"
       format: delta
+
+    # ❄️ Iceberg-based fact table (Spark 4 / Databricks only)
+    fct_events_sql_inline_iceberg:
+      # Points into the Iceberg warehouse; must match your Iceberg catalog config
+      path: ".local/iceberg_warehouse/incremental_demo/fct_events_sql_inline"
+      format: iceberg
 ````
 
 Notes:
@@ -4971,9 +4938,26 @@ FFT_ACTIVE_ENV=dev_postgres fft test . \
   --select tag:example:incremental_demo
 ```
 
-Packen würde ich den Hinweis direkt an die Stelle, wo du schon beschreibst, wie man die Demo auf Databricks startet – also deine aktuelle Sektion:
+### BigQuery
 
-````markdown
+```bash
+# pandas
+FF_ENGINE=bigquery FF_ENGINE_VARIANT=pandas FFT_ACTIVE_ENV=dev_bigquery_pandas fft seed .
+FF_ENGINE=bigquery FF_ENGINE_VARIANT=pandas FFT_ACTIVE_ENV=dev_bigquery_pandas fft run . \
+  --select tag:example:incremental_demo --select tag:engine:bigquery --cache rw
+FF_ENGINE=bigquery FF_ENGINE_VARIANT=pandas FFT_ACTIVE_ENV=dev_bigquery_pandas fft test . \
+  --select tag:example:incremental_demo
+
+# BigFrames
+FF_ENGINE=bigquery FF_ENGINE_VARIANT=bigframes FFT_ACTIVE_ENV=dev_bigquery_bigframes fft seed .
+FF_ENGINE=bigquery FF_ENGINE_VARIANT=bigframes FFT_ACTIVE_ENV=dev_bigquery_bigframes fft run . \
+  --select tag:example:incremental_demo --select tag:engine:bigquery --cache rw
+FF_ENGINE=bigquery FF_ENGINE_VARIANT=bigframes FFT_ACTIVE_ENV=dev_bigquery_bigframes fft test . \
+  --select tag:example:incremental_demo
+```
+
+Ensure the service account credentials pointed to by `GOOGLE_APPLICATION_CREDENTIALS` can create/drop tables in the target dataset.
+
 ### Databricks Spark
 
 ```bash
@@ -5029,67 +5013,53 @@ environment variable, without touching the models or project.yml.
 
 Adjust environment names to match your `profiles.yml`.
 
----
+### Databricks Spark (Iceberg / Spark 4+)
 
-## How to link this page into your docs
+If you are on Spark 4 / Databricks with Iceberg support, you can also run the incremental demo
+purely against Iceberg tables using a dedicated profile (for example `dev_databricks_iceberg`).
 
-### 1. MkDocs (`mkdocs.yml`)
+That profile typically:
 
-If you use MkDocs, place this file under e.g.:
+* uses `engine: databricks_spark`
+* sets `databricks_spark.table_format: iceberg`
+* configures an Iceberg catalog via `extra_conf`, for example:
 
-```text
-docs/examples/incremental_demo.md
-```
+  models:
+    storage:
+      # Example warehouse location, adjust as needed
+      fct_events_sql_inline_iceberg:
+        path: ".local/iceberg_warehouse/incremental_demo/fct_events_sql_inline"
+        format: iceberg
 
-and add it to your `mkdocs.yml` nav:
+and in the profile (profiles.yml) something like:
 
-```yaml
-nav:
-  - Overview: index.md
-  - Examples:
-      - API demo: examples/api_demo.md
-      - Incremental & Delta demo: examples/incremental_demo.md
-```
+  dev_databricks_iceberg:
+    engine: databricks_spark
+    databricks_spark:
+      master: "local[*]"
+      app_name: "incremental_demo"
+      warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse"
+      extra_conf:
+        spark.sql.catalog.iceberg: org.apache.iceberg.spark.SparkCatalog
+        spark.sql.catalog.iceberg.type: hadoop
+        spark.sql.catalog.iceberg.warehouse: "file:///{{ project_dir() }}/.local/iceberg_warehouse"
 
-### 2. Sphinx (`index.rst` + Markdown)
+From the repo root:
 
-If you use Sphinx with MyST or Markdown support, put the file under:
+  cd examples/incremental_demo
 
-```text
-docs/examples/incremental_demo.md
-```
+Run seeds and models against Iceberg:
 
-and reference it from your main `index.rst`:
+  FFT_ACTIVE_ENV=dev_databricks_iceberg fft seed .
 
-```rst
-Welcome to FastFlowTransform's documentation!
-=============================================
+  FFT_ACTIVE_ENV=dev_databricks_iceberg fft run . \
+    --select tag:example:incremental_demo --select tag:engine:databricks_spark
 
-.. toctree::
-   :maxdepth: 2
+  FFT_ACTIVE_ENV=dev_databricks_iceberg fft test . \
+    --select tag:example:incremental_demo
 
-   overview
-   examples/api_demo
-   examples/incremental_demo
-```
-
-(Adjust paths to match your actual layout.)
-
-### 3. Top-level `index.md` (Markdown-only docs)
-
-If your docs use a pure Markdown index, just add a link:
-
-```markdown
-## Examples
-
-- [API demo](examples/api_demo.md)
-- [Incremental & Delta demo](examples/incremental_demo.md)
-```
-
-This way, the incremental demo appears alongside your existing API demo and other examples in your global documentation navigation.
-
-```
-```
+Under this profile, all `ref()` / `source()` calls in Spark SQL and Python models are resolved
+against the Iceberg catalog, so seeds and incremental models operate purely on Iceberg tables.
 
 
 
@@ -5100,7 +5070,7 @@ This way, the incremental demo appears alongside your existing API demo and othe
 The `examples/api_demo` scenario demonstrates how FastFlowTransform blends local data, external APIs, and multiple execution engines. It highlights:
 
 - **Hybrid data model**: joins a local seed (`crm.users`) with live user data from JSONPlaceholder.
-- **Multiple environments**: switch between DuckDB, Postgres, and Databricks Spark using `profiles.yml` + `.env.*`.
+- **Multiple environments**: switch between DuckDB, Postgres, Databricks Spark, and BigQuery (pandas or BigFrames client) using `profiles.yml` + `.env.*`.
 - **HTTP integration**: compare the built-in FastFlowTransform HTTP client (`api_users_http`) with a plain `requests` implementation (`api_users_requests`).
 - **Offline caching & telemetry**: inspect HTTP snapshots via `run_results.json`.
 - **Engine-aware registration**: scope Python models via `engine_model` and SQL models via `config(engines=[...])` so only the active engine’s nodes load.
@@ -5117,7 +5087,8 @@ The `examples/api_demo` scenario demonstrates how FastFlowTransform blends local
            'kind:seed-consumer',
            'engine:duckdb',
            'engine:postgres',
-           'engine:databricks_spark'
+           'engine:databricks_spark',
+           'engine:bigquery'
        ]
    ) }}
    select id, email
@@ -5125,14 +5096,14 @@ The `examples/api_demo` scenario demonstrates how FastFlowTransform blends local
    ```
    Consumes `sources.yml → crm.users` (seeded from `seeds/seed_users.csv`).
 
-2. **API enrichment** – two Python implementations under `models/engines/duckdb/`:
+2. **API enrichment** – engine-specific Python implementations under `models/engines/<engine>/`:
    - `api_users_http.ff.py` uses the built-in HTTP wrapper (`fastflowtransform.api.http.get_df`) with cache/offline support.
    - `api_users_requests.ff.py` uses raw `requests` for maximum flexibility.
-   - Wrap engine-specific callables with `engine_model(only="duckdb", ...)` to skip registration when another engine is selected.
+   - Engine-specific callables are scoped with `engine_model(only=...)` (DuckDB/Postgres/Spark) or `env_match={"FF_ENGINE": "bigquery", "FF_ENGINE_VARIANT": ...}` (BigQuery pandas/BigFrames) to stay isolated per engine.
 
 3. **Mart join** – `models/common/mart_users_join.ff.sql`
    ```sql
-   {{ config(engines=['duckdb','postgres','databricks_spark']) }}
+   {{ config(engines=['duckdb','postgres','databricks_spark','bigquery']) }}
    {% set api_users_model = var('api_users_model', 'api_users_http') %}
    {% set api_users_refs = {
        'api_users_http': ref('api_users_http'),
@@ -5166,14 +5137,28 @@ dev_postgres:
   postgres:
     dsn: "{{ env('FF_PG_DSN') }}"
     db_schema: "{{ env('FF_PG_SCHEMA', 'public') }}"
+
+dev_bigquery_bigframes:
+  engine: bigquery
+  bigquery:
+    project: "{{ env('FF_BQ_PROJECT') }}"
+    dataset: "{{ env('FF_BQ_DATASET', 'api_demo') }}"
+    location: "{{ env('FF_BQ_LOCATION', 'EU') }}"
+    use_bigframes: true
 ```
 
 `.env.dev_*` files supply the actual values. `_load_dotenv_layered()` loads them in priority order: repo `.env` → project `.env` → `.env.<env>` → shell overrides (highest priority). Secrets stay out of version control.
 
+### BigQuery specifics
+
+- Set `ENGINE=bigquery` in the Makefile targets and choose a client via `BQ_FRAME=pandas` or `BQ_FRAME=bigframes` (default).
+- Required env vars: `FF_BQ_PROJECT`, `FF_BQ_DATASET` (defaults to `api_demo`), and optionally `FF_BQ_LOCATION`. Uncomment `allow_create_dataset` in `profiles.yml` for first-run convenience.
+- BigFrames variants ingest the HTTP payload into a pandas DataFrame, then wrap it as a BigFrames DataFrame (FFT’s `get_df(..., output="bigframes")` is not implemented yet).
+
 
 ## Makefile Workflow
 
-`Makefile` chooses the profile via `ENGINE` (`duckdb`/`postgres`/`databricks_spark`) and wraps the main commands:
+`Makefile` chooses the profile via `ENGINE` (`duckdb`/`postgres`/`databricks_spark`/`bigquery`) and wraps the main commands. For BigQuery, set `BQ_FRAME=pandas|bigframes`:
 
 ```make
 ENGINE ?= duckdb
@@ -5182,6 +5167,14 @@ ifeq ($(ENGINE),duckdb)
   PROFILE_ENV = dev_duckdb
 endif
 ...
+ifeq ($(ENGINE),bigquery)
+  ENGINE_TAG = engine:bigquery
+  ifeq ($(BQ_FRAME),pandas)
+    PROFILE_ENV = dev_bigquery_pandas
+  else
+    PROFILE_ENV = dev_bigquery_bigframes
+  endif
+endif
 
 seed:
 	uv run fft seed "$(PROJECT)" --env $(PROFILE_ENV)
@@ -5195,6 +5188,7 @@ Common targets:
 |--------------------------|-------------|
 | `make ENGINE=duckdb seed`| Materialize seeds into DuckDB. |
 | `make ENGINE=postgres run`| Execute the full pipeline against Postgres. |
+| `make ENGINE=bigquery run BQ_FRAME=bigframes`| Run against BigQuery (default BigFrames client; set `BQ_FRAME=pandas` to switch). |
 | `make dag`               | Render documentation (`site/dag/`). |
 | `make api-run`           | Run only API models (uses HTTP cache). |
 | `make api-offline`       | Force offline mode (`FF_HTTP_OFFLINE=1`). |
@@ -5204,7 +5198,7 @@ HTTP tuning parameters (`FF_HTTP_ALLOWED_DOMAINS`, cache dir, timeouts) live in 
 
 ## End-to-End Demo
 
-1. **Select engine**: `make ENGINE=duckdb` (default). Set `ENGINE=postgres` or `ENGINE=databricks_spark` to switch.
+1. **Select engine**: `make ENGINE=duckdb` (default). Set `ENGINE=postgres`, `ENGINE=databricks_spark`, or `ENGINE=bigquery BQ_FRAME=<pandas|bigframes>` to switch.
 2. **Seed data**: `make seed`
 3. **Run pipeline**: `make run`
 4. **Explore docs**: `make dag` → open `examples/api_demo/site/dag/index.html`
@@ -5243,6 +5237,188 @@ This example demonstrates multi-engine configuration, environment-driven secrets
   `FF_DBR_ENABLE_HIVE=1`, `FF_DBR_WAREHOUSE_DIR=examples/api_demo/spark-warehouse`, `FF_DBR_DATABASE=api_demo`.
 - Switch the physical format by setting `FF_DBR_TABLE_FORMAT` (e.g. `delta`, requires the Delta Lake runtime); extra writer options can be supplied via `profiles.yml → databricks_spark.table_options`.
 - Ensure your shell loads `.env.dev_databricks` (via `make`, `direnv`, or manual export) and run `make ENGINE=databricks_spark seed run`.
+
+
+Yep, let’s bolt on a “how to set it up in GCP” section that fits with what you already have.
+
+Here’s an extended BigQuery section you can drop into your docs (you can keep or trim the parts you already added):
+
+### BigQuery
+
+#### 1. One-time setup in Google Cloud
+
+You only need to do this once per project / environment.
+
+1. **Create (or pick) a GCP project**
+
+   - Go to the *Google Cloud Console* → **IAM & Admin → Create project**.
+   - Give it a name, e.g. `FFT Basic Demo`, and note the **Project ID**, e.g. `fft-basic-demo`.
+   - All further steps refer to this project id.
+
+2. **Enable the BigQuery API**
+
+   - In the console, go to **APIs & Services → Library**.
+   - Search for **“BigQuery API”** and click **Enable**.
+   - (Optional but recommended) Also enable **BigQuery Storage API** for faster reads.
+
+3. **Create a BigQuery dataset**
+
+   - Go to **BigQuery** in the console (left sidebar).
+   - Make sure your project `fft-basic-demo` is selected.
+   - Click **“+ Create dataset”**:
+     - **Dataset ID**: e.g. `basic_demo`
+     - **Location type**: choose a **multi-region**, e.g.:
+       - `EU` or `US`
+     - Click **Create dataset**.
+
+   ⚠️ **Important:** The dataset **location must match** the location you use in your env (`FF_BQ_LOCATION`).
+   - If your dataset is in `EU` (multi-region), then `FF_BQ_LOCATION=EU`.
+   - If the dataset is in a single region like `europe-west3`, use that exact region name.
+
+4. **Create a service account (for CI / non-interactive use)**
+
+   For local dev you can use your own user credentials (see below), but for CI/CD or shared environments
+   a service account is better.
+
+   - Go to **IAM & Admin → Service Accounts → Create service account**.
+   - Name it e.g. `fft-runner`.
+   - On the **Roles** step, add roles with BigQuery write access, for example:
+     - `BigQuery Job User`
+     - `BigQuery Data Editor`
+   - (Optionally) Restrict to dataset level later if you want stricter permissions.
+
+   Then create a key:
+
+   - Click your service account → **Keys → Add key → Create new key**.
+   - Select **JSON**, download the file, and store it somewhere safe (e.g. `~/.config/gcloud/fft-sa.json`).
+
+5. **Authentication options**
+
+   You have two ways to authenticate locally:
+
+   **A) Application Default Credentials via gcloud (easy for dev)**
+
+  ```bash
+  gcloud auth application-default login
+  ```
+
+This opens a browser, you log in, and Google stores your ADC in
+`~/.config/gcloud/application_default_credentials.json`.
+
+The BigQuery client in `fastflowtransform` will pick this up automatically **as long as**
+`FF_BQ_PROJECT` points to a project you have access to.
+
+**B) Service account key (good for CI)**
+
+* Put the downloaded JSON key (from step 4) somewhere on disk.
+
+* Set the environment variable before running `fft`:
+
+  ```bash
+  export GOOGLE_APPLICATION_CREDENTIALS=/path/to/fft-sa.json
+  ```
+
+* Make sure the service account has at least:
+
+  * `BigQuery Job User`
+  * `BigQuery Data Editor`
+
+* Optionally grant `BigQuery Data Viewer` if you’re only reading some tables.
+
+---
+
+#### 2. Local configuration (env + profiles)
+
+1. **Environment file (`.env.dev_bigquery`)**
+
+   ```env
+   # BigQuery connection
+   FF_BQ_PROJECT=fft-basic-demo         # your GCP project id
+   FF_BQ_DATASET=basic_demo             # dataset from step 3
+   FF_BQ_LOCATION=EU                    # or europe-west3, US, etc. MUST match dataset location
+
+   # Active fft environment name (must match profiles.yml)
+   FFT_ACTIVE_ENV=dev_bigquery
+   ```
+
+   Load this via `direnv`, `make`, or manual `export`.
+
+2. **profiles.yml**
+
+   ```yaml
+   dev_bigquery:
+     engine: bigquery
+     bigquery:
+       project: ${FF_BQ_PROJECT}
+       dataset: ${FF_BQ_DATASET}
+       location: ${FF_BQ_LOCATION}
+       use_bigframes: true  # Python models use BigQuery DataFrames (BigFrames)
+   ```
+
+---
+
+#### 3. Running seeds, models, and tests
+
+* **Seed BigQuery from `seeds/`:**
+
+  ```bash
+  make ENGINE=bigquery seed
+  ```
+
+  This writes all `seeds/*.csv|parquet` to tables under
+  `${FF_BQ_PROJECT}.${FF_BQ_DATASET}.*`.
+
+* **Build models:**
+
+  ```bash
+  make ENGINE=bigquery run
+  ```
+
+  * SQL models are executed as BigQuery queries.
+  * Python models with `only="bigquery"` run via `BigQueryBFExecutor` (BigQuery DataFrames)
+    and are written back into the same dataset.
+
+* **Run data-quality tests:**
+
+  ```bash
+  make ENGINE=bigquery test
+  ```
+
+  `fft test` uses the BigQuery shim to run checks like `not_null`, `unique`,
+  `row_count_between`, `greater_equal`, etc. against
+  `${FF_BQ_PROJECT}.${FF_BQ_DATASET}.<table>`.
+
+---
+
+#### 4. Common BigQuery gotchas
+
+* **Location mismatch**
+
+  * Error like `Location basic_demo does not support this operation` or `Not found: Dataset ...`:
+
+    * Check the **dataset location** in the BigQuery UI.
+    * Make sure `FF_BQ_LOCATION` is exactly that value (`EU`, `US`, `europe-west3`, …).
+    * Ensure the executor is initialized with the same location (via `profiles.yml` → `location`).
+
+* **Permission issues**
+
+  * If you see `accessDenied` or `Permission denied`:
+
+    * Confirm you authenticated (ADC or service account).
+    * Ensure your user / service account has at least:
+
+      * `BigQuery Job User`
+      * `BigQuery Data Editor` on the project or dataset.
+
+* **Dataset not found**
+
+  * Error `Not found: Dataset fft-basic-demo:basic_demo`:
+
+    * Check that the dataset id matches exactly:
+
+      * Project: `fft-basic-demo`
+      * Dataset: `basic_demo`
+    * Verify it exists and is in the same project you set in `FF_BQ_PROJECT`.
 
 
 

@@ -1,6 +1,7 @@
 # Envs & Secrets
 .env.local
 .env.*.local
+secrets/
 
 # Local DBs / Artifacts
 *.duckdb
@@ -19,6 +20,7 @@ __pycache__/
 *.egg-info/
 .build/
 .eggs/
+.uv-cache/
 .DS_Store
 
 # Tooling Caches
@@ -31,7 +33,8 @@ htmlcov/
 # Build Artifacts
 build/
 dist/
-site/dag
+**/site/dag/
+**/site/dag/**
 spark-warehouse
 metastore_db
 derby.log

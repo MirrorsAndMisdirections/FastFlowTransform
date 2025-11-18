@@ -1,4 +1,4 @@
-# tests/integration/executors/test_databricks_spark_exec_integration.py
+# tests/integration/executors/test_databricks_spark_integration.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,7 +9,7 @@ pyspark = pytest.importorskip("pyspark")
 
 from fastflowtransform.core import Node  # noqa: E402
 from fastflowtransform.errors import ModelExecutionError  # noqa: E402
-from fastflowtransform.executors.databricks_spark_exec import DatabricksSparkExecutor  # noqa: E402
+from fastflowtransform.executors.databricks_spark import DatabricksSparkExecutor  # noqa: E402
 
 
 @pytest.mark.integration

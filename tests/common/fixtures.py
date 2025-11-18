@@ -1,23 +1,50 @@
 # tests/common/fixtures.py
+from __future__ import annotations
+
 import os
 from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import psycopg
 import pytest
 import sqlalchemy as sa
 from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from psycopg import sql
 from sqlalchemy import text
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import psycopg
+    from psycopg import sql
+
+    from fastflowtransform.executors.databricks_spark import (
+        DatabricksSparkExecutor as DatabricksSparkExecutorType,
+    )
+else:
+    try:
+        import psycopg  # type: ignore
+        from psycopg import sql  # type: ignore
+    except ModuleNotFoundError:
+        psycopg = None  # type: ignore
+        sql = None  # type: ignore
+
+    DatabricksSparkExecutorType = Any
+
+try:  # Optional: Spark deps may not be installed in core runs
+    from fastflowtransform.executors.databricks_spark import DatabricksSparkExecutor
+except ModuleNotFoundError:  # pragma: no cover - import guard
+    DatabricksSparkExecutor = None  # type: ignore
 
 from fastflowtransform import utest
 from fastflowtransform.core import REGISTRY
-from fastflowtransform.executors.databricks_spark_exec import DatabricksSparkExecutor
 from tests.common.utils import ROOT, run
+
+try:  # Optional: Spark deps may not be installed in core runs
+    from fastflowtransform.executors.databricks_spark import DatabricksSparkExecutor
+except ModuleNotFoundError:  # pragma: no cover - import guard
+    DatabricksSparkExecutor = None  # type: ignore
 
 
 # ---- Load Env Variables ----
@@ -111,6 +138,8 @@ def pg_env():
 def pg_seeded(pg_project, pg_env):
     dsn = pg_env.get("FF_PG_DSN")
     schema = pg_env.get("FF_PG_SCHEMA") or "public"
+    if psycopg is None or sql is None:
+        pytest.skip("psycopg not installed; install fastflowtransform[postgres] to run PG fixtures")
     if dsn and schema and ("psycopg://" in dsn or "+psycopg" in dsn):
         with suppress(Exception), psycopg.connect(dsn) as conn:
             conn.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
@@ -123,7 +152,11 @@ def pg_seeded(pg_project, pg_env):
 # ---- Spark ----
 @pytest.fixture
 def exec_minimal(monkeypatch):
-    with patch("fastflowtransform.executors.databricks_spark_exec.SparkSession") as SP:
+    if DatabricksSparkExecutor is None:
+        pytest.skip(
+            "pyspark/delta not installed; install fastflowtransform[spark] to run Spark tests"
+        )
+    with patch("fastflowtransform.executors.databricks_spark.SparkSession") as SP:
         fake_spark = MagicMock()
         SP.builder.master.return_value.appName.return_value.getOrCreate.return_value = fake_spark
         ex = DatabricksSparkExecutor()
@@ -140,8 +173,12 @@ def exec_factory():
     Returns (executor, fake_builder, fake_spark).
     """
 
-    def _make(**kwargs):
-        with patch("fastflowtransform.executors.databricks_spark_exec.SparkSession") as SP:
+    def _make(**kwargs) -> tuple[DatabricksSparkExecutorType, Any, MagicMock]:
+        if DatabricksSparkExecutor is None:
+            pytest.skip(
+                "pyspark/delta not installed; install fastflowtransform[spark] to run Spark tests"
+            )
+        with patch("fastflowtransform.executors.databricks_spark.SparkSession") as SP:
             fake_builder = SP.builder.master.return_value.appName.return_value
             # make .config(...) chainable
             fake_builder.config.return_value = fake_builder
@@ -164,7 +201,11 @@ def spark_tmpdir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture(scope="session")
-def spark_exec(spark_tmpdir: Path) -> DatabricksSparkExecutor:
+def spark_exec(spark_tmpdir: Path) -> DatabricksSparkExecutorType:
+    if DatabricksSparkExecutor is None:
+        pytest.skip(
+            "pyspark/delta not installed; install fastflowtransform[spark] to run Spark tests"
+        )
     return DatabricksSparkExecutor(
         master="local[*]",
         app_name="fft-it",
@@ -175,10 +216,10 @@ def spark_exec(spark_tmpdir: Path) -> DatabricksSparkExecutor:
 
 @pytest.fixture(scope="session")
 def spark_exec_delta(spark_tmpdir):
-    try:
-        pass
-    except Exception:
-        pytest.skip("delta-spark is not installed; skipping Delta tests")
+    if DatabricksSparkExecutor is None:
+        pytest.skip(
+            "pyspark/delta not installed; install fastflowtransform[spark] to run Spark tests"
+        )
 
     extra_conf = {
         "spark.ui.enabled": "false",
@@ -210,7 +251,7 @@ def fake_registry(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def duckdb_executor():
+def duckdbutor():
     """
     Fake-Executor:
     - has .con
@@ -236,9 +277,9 @@ def duckdb_executor():
 
 
 @pytest.fixture
-def postgres_executor():
+def postgresutor():
     """
-    Fake-Executor für den Postgres-Zweig in _read_result.
+    Fake-Executor for Postgres in _read_result.
     """
     engine = MagicMock()
 
@@ -264,7 +305,7 @@ def duckdb_engine_env(tmp_path_factory):
 
 @pytest.fixture(scope="session")
 def postgres_engine_env():
-    """Basic env für Postgres. Skipped if DSN is missing or DB not reachable."""
+    """Basic env for Postgres. Skipped if DSN is missing or DB not reachable."""
     dsn = os.environ.get(
         "FF_PG_DSN",
         "postgresql+psycopg://postgres:postgres@localhost:5432/ffdb",
@@ -297,8 +338,33 @@ def spark_engine_env(tmp_path_factory):
     return {
         "FF_ENGINE": "databricks_spark",
         "FF_SPARK_MASTER": "local[*]",
-        "FF_SPARK_APP_NAME": "fft_examples_ci",
         "FF_DBR_ENABLE_HIVE": "1",
-        "FF_DBR_DATABASE": "ff_examples_ci",
         "FF_SPARK_WAREHOUSE_DIR": str(warehouse),
     }
+
+
+@pytest.fixture(scope="session")
+def bigquery_engine_env():
+    """
+    Basic env for BigQuery examples. Skips if required env vars are missing.
+    """
+    project = os.environ.get("FF_BQ_PROJECT")
+    dataset = os.environ.get("FF_BQ_DATASET")
+    location = os.environ.get("FF_BQ_LOCATION")
+
+    if not (project and dataset and location):
+        pytest.skip("FF_BQ_PROJECT/FF_BQ_DATASET/FF_BQ_LOCATION not set for BigQuery tests")
+
+    env = {
+        "FF_ENGINE": "bigquery",
+        "FF_ENGINE_VARIANT": os.environ.get("FF_ENGINE_VARIANT", "bigframes"),
+        "FF_BQ_PROJECT": project,
+        "FF_BQ_DATASET": dataset,
+        "FF_BQ_LOCATION": location,
+    }
+
+    creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if creds:
+        env["GOOGLE_APPLICATION_CREDENTIALS"] = creds
+
+    return env

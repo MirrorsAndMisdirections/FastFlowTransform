@@ -3,9 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from pyspark.sql import DataFrame as SDF, SparkSession
-
 from fastflowtransform.table_formats.base import SparkFormatHandler
+from fastflowtransform.typing import SDF, SparkSession
 
 
 class DefaultSparkFormatHandler(SparkFormatHandler):

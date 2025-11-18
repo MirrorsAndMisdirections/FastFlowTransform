@@ -10,17 +10,26 @@ This demo shows:
 ## Quickstart
 
 ```bash
-cd examples/cache_demo
-make cache_first      # builds and writes cache
-make cache_second     # should SKIP everything
-make change_sql       # touch SQL → mart rebuilds
-make change_seed      # add a seed row → staging + mart rebuild
-make change_env       # FF_* env change → full rebuild
-make change_py        # edit constant in py_constants.ff.py → it rebuilds
+# pick your engine (duckdb, postgres, databricks_spark, or bigquery); defaults to duckdb
+cp .env.dev_duckdb .env
+# or: cp .env.dev_postgres .env  (then edit DSN/schema)
+# or: cp .env.dev_databricks .env
+# or: cp .env.dev_bigquery_pandas .env   # or .env.dev_bigquery_bigframes
 
-make http_first       # warms HTTP cache
-make http_offline     # reuses HTTP cache without network
-make http_cache_clear # clears HTTP response cache
+cd examples/cache_demo
+make cache_first      ENGINE=duckdb   # builds and writes cache
+make cache_second     ENGINE=duckdb   # should SKIP everything
+make change_sql       ENGINE=duckdb   # touch SQL → mart rebuilds
+make change_seed      ENGINE=duckdb   # seed with base + patches/seed_users_patch.csv (no tracked edits)
+make change_env       ENGINE=duckdb   # FF_* env change → full rebuild
+make change_py        ENGINE=duckdb   # edit constant in py_constants.ff.py → it rebuilds
+
+make http_first       ENGINE=duckdb   # warms HTTP cache
+make http_offline     ENGINE=duckdb   # reuses HTTP cache without network
+make http_cache_clear                  # clears HTTP response cache
+#
+# Seeds stay immutable: change_seed builds a temporary combined copy in .local/seeds using
+# patches/seed_users_patch.csv so the repo doesn’t become dirty.
 Inspect:
 
 site/dag/index.html
@@ -31,6 +40,10 @@ markdown
 Code kopieren
 
 ---
+
+To run everything on Postgres, set `ENGINE=postgres` and copy/edit `.env.dev_postgres`, e.g. `make demo ENGINE=postgres`.
+To run on Databricks/Spark locally, set `ENGINE=databricks_spark` and copy/edit `.env.dev_databricks`, e.g. `make demo ENGINE=databricks_spark`.
+To run on BigQuery, set `ENGINE=bigquery` and copy/edit `.env.dev_bigquery_pandas` (or `.env.dev_bigquery_bigframes`), e.g. `make demo ENGINE=bigquery BQ_FRAME=bigframes` (default) or `BQ_FRAME=pandas`.
 
 ## What this demo proves (in a minute)
 

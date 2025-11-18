@@ -38,22 +38,49 @@ dependencies = [
   "duckdb>=1.0",
   "pandas>=2.0",
   "pyyaml>=6.0",
-  "google-cloud-bigquery>=3.25",
   "sqlalchemy>=2.0",
-  "psycopg[binary]>=3.1",
-  "psycopg2-binary>=2.9",
   "pydantic>=2.8",
   "pydantic-settings>=2.4",
   "python-dotenv>=1.0",
-  "pyspark>=4.0.1",
-  "snowflake>=1.8.0",
-  "snowflake-snowpark-python>=1.40.0",
-  "bigframes>=2.24.0",
   "httpx>=0.28.1",
-  "delta-spark>=4.0.0",
 ]
 
 [project.optional-dependencies]
+postgres = [
+  "psycopg[binary]>=3.1",
+  "psycopg2-binary>=2.9",
+]
+
+bigquery = [
+  "google-cloud-bigquery>=3.25",
+]
+
+bigquery_bf = [
+  "bigframes>=2.24.0",
+  "google-cloud-bigquery>=3.25",
+]
+
+spark = [
+  "pyspark>=4.0.1",
+  "delta-spark>=4.0.0",
+]
+
+snowflake = [
+  "snowflake>=1.8.0",
+  "snowflake-snowpark-python>=1.40.0",
+]
+
+full = [
+  "psycopg[binary]>=3.1",
+  "psycopg2-binary>=2.9",
+  "google-cloud-bigquery>=3.25",
+  "bigframes>=2.24.0",
+  "pyspark>=4.0.1",
+  "delta-spark>=4.0.0",
+  "snowflake>=1.8.0",
+  "snowflake-snowpark-python>=1.40.0",
+]
+
 dev = [
   "pytest==8.4.*",
   "pytest-cov==7.0.*",

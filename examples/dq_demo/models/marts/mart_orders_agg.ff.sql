@@ -5,7 +5,8 @@
         'scope:mart',
         'engine:duckdb',
         'engine:postgres',
-        'engine:databricks_spark'
+        'engine:databricks_spark',
+        'engine:bigquery'
     ],
 ) }}
 

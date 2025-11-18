@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from fastflowtransform.core import REGISTRY, Node
-from fastflowtransform.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.executors.duckdb import DuckExecutor
 
 
 @pytest.mark.integration

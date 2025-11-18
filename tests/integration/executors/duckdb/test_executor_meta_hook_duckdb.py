@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from fastflowtransform.cli import app
 from fastflowtransform.core import REGISTRY
-from fastflowtransform.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.executors.duckdb import DuckExecutor
 from fastflowtransform.meta import get_meta
 
 

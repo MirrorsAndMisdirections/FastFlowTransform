@@ -18,6 +18,16 @@ class ExampleConfig:
 
 EXAMPLES: list[ExampleConfig] = [
     ExampleConfig(
+        name="api_demo",
+        path=ROOT / "examples" / "api_demo",
+        make_target="demo",
+        env_by_engine={
+            "duckdb": "dev_duckdb",
+            "postgres": "dev_postgres",
+            "databricks_spark": "dev_databricks",
+        },
+    ),
+    ExampleConfig(
         name="basic_demo",
         path=ROOT / "examples" / "basic_demo",
         make_target="demo",
@@ -28,8 +38,8 @@ EXAMPLES: list[ExampleConfig] = [
         },
     ),
     ExampleConfig(
-        name="materializations_demo",
-        path=ROOT / "examples" / "materializations_demo",
+        name="cache_demo",
+        path=ROOT / "examples" / "cache_demo",
         make_target="demo",
         env_by_engine={
             "duckdb": "dev_duckdb",
@@ -48,24 +58,6 @@ EXAMPLES: list[ExampleConfig] = [
         },
     ),
     ExampleConfig(
-        name="macros_demo",
-        path=ROOT / "examples" / "macros_demo",
-        make_target="demo",
-        env_by_engine={
-            "duckdb": "dev_duckdb",
-        },
-    ),
-    ExampleConfig(
-        name="api_demo",
-        path=ROOT / "examples" / "api_demo",
-        make_target="demo",
-        env_by_engine={
-            "duckdb": "dev_duckdb",
-            "postgres": "dev_postgres",
-            "databricks_spark": "dev_databricks",
-        },
-    ),
-    ExampleConfig(
         name="incremental_demo",
         path=ROOT / "examples" / "incremental_demo",
         make_target="demo",
@@ -75,5 +67,25 @@ EXAMPLES: list[ExampleConfig] = [
             "databricks_spark": "dev_databricks",
         },
         spark_table_formats=["parquet", "delta", "iceberg"],
+    ),
+    ExampleConfig(
+        name="macros_demo",
+        path=ROOT / "examples" / "macros_demo",
+        make_target="demo",
+        env_by_engine={
+            "duckdb": "dev_duckdb",
+            "postgres": "dev_postgres",
+            "databricks_spark": "dev_databricks",
+        },
+    ),
+    ExampleConfig(
+        name="materializations_demo",
+        path=ROOT / "examples" / "materializations_demo",
+        make_target="demo",
+        env_by_engine={
+            "duckdb": "dev_duckdb",
+            "postgres": "dev_postgres",
+            "databricks_spark": "dev_databricks",
+        },
     ),
 ]

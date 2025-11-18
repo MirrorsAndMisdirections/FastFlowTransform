@@ -49,6 +49,8 @@ examples/dq_demo/
   .env.dev_duckdb
   .env.dev_postgres
   .env.dev_databricks
+  .env.dev_bigquery_pandas
+  .env.dev_bigquery_bigframes
   Makefile                  # optional, convenience wrapper around fft commands
   profiles.yml
   project.yml
@@ -338,6 +340,24 @@ fft test examples/dq_demo --env dev_duckdb --select tag:reconcile
 This executes just the cross-table checks, which is handy when you’re iterating on a mart.
 
 ---
+
+## BigQuery variant (pandas or BigFrames)
+
+To run the same demo on BigQuery:
+
+1. Copy `.env.dev_bigquery_pandas` or `.env.dev_bigquery_bigframes` to `.env` and fill in:
+   ```bash
+   FF_BQ_PROJECT=<your-project-id>
+   FF_BQ_DATASET=dq_demo
+   FF_BQ_LOCATION=<region>   # e.g., EU or US
+   GOOGLE_APPLICATION_CREDENTIALS=../secrets/<service-account>.json  # or rely on gcloud / WIF
+   ```
+2. Run via the Makefile from `examples/dq_demo`:
+   ```bash
+   make demo ENGINE=bigquery BQ_FRAME=pandas      # or bigframes
+   ```
+
+Both profiles accept `allow_create_dataset` in `profiles.yml` if you want the example to create the dataset automatically.
 
 ## Things to experiment with
 

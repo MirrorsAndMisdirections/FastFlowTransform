@@ -4,7 +4,7 @@ import pytest
 
 from fastflowtransform.cli.test_cmd import _run_dq_tests
 from fastflowtransform.core import REGISTRY
-from fastflowtransform.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.executors.duckdb import DuckExecutor
 from fastflowtransform.schema_loader import load_schema_tests
 
 

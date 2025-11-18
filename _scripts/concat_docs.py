@@ -131,31 +131,31 @@ def main():
         "-d",
         "--docs-dir",
         default=DOCS_DIR_DEFAULT,
-        help="Pfad zum docs-Verzeichnis (Default: docs)",
+        help="Path to docs directory (Default: docs)",
     )
-    parser.add_argument("-o", "--output", required=True, help="Ausgabedatei (z. B. Combined.md)")
+    parser.add_argument("-o", "--output", required=True, help="Output file (e.g. Combined.md)")
     parser.add_argument(
         "--demote",
         action="store_true",
-        help="Headings ab der zweiten Datei um eine Ebene demoten (# -> ##, usw.)",
+        help="Demote headings starting with the second file by one level (# -> ##, etc.)",
     )
     parser.add_argument(
         "--exclude",
         action="append",
         default=[],
-        help="Glob-Pattern zum Ausschließen (z. B. 'reference/**'). Mehrfach nutzbar.",
+        help="Glob pattern to exclude (e.g. 'reference/**'). Can be used multiple times.",
     )
     parser.add_argument(
         "--no-nav",
         action="store_true",
-        help="mkdocs.yml ignorieren und alphabetisch alle .md zusammenfügen",
+        help="Ignore mkdocs.yml and concatenate all .md alphabetically",
     )
     args = parser.parse_args()
 
     project_root = Path(".").resolve()
     docs_dir = (project_root / args.docs_dir).resolve()
     if not docs_dir.exists():
-        print(f"Fehler: docs-Verzeichnis nicht gefunden: {docs_dir}", file=sys.stderr)
+        print(f"Error: docs directory not found: {docs_dir}", file=sys.stderr)
         sys.exit(1)
 
     # 1) Order from mkdocs.yml (if not disabled / available)
@@ -176,7 +176,7 @@ def main():
             seen.add(rel.as_posix())
 
     if not ordered:
-        print("Keine Markdown-Dateien gefunden.", file=sys.stderr)
+        print("No Markdown files found.", file=sys.stderr)
         sys.exit(2)
 
     out_path = Path(args.output).resolve()
@@ -194,7 +194,7 @@ def main():
 
     out_text = f"# Combined Documentation\n\n" + "\n".join(parts)
     out_path.write_text(out_text, encoding="utf-8")
-    print(f"✔️  {len(ordered)} Dateien zusammengeführt → {out_path}")
+    print(f"✔️  {len(ordered)} files merged → {out_path}")
 
 
 if __name__ == "__main__":

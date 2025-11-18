@@ -368,3 +368,49 @@ TESTS: dict[str, Runner] = {
     "reconcile_diff_within": run_reconcile_diff_within,
     "reconcile_coverage": run_reconcile_coverage,
 }
+
+
+# ---------------------------------------------------------------------------
+# Public registration API
+# ---------------------------------------------------------------------------
+
+
+def register_test(name: str, runner: Runner, *, overwrite: bool = False) -> None:
+    """
+    Register (or override) a data-quality test runner.
+
+    Usage:
+
+        from fastflowtransform.testing import register_test
+
+        def my_runner(con, table, column, params):
+            ...
+            return True, None, None
+
+        register_test("my_custom_test", my_runner)
+
+    Args:
+        name: Name of the test as used in project.yml / schema.yml (`type:` field).
+        runner: Callable implementing the Runner protocol.
+        overwrite: If False (default), attempting to override an existing name
+                   raises ValueError. Set True to replace built-ins or earlier
+                   registrations.
+
+    Raises:
+        ValueError: If name is empty or already registered (and overwrite=False).
+        TypeError: If runner is not callable.
+    """
+    if not isinstance(name, (str, bytes)) or not str(name).strip():
+        raise ValueError("Test name must be a non-empty string")
+
+    if not callable(runner):
+        raise TypeError("runner must be callable")
+
+    key = str(name).strip()
+    if key in TESTS and not overwrite:
+        raise ValueError(
+            f"Test '{key}' is already registered. "
+            "Pass overwrite=True to replace the existing runner."
+        )
+
+    TESTS[key] = runner

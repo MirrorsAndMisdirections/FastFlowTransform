@@ -113,7 +113,7 @@ HttpCacheOpt = Annotated[
     HttpCacheMode | None,
     typer.Option(
         "--http-cache",
-        help="HTTP-Cache-Modus für API-Modelle: off | ro | rw.",
+        help="HTTP-Cache-Mode for API models: off | ro | rw.",
         case_sensitive=False,
     ),
 ]

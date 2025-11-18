@@ -1,11 +1,11 @@
-# NOTE: Plain Python variant (requests/httpx). No built-in FFT telemetry or HTTP cache here.
+# NOTE: Plain Python variant (httpx). No built-in FFT telemetry or HTTP cache here.
 from fastflowtransform import engine_model
 import pandas as pd
 
 try:
-    import requests  # you can swap this with httpx if you prefer
+    import httpx
 except Exception as _e:  # pragma: no cover
-    raise RuntimeError("Please install 'requests' to run this model") from _e
+    raise RuntimeError("Please install 'httpx' to run this model") from _e
 
 
 @engine_model(
@@ -25,7 +25,7 @@ def fetch(_: pd.DataFrame) -> pd.DataFrame:
         # Add your auth headers here if needed:
         # "Authorization": f"Bearer {os.getenv('MY_TOKEN')}",
     }
-    resp = requests.get(url, headers=headers, timeout=30)
+    resp = httpx.get(url, headers=headers, timeout=30.0)
     resp.raise_for_status()
     data = resp.json()  # list[dict]
 

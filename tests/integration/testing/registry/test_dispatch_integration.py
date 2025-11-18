@@ -1,6 +1,6 @@
 import pytest
 
-from fastflowtransform.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.executors.duckdb import DuckExecutor
 from fastflowtransform.testing.registry import TESTS
 
 

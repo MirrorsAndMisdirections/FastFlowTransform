@@ -6,7 +6,7 @@ import pytest
 
 from fastflowtransform.core import REGISTRY
 from fastflowtransform.dag import topo_sort
-from fastflowtransform.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.executors.duckdb import DuckExecutor
 from fastflowtransform.seeding import seed_project
 
 pytestmark = pytest.mark.duckdb  # uses DuckDB

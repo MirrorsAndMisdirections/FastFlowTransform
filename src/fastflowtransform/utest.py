@@ -420,7 +420,6 @@ def _apply_approx_equalization(
                 f"expected={e_num[bad].tolist()} vs actual={a_num[bad].tolist()}"
             )
 
-        # Gleichziehen, damit equals() später nicht stolpert
         actual_df[col] = exp[col]
         checked.append(col)
 
@@ -649,22 +648,17 @@ def run_unit_specs(
 
             cand_fp = _fingerprint_case(node, spec, case, ctx)
 
-            # Inputs laden/prüfen (zählt failures selbst)
             ctx.failures += _load_inputs_for_case(executor, spec, case, node)
 
-            # ggf. Skip
             if _maybe_skip_by_cache(node, cand_fp, ctx):
                 _read_and_assert(spec, case, ctx)
                 continue
 
-            # ausführen + ggf. Cache aktualisieren
             if not _execute_and_update_cache(node, cand_fp, ctx):
                 continue
 
-            # Ergebnis prüfen
             _read_and_assert(spec, case, ctx)
 
-    # Cache persistieren (nur rw)
     if ctx.cache and ctx.computed_fps and ctx.cache_mode == "rw":  # pragma: no cover
         ctx.cache.update_many(ctx.computed_fps)
         ctx.cache.save()

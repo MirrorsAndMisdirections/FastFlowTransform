@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from fastflowtransform.executors.duckdb_exec import DuckExecutor
+from fastflowtransform.executors.duckdb import DuckExecutor
 from fastflowtransform.meta import ensure_meta_table, get_meta, relation_exists, upsert_meta
 
 
