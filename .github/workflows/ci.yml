@@ -46,17 +46,6 @@ jobs:
           git rev-parse --short HEAD
           git log -1 --stat
 
-      - name: "Debug: ensure pyproject present"
-        run: |
-          test -f pyproject.toml || (echo "pyproject.toml fehlt!" && exit 1)
-          ls -la
-
-      - name: "Debug: Ruff version & scope"
-        run: |
-          uv run ruff --version
-          echo "---- Ruff will lint these files (no cache) ----"
-          uv run ruff check src tests --no-cache --show-files
-
       - name: Ruff (lint)
         run: uv run ruff check src tests --no-cache --output-format=github
 
@@ -258,27 +247,19 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Load example env defaults
+      - name: Run example/integration tests for engine
         run: |
+          echo "Running integration tests for engine=${{ matrix.engine }} example=${{ matrix.example }}"
           set -a
           unset FF_PG_DSN FF_PG_SCHEMA
           if [ -f "${{ matrix.env_file }}" ]; then
             source "${{ matrix.env_file }}"
           fi
-          # Normalize Postgres settings per example to avoid cross-job leakage
-          if [ "${{ matrix.engine }}" = "postgres" ]; then
-            export FF_PG_SCHEMA="${{ matrix.example }}"
-            export FF_PG_DSN=${FF_PG_DSN:-postgresql+psycopg://postgres:postgres@localhost:5432/fastflowtransform}
-          fi
-          set +a
-
-      - name: Run example/integration tests for engine
-        run: |
-          echo "Running integration tests for engine=${{ matrix.engine }} example=${{ matrix.example }}"
           if [ "${{ matrix.engine }}" = "postgres" ]; then
             export FF_PG_SCHEMA="${{ matrix.example }}"
             export FF_PG_DSN="${FF_PG_DSN:-postgresql+psycopg://postgres:postgres@localhost:5432/fastflowtransform}"
           fi
+          set +a
           uv run pytest -m "integration and ${{ matrix.engine }}" \
             -vv --show-capture=all --log-cli-level=INFO \
             -k "${{ matrix.example }} and ${{ matrix.engine }}" \

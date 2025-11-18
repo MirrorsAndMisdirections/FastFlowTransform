@@ -105,7 +105,7 @@ class SeedsSchemaConfig(BaseModel):
         return out
 
 
-def load_seeds_schema(project_dir: Path) -> SeedsSchemaConfig | None:
+def load_seeds_schema(project_dir: Path, seeds_dir: Path | None = None) -> SeedsSchemaConfig | None:
     """
     Load and validate seeds/schema.yml for a given project.
 
@@ -116,7 +116,7 @@ def load_seeds_schema(project_dir: Path) -> SeedsSchemaConfig | None:
     Raises:
       ValueError: when YAML is present but does not match the expected schema.
     """
-    seeds_dir = project_dir / "seeds"
+    seeds_dir = seeds_dir or project_dir / "seeds"
     cfg_path = seeds_dir / "schema.yml"
     if not cfg_path.exists():
         return None

@@ -74,9 +74,15 @@ change_sql:
 	+$(MAKE) run
 
 change_seed:
-	# Modify seed → staging and mart rebuild
-	@printf "\n4,dan@example.com\n" >> "$(PROJECT)/seeds/seed_users.csv"
-	+$(MAKE) seed
+	# Build a combined seed in .local without touching tracked files
+	@mkdir -p "$(PROJECT)/.local/seeds"
+	@cp "$(PROJECT)/seeds/seed_orders.csv" "$(PROJECT)/.local/seeds/seed_orders.csv"
+	@cp "$(PROJECT)/seeds/seed_users.csv" "$(PROJECT)/.local/seeds/seed_users.csv"
+	@# If present, keep schema.yml aligned with the temporary seeds dir
+	@test -f "$(PROJECT)/seeds/schema.yml" && cp "$(PROJECT)/seeds/schema.yml" "$(PROJECT)/.local/seeds/schema.yml" || true
+	@# Append the patch rows (skip header) to the temporary copy
+	@tail -n +2 "$(PROJECT)/patches/seed_users_patch.csv" >> "$(PROJECT)/.local/seeds/seed_users.csv"
+	env $(BASE_ENV) FFT_SEEDS_DIR="$(PROJECT)/.local/seeds" $(UV) run fft seed "$(PROJECT)" --env $(PROFILE_ENV)
 	+$(MAKE) run
 
 change_env:

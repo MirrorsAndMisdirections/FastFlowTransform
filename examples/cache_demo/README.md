@@ -20,13 +20,16 @@ cd examples/cache_demo
 make cache_first      ENGINE=duckdb   # builds and writes cache
 make cache_second     ENGINE=duckdb   # should SKIP everything
 make change_sql       ENGINE=duckdb   # touch SQL → mart rebuilds
-make change_seed      ENGINE=duckdb   # add a seed row → staging + mart rebuild
+make change_seed      ENGINE=duckdb   # seed with base + patches/seed_users_patch.csv (no tracked edits)
 make change_env       ENGINE=duckdb   # FF_* env change → full rebuild
 make change_py        ENGINE=duckdb   # edit constant in py_constants.ff.py → it rebuilds
 
 make http_first       ENGINE=duckdb   # warms HTTP cache
 make http_offline     ENGINE=duckdb   # reuses HTTP cache without network
 make http_cache_clear                  # clears HTTP response cache
+#
+# Seeds stay immutable: change_seed builds a temporary combined copy in .local/seeds using
+# patches/seed_users_patch.csv so the repo doesn’t become dirty.
 Inspect:
 
 site/dag/index.html

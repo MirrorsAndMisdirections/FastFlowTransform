@@ -1,18 +1,23 @@
+from typing import TYPE_CHECKING, Any
+
 from fastflowtransform import engine_model
 
-try:
+if TYPE_CHECKING:
     from pyspark.sql import DataFrame as SparkDataFrame
     from pyspark.sql import functions as F
-except Exception:  # pragma: no cover - optional dep guard
-    from typing import Any
-
-    SparkDataFrame = Any  # type: ignore[misc]
-    F = None  # type: ignore[assignment]
-    _spark_import_error = RuntimeError(
-        "pyspark is required for this model. Install fastflowtransform[spark]."
-    )
 else:
-    _spark_import_error = None
+    SparkDataFrame = Any
+    F = Any
+
+
+def _get_functions() -> Any:
+    try:
+        from pyspark.sql import functions as _F
+    except Exception as exc:  # pragma: no cover - optional dep guard
+        raise RuntimeError(
+            "pyspark is required for this model. Install fastflowtransform[spark]."
+        ) from exc
+    return _F
 
 
 @engine_model(
@@ -31,9 +36,7 @@ def build(events_df: SparkDataFrame) -> SparkDataFrame:
     """
     Python-Incremental-Example (Databricks Spark).
     """
-    if _spark_import_error:
-        raise _spark_import_error
-
-    return events_df.withColumn("value_x10", F.col("value") * F.lit(10)).select(
+    _F = _get_functions()
+    return events_df.withColumn("value_x10", _F.col("value") * _F.lit(10)).select(
         "event_id", "updated_at", "value", "value_x10"
     )

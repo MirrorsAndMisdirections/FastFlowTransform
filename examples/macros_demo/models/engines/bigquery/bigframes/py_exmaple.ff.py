@@ -1,18 +1,27 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 from fastflowtransform import engine_model
 
-try:
+if TYPE_CHECKING:
     import bigframes.pandas as bpd
-except Exception:  # pragma: no cover - optional dep guard
-    bpd = None  # type: ignore[assignment]
-    BFDataFrame = object  # type: ignore[misc,assignment]
-    _bf_import_error = RuntimeError(
-        "bigframes is required for this model. Install fastflowtransform[bigquery_bf]."
-    )
+    from bigframes.pandas import DataFrame as BFDataFrame
 else:
-    BFDataFrame = bpd.DataFrame
-    _bf_import_error = None
+    bpd: Any = None
+
+    class BFDataFrame:  # pragma: no cover - placeholder for runtime type hints
+        ...
+
+
+def _get_bigframes() -> Any:
+    try:
+        import bigframes.pandas as bpd_mod
+    except Exception as exc:  # pragma: no cover - optional dep guard
+        raise RuntimeError(
+            "bigframes is required for this model. Install fastflowtransform[bigquery_bf]."
+        ) from exc
+    return bpd_mod
 
 
 @engine_model(
@@ -26,6 +35,5 @@ else:
 )
 def produce(_: BFDataFrame) -> BFDataFrame:
     # In a real project, you might fetch extra metadata here or post-process
-    if _bf_import_error:
-        raise _bf_import_error
-    return bpd.DataFrame([{"note": "Python model ran on BigQuery (BigFrames)"}])
+    bpd_mod = _get_bigframes()
+    return bpd_mod.DataFrame([{"note": "Python model ran on BigQuery (BigFrames)"}])

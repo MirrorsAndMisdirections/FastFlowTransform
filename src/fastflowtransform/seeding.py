@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import os
 import shutil
 import uuid
 from collections.abc import Callable, Iterable
@@ -769,6 +770,20 @@ def materialize_seed(
 # ----------------------------------- Seeding runner -----------------------------------
 
 
+def _resolve_seeds_dir(project_dir: Path) -> Path:
+    """
+    Allow overriding the seeds directory via FFT_SEEDS_DIR, falling back to <project>/seeds.
+    Relative overrides are resolved against the project directory.
+    """
+    override = os.getenv("FFT_SEEDS_DIR")
+    if override:
+        path = Path(override)
+        if not path.is_absolute():
+            path = project_dir / path
+        return path
+    return project_dir / "seeds"
+
+
 def seed_project(project_dir: Path, executor: Any, default_schema: str | None = None) -> int:
     """
     Load every seed file under <project>/seeds recursively and materialize it.
@@ -800,12 +815,12 @@ def seed_project(project_dir: Path, executor: Any, default_schema: str | None = 
     Raises:
       ValueError: if schema.yml uses a plain stem key while multiple files share that stem.
     """
-    seeds_dir = project_dir / "seeds"
+    seeds_dir = _resolve_seeds_dir(project_dir)
     if not seeds_dir.exists():
         return 0
 
     # Pydantic-validated seeds/schema.yml (or None if not present)
-    schema_cfg = load_seeds_schema(project_dir)
+    schema_cfg = load_seeds_schema(project_dir, seeds_dir=seeds_dir)
 
     # Collect seed files recursively to allow folder-based schema conventions.
     paths: list[Path] = [

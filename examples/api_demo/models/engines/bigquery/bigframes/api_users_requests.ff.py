@@ -1,18 +1,28 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 from fastflowtransform import engine_model
 
-try:
+if TYPE_CHECKING:
     import bigframes.pandas as bpd
-except Exception:  # pragma: no cover - optional dep guard
-    bpd = None  # type: ignore[assignment]
-    BFDataFrame = object  # type: ignore[misc,assignment]
-    _bf_import_error = RuntimeError(
-        "bigframes is required for this model. Install fastflowtransform[bigquery_bf]."
-    )
+    from bigframes.pandas import DataFrame as BFDataFrame
 else:
-    BFDataFrame = bpd.DataFrame
-    _bf_import_error = None
+    bpd: Any = None
+
+    class BFDataFrame:  # pragma: no cover - placeholder for runtime type hints
+        ...
+
+
+def _get_bigframes() -> Any:
+    try:
+        import bigframes.pandas as bpd_mod
+    except Exception as exc:  # pragma: no cover - optional dep guard
+        raise RuntimeError(
+            "bigframes is required for this model. Install fastflowtransform[bigquery_bf]."
+        ) from exc
+    return bpd_mod
+
 
 try:
     import httpx
@@ -31,12 +41,10 @@ except Exception as _e:  # pragma: no cover
 )
 def fetch(_: BFDataFrame) -> BFDataFrame:
     """Fetch users via plain httpx and return a BigFrames DataFrame."""
-    if _bf_import_error:
-        raise _bf_import_error
-
+    bpd_mod = _get_bigframes()
     resp = httpx.get("https://jsonplaceholder.typicode.com/users", timeout=30.0)
     resp.raise_for_status()
-    df = bpd.DataFrame(resp.json())  # accepts a JSON-serialisable list of dicts
+    df = bpd_mod.DataFrame(resp.json())  # accepts a JSON-serialisable list of dicts
     return df.loc[:, ["id", "email", "username", "name"]].rename(  # type: ignore[arg-type]
         columns={"id": "api_user_id"}
     )

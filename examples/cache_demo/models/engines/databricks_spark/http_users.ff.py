@@ -1,19 +1,25 @@
-try:
-    from pyspark.sql import DataFrame
-    from pyspark.sql.functions import col
-except Exception:  # pragma: no cover - optional dep guard
-    from typing import Any
-
-    DataFrame = Any  # type: ignore[misc]
-    col = None  # type: ignore[assignment]
-    _spark_import_error = RuntimeError(
-        "pyspark is required for this model. Install fastflowtransform[spark]."
-    )
-else:
-    _spark_import_error = None
-
 from fastflowtransform import engine_model
 from fastflowtransform.api.http import get_df
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pyspark.sql import DataFrame
+    from pyspark.sql.functions import col
+else:
+    DataFrame = Any
+
+    def col(*args: Any, **kwargs: Any):  # pragma: no cover - placeholder
+        ...
+
+
+def _get_col():
+    try:
+        from pyspark.sql.functions import col as _col
+    except Exception as exc:  # pragma: no cover - optional dep guard
+        raise RuntimeError(
+            "pyspark is required for this model. Install fastflowtransform[spark]."
+        ) from exc
+    return _col
 
 
 @engine_model(
@@ -26,13 +32,11 @@ from fastflowtransform.api.http import get_df
     },
 )
 def fetch(_: DataFrame) -> DataFrame:
-    if _spark_import_error:
-        raise _spark_import_error
-
+    col_fn = _get_col()
     df = get_df(
         url="https://jsonplaceholder.typicode.com/users",
         record_path=None,
         normalize=True,
         output="spark",
     )
-    return df.select(col("id").alias("api_user_id"), col("email"), col("username"))
+    return df.select(col_fn("id").alias("api_user_id"), col_fn("email"), col_fn("username"))
