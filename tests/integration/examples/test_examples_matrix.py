@@ -16,6 +16,16 @@ def _run_cmd(cmd: list[str], cwd: Path, extra_env: dict[str, str] | None = None)
         env.update(extra_env)
     proc = run(cmd, check=False, cwd=str(cwd), env=env, text=True, capture_output=True)
     if proc.returncode != 0:
+        # Echo outputs to aid CI debugging before raising.
+        out = proc.stdout or ""
+        err = proc.stderr or ""
+        print(f"\n--- Command failed: {' '.join(cmd)} (cwd={cwd}) ---")
+        if out:
+            print("STDOUT:")
+            print(out)
+        if err:
+            print("STDERR:")
+            print(err)
         raise CalledProcessError(proc.returncode, cmd, proc.stdout, proc.stderr)
 
 
