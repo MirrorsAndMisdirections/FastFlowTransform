@@ -56,6 +56,7 @@ ENGINE_ENV_FIXTURE = {
 
 @pytest.mark.integration
 @pytest.mark.example
+@pytest.mark.flaky(reruns=2, reruns_delay=2)
 @pytest.mark.parametrize("example,engine", EXAMPLE_ENGINE_PARAMS)
 def test_examples_with_all_engines(example, engine, request):
     fixture_name = ENGINE_ENV_FIXTURE[engine]

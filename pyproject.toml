@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "fastflowtransform"
 version = "0.6.1"
-description = "ython framework for SQL & Python data transformation, ETL pipelines, and dbt-style data modeling"
+description = "Python framework for SQL & Python data transformation, ETL pipelines, and dbt-style data modeling"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [ { name = "Marko Lekic", email = "you@example.com" } ]
@@ -84,6 +84,7 @@ full = [
 dev = [
   "pytest==8.4.*",
   "pytest-cov==7.0.*",
+  "pytest-rerunfailures==14.0.*",
   "ruff==0.14.*",
   "mypy==1.18.*",
   "pre-commit==3.*",
@@ -195,6 +196,9 @@ repository = "pypi"
 [tool.pytest.ini_options]
 addopts = "-q --cov=src/fastflowtransform --cov-report=term-missing --cov-report=xml --cov-report=html"
 testpaths = ["tests"]
+markers = [
+  "flaky: tests that may be rerun on failure",
+]
 
 [tool.coverage.run]
 branch = true

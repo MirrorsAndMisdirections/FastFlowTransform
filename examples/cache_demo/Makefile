@@ -9,6 +9,7 @@ BQ_FRAME ?= bigframes
 PROJECT ?= .
 UV ?= uv
 DB ?= .local/cache_demo.duckdb
+HTTP_TIMEOUT ?= 60
 
 ifeq ($(ENGINE),duckdb)
   PROFILE_ENV = dev_duckdb
@@ -39,6 +40,7 @@ ifeq ($(ENGINE),bigquery)
   BASE_ENV := $(BASE_ENV) FF_ENGINE_VARIANT=$(BQ_FRAME)
 endif
 RUN_ENV  = $(BASE_ENV)
+RUN_ENV := $(RUN_ENV) FF_HTTP_TIMEOUT=$(HTTP_TIMEOUT)
 
 SELECT_ALL = --select tag:example:cache_demo --select tag:$(ENGINE_TAG)
 
