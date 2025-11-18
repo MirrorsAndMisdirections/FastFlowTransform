@@ -2,10 +2,19 @@ from __future__ import annotations
 
 from typing import Any
 
-import bigframes.pandas as bpd
 from fastflowtransform import engine_model
 
-BFDataFrame = bpd.DataFrame
+try:
+    import bigframes.pandas as bpd
+except Exception:  # pragma: no cover - optional dep guard
+    bpd = None  # type: ignore[assignment]
+    BFDataFrame = Any  # type: ignore[assignment,misc]
+    _bf_import_error = RuntimeError(
+        "bigframes is required for this model. Install fastflowtransform[bigquery_bf]."
+    )
+else:
+    BFDataFrame = bpd.DataFrame
+    _bf_import_error = None
 
 
 @engine_model(
@@ -24,6 +33,9 @@ BFDataFrame = bpd.DataFrame
     require={"users_clean.ff": ["user_id", "email", "email_domain", "signup_date"]},
 )
 def build(users_clean: BFDataFrame) -> BFDataFrame:
+    if _bf_import_error:
+        raise _bf_import_error
+
     latest = (
         users_clean.sort_values("signup_date", ascending=False)
         .drop_duplicates(subset="email_domain")

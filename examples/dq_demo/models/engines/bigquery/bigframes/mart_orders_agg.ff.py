@@ -1,10 +1,18 @@
 from __future__ import annotations
 
-import bigframes.pandas as bpd
-
 from fastflowtransform import engine_model
 
-BFDataFrame = bpd.DataFrame
+try:
+    import bigframes.pandas as bpd
+except Exception:  # pragma: no cover - optional dep guard
+    bpd = None  # type: ignore[assignment]
+    BFDataFrame = object  # type: ignore[misc,assignment]
+    _bf_import_error = RuntimeError(
+        "bigframes is required for this model. Install fastflowtransform[bigquery_bf]."
+    )
+else:
+    BFDataFrame = bpd.DataFrame
+    _bf_import_error = None
 
 
 @engine_model(
@@ -26,6 +34,9 @@ BFDataFrame = bpd.DataFrame
     },
 )
 def build(orders: BFDataFrame, customers: BFDataFrame) -> BFDataFrame:
+    if _bf_import_error:
+        raise _bf_import_error
+
     base = orders.merge(customers, on="customer_id", how="inner", suffixes=("", "_cust"))
 
     grouped = (
