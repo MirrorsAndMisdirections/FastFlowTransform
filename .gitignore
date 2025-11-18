@@ -33,7 +33,8 @@ htmlcov/
 # Build Artifacts
 build/
 dist/
-site/dag/
+**/site/dag/
+**/site/dag/**
 spark-warehouse
 metastore_db
 derby.log
