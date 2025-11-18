@@ -1,9 +1,17 @@
 # fastflowtransform/testing/registry.py
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Protocol
 
+from pydantic import BaseModel, ConfigDict, ValidationError
+
+from fastflowtransform.core import REGISTRY
+from fastflowtransform.logging import get_logger
 from fastflowtransform.testing import base as testing
+from fastflowtransform.testing.base import _scalar
+
+logger = get_logger("dq_registry")
 
 
 class Runner(Protocol):
@@ -14,6 +22,8 @@ class Runner(Protocol):
         message (str | None): Optional human-friendly message (usually set on failure).
         example_sql (str | None): Optional example SQL (shown in summary on failure).
     """
+
+    __name__: str
 
     def __call__(
         self, con: Any, table: str, column: str | None, params: dict[str, Any]
@@ -28,6 +38,31 @@ class Runner(Protocol):
 def _example_where(where: str | None) -> str:
     """Return a ' where (...)' suffix if where is provided, otherwise empty string."""
     return f" where ({where})" if where else ""
+
+
+def _format_param_validation_error(
+    kind: str,
+    origin: str | None,
+    exc: ValidationError,
+) -> str:
+    """Build a human-friendly error message when params don't match the schema."""
+    lines: list[str] = []
+    header = f"[{kind}] Invalid test configuration"
+    if origin:
+        header += f" for {origin}"
+    lines.append(header + ":")
+    for err in exc.errors():
+        loc = ".".join(str(p) for p in err.get("loc", ()))
+        msg = err.get("msg", "invalid value")
+        if loc:
+            lines.append(f"  • {loc}: {msg}")
+        else:
+            lines.append(f"  • {msg}")
+    lines.append(
+        "Hint: Update project.yml → tests: entry for this test so that its parameters "
+        "match the expected schema."
+    )
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +385,16 @@ def run_reconcile_coverage(
 
 
 # ---------------------------------------------------------------------------
+# Optional param-schema registry for custom tests
+# ---------------------------------------------------------------------------
+
+# kind -> Pydantic model used to validate params
+TEST_PARAM_MODELS: dict[str, type[BaseModel]] = {}
+# kind -> origin info (for nicer messages)
+TEST_ORIGINS: dict[str, str] = {}  # e.g. "tests/dq/no_future_orders.ff.sql"
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -375,42 +420,133 @@ TESTS: dict[str, Runner] = {
 # ---------------------------------------------------------------------------
 
 
-def register_test(name: str, runner: Runner, *, overwrite: bool = False) -> None:
+class DQParamsBase(BaseModel):
     """
-    Register (or override) a data-quality test runner.
+    Base for all dynamically created DQ params models.
+    Forbids unknown keys by default.
+    """
 
-    Usage:
+    model_config = ConfigDict(extra="forbid")
 
-        from fastflowtransform.testing import register_test
 
-        def my_runner(con, table, column, params):
-            ...
-            return True, None, None
-
-        register_test("my_custom_test", my_runner)
+def register_python_test(
+    kind: str,
+    runner: Runner,
+    *,
+    params_model: type[BaseModel] | None = None,
+    origin: str | None = None,
+    overwrite: bool = False,
+) -> None:
+    """
+    Register a custom Python test.
 
     Args:
-        name: Name of the test as used in project.yml / schema.yml (`type:` field).
-        runner: Callable implementing the Runner protocol.
-        overwrite: If False (default), attempting to override an existing name
-                   raises ValueError. Set True to replace built-ins or earlier
-                   registrations.
-
-    Raises:
-        ValueError: If name is empty or already registered (and overwrite=False).
-        TypeError: If runner is not callable.
+        kind: logical test type (e.g. "no_future_orders").
+        runner: callable implementing Runner.
+        params_model: optional Pydantic model for the params dict.
+        origin: string used in error messages (e.g. module path).
+        overwrite: if True, replace an existing test with the same kind.
     """
-    if not isinstance(name, (str, bytes)) or not str(name).strip():
-        raise ValueError("Test name must be a non-empty string")
-
-    if not callable(runner):
-        raise TypeError("runner must be callable")
-
-    key = str(name).strip()
-    if key in TESTS and not overwrite:
+    if kind in TESTS and not overwrite:
         raise ValueError(
-            f"Test '{key}' is already registered. "
-            "Pass overwrite=True to replace the existing runner."
+            f"Test type {kind!r} is already registered "
+            f"(origin={TEST_ORIGINS.get(kind, '<builtin>')!r})"
         )
 
-    TESTS[key] = runner
+    if kind in TESTS and overwrite:
+        logger.warning(
+            "Overwriting DQ test %r (previous origin=%r, new origin=%r)",
+            kind,
+            TEST_ORIGINS.get(kind),
+            origin,
+        )
+
+    TESTS[kind] = runner
+
+    if params_model is not None:
+        TEST_PARAM_MODELS[kind] = params_model
+    # If overwriting and no new params_model is given, keep the old one if present.
+    elif overwrite and kind in TEST_PARAM_MODELS:
+        pass
+    else:
+        # Default to a generic params model if you have one, or leave it unset
+        TEST_PARAM_MODELS.pop(kind, None)
+
+    if origin is not None:
+        TEST_ORIGINS[kind] = origin
+    elif overwrite:
+        # if overwriting without explicit origin, don't change existing origin
+        pass
+
+
+def register_sql_test(
+    kind: str,
+    path: Path,
+    *,
+    params_model: type[BaseModel] | None = None,
+    overwrite: bool = False,
+) -> None:
+    """
+    Register a custom SQL-based test from a *.ff.sql file.
+
+    kind: logical test type (e.g. "no_future_orders").
+    path: filesystem path to the template.
+    params_model: optional Pydantic model for params.
+    overwrite: if True, allow overriding an existing test of the same kind.
+    """
+    origin = str(path)
+    META_KEYS = {"type", "table", "column", "severity", "tags", "name"}
+
+    def _runner(
+        con: Any, table: str, column: str | None, params: dict[str, Any]
+    ) -> tuple[bool, str | None, str | None]:
+        # 1) Strip generic test metadata and validate params if a schema is provided
+        raw_params: dict[str, Any] = dict(params or {})
+        core_params: dict[str, Any] = {k: v for k, v in raw_params.items() if k not in META_KEYS}
+
+        if params_model is not None:
+            try:
+                cfg = params_model.model_validate(core_params)
+            except ValidationError as exc:
+                err_msg = _format_param_validation_error(kind, origin, exc)
+                raise testing.TestFailure(err_msg) from exc
+            # Use normalized params (e.g. converted types, defaults)
+            params_validated = cfg.model_dump(exclude_none=True)
+        else:
+            params_validated = core_params
+
+        # 2) Render the SQL template with a stable context
+        env = REGISTRY.get_env()
+        raw = path.read_text(encoding="utf-8")
+        tmpl = env.from_string(raw)
+
+        ctx: dict[str, Any] = {
+            "kind": kind,
+            "table": table,
+            "column": column,
+            "params": params_validated,
+            # always present, so templates can safely do `{% if where %}`
+            "where": params_validated.get("where"),
+        }
+
+        try:
+            sql = tmpl.render(**ctx)
+        except Exception as exc:
+            raise testing.TestFailure(
+                f"[{kind}] Failed to render SQL template for {origin}: {exc}"
+            ) from exc
+
+        # 3) Execute the SQL: convention here is "fail if count(*) > 0"
+        n = _scalar(con, sql)
+        ok = int(n or 0) == 0
+        msg: str | None = None if ok else f"{kind} failed: {n} offending row(s)"
+        example_sql = sql
+        return ok, msg, example_sql
+
+    register_python_test(
+        kind,
+        _runner,
+        params_model=params_model,
+        origin=origin,
+        overwrite=overwrite,
+    )
