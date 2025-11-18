@@ -127,75 +127,96 @@ jobs:
           - engine: duckdb
             extra: ""
             example: api_demo
+            env_file: examples/api_demo/.env.dev_duckdb
           - engine: duckdb
             extra: ""
             example: basic_demo
+            env_file: examples/basic_demo/.env.dev_duckdb
           - engine: duckdb
             extra: ""
             example: cache_demo
+            env_file: examples/cache_demo/.env.dev_duckdb
           - engine: duckdb
             extra: ""
             example: dq_demo
+            env_file: examples/dq_demo/.env.dev_duckdb
           - engine: duckdb
             extra: ""
             example: incremental_demo
+            env_file: examples/incremental_demo/.env.dev_duckdb
           - engine: duckdb
             extra: ""
             example: macros_demo
+            env_file: examples/macros_demo/.env.dev_duckdb
           - engine: duckdb
             extra: ""
             example: materializations_demo
+            env_file: examples/materializations_demo/.env.dev_duckdb
           # Postgres examples
           - engine: postgres
             extra: "postgres"
             example: api_demo
+            env_file: examples/api_demo/.env.dev_postgres
           - engine: postgres
             extra: "postgres"
             example: basic_demo
+            env_file: examples/basic_demo/.env.dev_postgres
           - engine: postgres
             extra: "postgres"
             example: cache_demo
+            env_file: examples/cache_demo/.env.dev_postgres
           - engine: postgres
             extra: "postgres"
             example: dq_demo
+            env_file: examples/dq_demo/.env.dev_postgres
           - engine: postgres
             extra: "postgres"
             example: incremental_demo
+            env_file: examples/incremental_demo/.env.dev_postgres
           - engine: postgres
             extra: "postgres"
             example: macros_demo
+            env_file: examples/macros_demo/.env.dev_postgres
           - engine: postgres
             extra: "postgres"
             example: materializations_demo
+            env_file: examples/materializations_demo/.env.dev_postgres
           # Spark examples
           - engine: databricks_spark
             extra: "spark"
             example: api_demo
             java: true
+            env_file: examples/api_demo/.env.dev_databricks
           - engine: databricks_spark
             extra: "spark"
             example: basic_demo
             java: true
+            env_file: examples/basic_demo/.env.dev_databricks
           - engine: databricks_spark
             extra: "spark"
             example: cache_demo
             java: true
+            env_file: examples/cache_demo/.env.dev_databricks
           - engine: databricks_spark
             extra: "spark"
             example: dq_demo
             java: true
+            env_file: examples/dq_demo/.env.dev_databricks
           - engine: databricks_spark
             extra: "spark"
             example: incremental_demo
             java: true
+            env_file: examples/incremental_demo/.env.dev_databricks
           - engine: databricks_spark
             extra: "spark"
             example: macros_demo
             java: true
+            env_file: examples/macros_demo/.env.dev_databricks
           - engine: databricks_spark
             extra: "spark"
             example: materializations_demo
             java: true
+            env_file: examples/materializations_demo/.env.dev_databricks
 
     services:
       postgres:
@@ -236,6 +257,14 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Load example env defaults
+        run: |
+          set -a
+          if [ -f "${{ matrix.env_file }}" ]; then
+            source "${{ matrix.env_file }}"
+          fi
+          set +a
 
       - name: Run example/integration tests for engine
         env:
