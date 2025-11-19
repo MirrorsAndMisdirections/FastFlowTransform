@@ -1,4 +1,4 @@
-{{ config(materialized='table', tags=['example:cache_demo','engine:duckdb','engine:postgres','engine:databricks_spark','engine:bigquery']) }}
+{{ config(materialized='table', tags=['example:cache_demo','engine:duckdb','engine:postgres','engine:databricks_spark','engine:bigquery','engine:snowflake_snowpark']) }}
 with u as (
   select user_id, email from {{ ref('stg_users.ff') }}
 ),

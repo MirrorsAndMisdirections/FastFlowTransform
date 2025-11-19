@@ -207,3 +207,187 @@ The BigQuery client in `fastflowtransform` will pick this up automatically **as 
       * Project: `fft-basic-demo`
       * Dataset: `basic_demo`
     * Verify it exists and is in the same project you set in `FF_BQ_PROJECT`.
+
+
+### Snowflake Snowpark
+
+#### 1. One-time setup in Snowflake
+
+You need a Snowflake account with a warehouse and database you can write to.
+
+1. **Log in to Snowflake UI (Web Console)**  
+   Use your regular Snowflake login. You should see the Worksheets / Data / Compute sections.
+
+2. **Create (or pick) a warehouse**
+
+   If you don’t have one yet:
+
+   ```sql
+   CREATE WAREHOUSE COMPUTE_WH
+     WAREHOUSE_SIZE = XSMALL
+     AUTO_SUSPEND = 60
+     AUTO_RESUME = TRUE;
+````
+
+You can of course use any existing warehouse; just make sure the user you configure below can `USE` and `OPERATE` it.
+
+3. **Create a database and base schema**
+
+   FFT will auto-create the schema (if `allow_create_schema=true`), but **not the database**.
+   So create the DB once:
+
+   ```sql
+   CREATE DATABASE EXAMPLE_DEMO;
+   CREATE SCHEMA EXAMPLE_DEMO.BASIC_DEMO;  -- optional, FFT can create this if allowed
+   ```
+
+   Adjust names if you prefer something else; just keep database+schema consistent with `.env` and `profiles.yml`.
+
+4. **User / role permissions**
+
+   Make sure the user you’ll use for FFT can:
+
+   ```sql
+   USE ROLE ACCOUNTADMIN;        -- or a less powerful custom role with the needed grants
+   GRANT USAGE ON WAREHOUSE COMPUTE_WH TO ROLE ACCOUNTADMIN;
+   GRANT USAGE ON DATABASE EXAMPLE_DEMO TO ROLE ACCOUNTADMIN;
+   GRANT USAGE, CREATE SCHEMA, CREATE TABLE, CREATE VIEW ON DATABASE EXAMPLE_DEMO TO ROLE ACCOUNTADMIN;
+   ```
+
+   (In the examples we stick with `ACCOUNTADMIN` to keep the setup simple; in real environments you’d use a dedicated, restricted role.)
+
+---
+
+#### 2. Local configuration (env + profiles)
+
+1. **Environment file (`examples/api_demo/.env.dev_snowflake`)**
+
+   ```env
+   # Snowflake connection
+   FF_SF_ACCOUNT=your_account_name           # e.g. xy12345.eu-central-1
+   FF_SF_USER=YOUR_USERNAME
+   FF_SF_PASSWORD=YOUR_PASSWORD
+   FF_SF_WAREHOUSE=COMPUTE_WH
+   FF_SF_DATABASE=EXAMPLE_DEMO
+   FF_SF_SCHEMA=BASIC_DEMO
+   FF_SF_ROLE=ACCOUNTADMIN                   # or another role with required grants
+
+   # Active fft environment name (must match profiles.yml)
+   FFT_ACTIVE_ENV=dev_snowflake
+   ```
+
+   Notes:
+
+   * `FF_SF_ACCOUNT` is the Snowflake **account identifier**, not the full URL
+     (e.g. `xy12345.eu-central-1`, not `https://xy12345.eu-central-1.snowflakecomputing.com`).
+   * `FF_SF_DATABASE` must already exist (see step 1).
+   * `FF_SF_SCHEMA` will be **auto-created** by FFT if `allow_create_schema=true` in the profile.
+
+2. **`profiles.yml`**
+
+   Example profile matching the env above:
+
+   ```yaml
+   dev_snowflake:
+     engine: snowflake_snowpark
+     snowflake_snowpark:
+       account: "{{ env('FF_SF_ACCOUNT') }}"
+       user: "{{ env('FF_SF_USER') }}"
+       password: "{{ env('FF_SF_PASSWORD') }}"
+       warehouse: "{{ env('FF_SF_WAREHOUSE', 'COMPUTE_WH') }}"
+       database: "{{ env('FF_SF_DATABASE', 'EXAMPLE_DEMO') }}"
+       db_schema: "{{ env('FF_SF_SCHEMA', 'BASIC_DEMO') }}"
+       role: "{{ env('FF_SF_ROLE', 'ACCOUNTADMIN') }}"
+       allow_create_schema: true
+   ```
+
+   * `allow_create_schema: true` tells the executor to run:
+
+     ```sql
+     CREATE SCHEMA IF NOT EXISTS "EXAMPLE_DEMO"."BASIC_DEMO";
+     ```
+
+     on first connect (best-effort). If you prefer to manage schemas manually, set this to `false`.
+
+---
+
+#### 3. Running seeds and models
+
+Once the env file and profile are in place:
+
+1. **Seed Snowflake from `seeds/`:**
+
+   ```bash
+   make ENGINE=snowflake_snowpark seed
+   ```
+
+   This will:
+
+   * Connect via Snowpark
+   * Create the schema (if allowed and it doesn’t exist)
+   * Upload CSV seeds via `write_pandas` into `EXAMPLE_DEMO.BASIC_DEMO.*`
+
+2. **Build models:**
+
+   ```bash
+   make ENGINE=snowflake_snowpark run
+   ```
+
+   * SQL models are rendered to Snowflake SQL and executed as `CREATE OR REPLACE TABLE/VIEW`.
+   * Snowpark Python models (`only="snowflake_snowpark"`) receive Snowpark `DataFrame` inputs and write back using `save_as_table`.
+
+3. **Run tests (if you have them):**
+
+   ```bash
+   make ENGINE=snowflake_snowpark test
+   ```
+
+   This executes the standard FFT test suite (e.g. `not_null`, `unique`, etc.) against tables in `EXAMPLE_DEMO.BASIC_DEMO`.
+
+---
+
+#### 4. Cleanup / reset for re-runs
+
+You wired Snowflake into your `cleanup.py`, so you can reset the demo schema with:
+
+```bash
+python scripts/cleanup.py --engine snowflake_snowpark --project examples/basic_demo
+```
+
+Depending on how you implemented `cleanup_snowflake`, this typically:
+
+* Drops and recreates the **schema** (not the database), e.g. `EXAMPLE_DEMO.BASIC_DEMO`.
+* Removes local FFT artifacts (manifest, run_results, etc.) unless `--skip-artifacts` is set.
+
+Then you can re-seed and re-run from a clean slate:
+
+```bash
+make ENGINE=snowflake_snowpark seed run
+```
+
+---
+
+#### 5. Common Snowflake gotchas
+
+* **Database vs schema creation**
+
+  * FFT’s Snowflake executor only auto-creates the **schema** (when `allow_create_schema=true`).
+  * The **database must exist** (e.g. `EXAMPLE_DEMO`) or you’ll get `Schema 'EXAMPLE_DEMO.BASIC_DEMO' does not exist or not authorized`.
+
+* **Case sensitivity / quoting**
+
+  * FFT creates tables *unquoted*, e.g. `CREATE TABLE EXAMPLE_DEMO.BASIC_DEMO.SEED_USERS`, so Snowflake stores them as uppercase.
+  * Your SQL models can safely use lowercase identifiers (`select id, email from {{ ref('seed_users') }}`); Snowflake normalizes them.
+  * The executor takes care of quoting database/schema/table names when building fully qualified identifiers.
+
+* **Permissions**
+
+  * Errors like `Object 'EXAMPLE_DEMO.BASIC_DEMO.*' does not exist or not authorized` usually mean:
+
+    * DB/schema/table really doesn’t exist **or**
+    * the role in `FF_SF_ROLE` doesn’t have `USAGE` + `CREATE TABLE/VIEW` on that DB/schema.
+  * Double-check role grants with:
+
+    ```sql
+    SHOW GRANTS TO ROLE ACCOUNTADMIN;
+    ```

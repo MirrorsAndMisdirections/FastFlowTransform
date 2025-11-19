@@ -19,6 +19,8 @@ Supported engines:
   - DuckDB  (executor.con)
   - Postgres (executor.engine, optional .schema)
   - BigQuery (executor.client, .dataset, optional .project)
+  - Snowflake Snowpark (executor.session, .database, .schema)
+  - Databricks Spark (executor.spark, optional .database/.schema)
 """
 
 from __future__ import annotations
@@ -31,7 +33,18 @@ from sqlalchemy import text
 # --------------------------- Engine detection ---------------------------
 
 
+def _is_snowflake_snowpark(ex: Any) -> bool:
+    return hasattr(ex, "session") and hasattr(ex.session, "sql")
+
+
+def _is_spark(ex: Any) -> bool:
+    return hasattr(ex, "spark") and hasattr(ex.spark, "sql")
+
+
 def _is_duckdb(ex: Any) -> bool:
+    engine_name = getattr(ex, "ENGINE_NAME", None)
+    if isinstance(engine_name, str):
+        return engine_name.lower() == "duckdb"
     return hasattr(ex, "con") and hasattr(ex.con, "execute")
 
 
@@ -68,6 +81,44 @@ def _bq_qual_meta(ex: Any) -> str:
     return f"`{dataset}._ff_meta`"
 
 
+def _sf_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _sf_qual_meta(ex: Any) -> str:
+    db = getattr(ex, "database", None)
+    schema = getattr(ex, "schema", None)
+    tbl = _sf_ident("_ff_meta")
+    if db and schema:
+        return f"{_sf_ident(db)}.{_sf_ident(schema)}.{tbl}"
+    if schema:
+        return f"{_sf_ident(schema)}.{tbl}"
+    return tbl
+
+
+def _spark_ident(name: str) -> str:
+    return "`" + name.replace("`", "``") + "`"
+
+
+def _spark_db(ex: Any) -> str | None:
+    db = getattr(ex, "database", None) or getattr(ex, "schema", None)
+    if isinstance(db, str) and db.strip():
+        return db.strip()
+    return None
+
+
+def _spark_qual_meta(ex: Any) -> str:
+    db = _spark_db(ex)
+    ident = _spark_ident("_ff_meta")
+    if db:
+        return f"{_spark_ident(db)}.{ident}"
+    return ident
+
+
+def _sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
 # --------------------------- Public API ---------------------------
 
 
@@ -75,6 +126,36 @@ def ensure_meta_table(executor: Any) -> None:
     """
     Create the _ff_meta table if it does not exist for the active engine.
     """
+    if _is_snowflake_snowpark(executor):
+        qual = _sf_qual_meta(executor)
+        ddl = (
+            f"create table if not exists {qual} ("
+            "  node_name string,"
+            "  relation string,"
+            "  fp string,"
+            "  engine string,"
+            "  built_at timestamp_ltz default current_timestamp()"
+            ")"
+        )
+        executor.session.sql(ddl).collect()
+        return
+
+    if _is_spark(executor):
+        qual = _spark_qual_meta(executor)
+        fmt = getattr(executor, "spark_table_format", None)
+        fmt_clause = f" USING {fmt}" if isinstance(fmt, str) and fmt.strip() else ""
+        ddl = (
+            f"CREATE TABLE IF NOT EXISTS {qual} ("
+            "  node_name STRING,"
+            "  relation STRING,"
+            "  fp STRING,"
+            "  engine STRING,"
+            "  built_at TIMESTAMP"
+            f"){fmt_clause}"
+        )
+        executor.spark.sql(ddl).collect()
+        return
+
     if _is_duckdb(executor):
         sql = (
             'create table if not exists "_ff_meta" ('
@@ -126,6 +207,45 @@ def upsert_meta(executor: Any, node_name: str, relation: str, fp: str, engine: s
     Insert or update `_ff_meta` for a given node.
     """
     ensure_meta_table(executor)
+
+    if _is_snowflake_snowpark(executor):
+        qual = _sf_qual_meta(executor)
+        node_lit = _sql_literal(node_name)
+        rel_lit = _sql_literal(relation)
+        fp_lit = _sql_literal(fp)
+        eng_lit = _sql_literal(engine)
+        executor.session.sql(f"delete from {qual} where node_name = {node_lit}").collect()
+        executor.session.sql(
+            f"insert into {qual}(node_name, relation, fp, engine, built_at) "
+            f"values ({node_lit}, {rel_lit}, {fp_lit}, {eng_lit}, current_timestamp())"
+        ).collect()
+        return
+
+    if _is_spark(executor):
+        qual = _spark_qual_meta(executor)
+
+        def _lit(val: str) -> str:
+            return _sql_literal(val)
+
+        merge_sql = f"""
+        MERGE INTO {qual} AS target
+        USING (
+            SELECT {_lit(node_name)} AS node_name,
+                   {_lit(relation)}  AS relation,
+                   {_lit(fp)}        AS fp,
+                   {_lit(engine)}    AS engine
+        ) AS source
+        ON target.node_name = source.node_name
+        WHEN MATCHED THEN UPDATE SET
+            relation = source.relation,
+            fp       = source.fp,
+            engine   = source.engine,
+            built_at = current_timestamp()
+        WHEN NOT MATCHED THEN INSERT (node_name, relation, fp, engine, built_at)
+        VALUES (source.node_name, source.relation, source.fp, source.engine, current_timestamp())
+        """
+        executor.spark.sql(merge_sql).collect()
+        return
 
     if _is_duckdb(executor):
         # DuckDB: emulate upsert via delete + insert inside the same connection.
@@ -222,6 +342,37 @@ def get_meta(executor: Any, node_name: str) -> tuple[str, str, Any, str] | None:
         except Exception:
             return (r[0], r[1], r[2], r[3])
 
+    if _is_snowflake_snowpark(executor):
+        qual = _sf_qual_meta(executor)
+        node = _sql_literal(node_name)
+        sql = f"select fp, relation, built_at, engine from {qual} where node_name = {node} limit 1"
+        rows = executor.session.sql(sql).collect()
+        if not rows:
+            return None
+        row = rows[0]
+        data = getattr(row, "asDict", lambda: None)()
+        if data:
+            return (data.get("FP"), data.get("RELATION"), data.get("BUILT_AT"), data.get("ENGINE"))
+        try:
+            return (row[0], row[1], row[2], row[3])
+        except Exception:
+            return None
+
+    if _is_spark(executor):
+        qual = _spark_qual_meta(executor)
+        sql = (
+            f"SELECT fp, relation, built_at, engine FROM {qual} "
+            f"WHERE node_name = {_sql_literal(node_name)} LIMIT 1"
+        )
+        rows = executor.spark.sql(sql).collect()
+        if not rows:
+            return None
+        row = rows[0]
+        try:
+            return (row["fp"], row["relation"], row["built_at"], row["engine"])
+        except Exception:
+            return (row[0], row[1], row[2], row[3])
+
     return None
 
 
@@ -270,6 +421,37 @@ def relation_exists(executor: Any, relation: str) -> bool:
         except Exception:
             return True
 
+    if _is_snowflake_snowpark(executor):
+        try:
+            db = getattr(executor, "database", None)
+            schema = getattr(executor, "schema", None)
+            if not db or not schema:
+                return False
+            q = f"""
+            select 1
+            from {_sf_ident(db)}.information_schema.tables
+            where upper(table_schema) = {_sql_literal(schema.upper())}
+              and upper(table_name) = {_sql_literal(relation.upper())}
+            limit 1
+            """
+            rows = executor.session.sql(q).collect()
+            return bool(rows)
+        except Exception:
+            return False
+
+    if _is_spark(executor):
+        try:
+            spark = executor.spark
+            if "." in relation:
+                db_name, tbl = relation.rsplit(".", 1)
+                return spark.catalog.tableExists(db_name, tbl)
+            db = _spark_db(executor)
+            if db:
+                return spark.catalog.tableExists(db, relation)
+            return spark.catalog.tableExists(relation)
+        except Exception:
+            return False
+
     return True
 
 
@@ -307,4 +489,20 @@ def delete_meta_for_node(executor: Any, node_name: str) -> None:
             executor.client.query(
                 f'DELETE FROM `{dataset}._ff_meta` WHERE node_name = "{node_name}"'
             )
+        return
+
+    if _is_snowflake_snowpark(executor):
+        with suppress(Exception):
+            qual = _sf_qual_meta(executor)
+            executor.session.sql(
+                f"delete from {qual} where node_name = {_sql_literal(node_name)}"
+            ).collect()
+        return
+
+    if _is_spark(executor):
+        with suppress(Exception):
+            qual = _spark_qual_meta(executor)
+            executor.spark.sql(
+                f"DELETE FROM {qual} WHERE node_name = {_sql_literal(node_name)}"
+            ).collect()
         return

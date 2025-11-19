@@ -10,11 +10,12 @@ This demo shows:
 ## Quickstart
 
 ```bash
-# pick your engine (duckdb, postgres, databricks_spark, or bigquery); defaults to duckdb
+# pick your engine (duckdb, postgres, databricks_spark, bigquery, or snowflake_snowpark); defaults to duckdb
 cp .env.dev_duckdb .env
 # or: cp .env.dev_postgres .env  (then edit DSN/schema)
 # or: cp .env.dev_databricks .env
 # or: cp .env.dev_bigquery_pandas .env   # or .env.dev_bigquery_bigframes
+# or: cp .env.dev_snowflake .env
 
 cd examples/cache_demo
 make cache_first      ENGINE=duckdb   # builds and writes cache
@@ -44,6 +45,7 @@ Code kopieren
 To run everything on Postgres, set `ENGINE=postgres` and copy/edit `.env.dev_postgres`, e.g. `make demo ENGINE=postgres`.
 To run on Databricks/Spark locally, set `ENGINE=databricks_spark` and copy/edit `.env.dev_databricks`, e.g. `make demo ENGINE=databricks_spark`.
 To run on BigQuery, set `ENGINE=bigquery` and copy/edit `.env.dev_bigquery_pandas` (or `.env.dev_bigquery_bigframes`), e.g. `make demo ENGINE=bigquery BQ_FRAME=bigframes` (default) or `BQ_FRAME=pandas`.
+To run on Snowflake Snowpark, install `fastflowtransform[snowflake]`, set `ENGINE=snowflake_snowpark`, copy/edit `.env.dev_snowflake`, and run e.g. `make demo ENGINE=snowflake_snowpark`.
 
 ## What this demo proves (in a minute)
 

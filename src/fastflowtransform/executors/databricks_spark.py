@@ -581,11 +581,8 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
     # ---- Meta hook ----
     def on_node_built(self, node: Node, relation: str, fingerprint: str) -> None:
         """After successful materialization, upsert _ff_meta (best-effort)."""
-        try:
-            ensure_meta_table(self)
-            upsert_meta(self, node.name, relation, fingerprint, "databricks_spark")
-        except Exception:
-            pass
+        ensure_meta_table(self)
+        upsert_meta(self, node.name, relation, fingerprint, "databricks_spark")
 
     # ── Incremental API (parity) ─────────────────────────────────────────
     def exists_relation(self, relation: str) -> bool:

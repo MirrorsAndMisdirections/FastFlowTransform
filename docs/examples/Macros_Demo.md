@@ -1,6 +1,6 @@
 # Macros Demo
 
-**Goal:** Showcase **SQL Jinja macros** and **Python render-time macros** working together across engines (DuckDB, Postgres, Databricks Spark, BigQuery).
+**Goal:** Showcase **SQL Jinja macros** and **Python render-time macros** working together across engines (DuckDB, Postgres, Databricks Spark, BigQuery, Snowflake Snowpark).
 You’ll see reusable SQL helpers, engine-aware SQL generation, and Python functions exposed as Jinja globals/filters.
 
 ---
@@ -13,6 +13,9 @@ examples/macros_demo/
   .env.dev_databricks
   .env.dev_duckdb
   .env.dev_postgres
+  .env.dev_bigquery_pandas
+  .env.dev_bigquery_bigframes
+  .env.dev_snowflake
   Makefile
   profiles.yml
   project.yml
@@ -99,12 +102,16 @@ From repo root:
 ```bash
 cd examples/macros_demo
 
-# Choose engine: duckdb (default) | postgres | databricks_spark
+# Choose engine: duckdb (default) | postgres | databricks_spark | bigquery | snowflake_snowpark
 make ENGINE=duckdb demo
 # or
 make ENGINE=postgres demo
 # or
 make ENGINE=databricks_spark demo
+# or
+make ENGINE=bigquery BQ_FRAME=pandas demo     # or bigframes
+# or
+make ENGINE=snowflake_snowpark demo
 ```
 
 The `demo` target runs:
@@ -114,6 +121,8 @@ The `demo` target runs:
 3. `fft dag --html` — writes DAG HTML to `site/dag/index.html`
 4. `fft test` — runs example tests
 5. Prints artifact paths and tries to open the DAG
+
+> For Snowflake, copy `.env.dev_snowflake` to `.env`, fill in the `FF_SF_*` values, and install `fastflowtransform[snowflake]` so the Snowpark executor is available.
 
 ---
 

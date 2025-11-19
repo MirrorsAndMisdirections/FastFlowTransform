@@ -290,6 +290,13 @@ def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None
         or "bigquery" in name_l
         or str(getattr(con, "marker", "")).upper() == "BQ_SHIM"
     )
+    is_snowflake = (
+        "snowflake" in mod_l
+        or "snowpark" in mod_l
+        or "snowflake" in name_l
+        or "snowpark" in name_l
+        or hasattr(con, "_session")
+    )
 
     # Primary SQL (Postgres / DuckDB style)
     sql_primary = (
@@ -307,6 +314,11 @@ def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None
     sql_bigquery = (
         f"select cast(TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), max({ts_col}), MINUTE) as float64) "
         f"as delay_min from {table}"
+    )
+    # Snowflake: DATEDIFF on minutes; cast to float to align with other engines
+    sql_snowflake = (
+        f"select DATEDIFF('minute', max({ts_col}), CURRENT_TIMESTAMP())::float as delay_min "
+        f"from {table}"
     )
 
     delay = None
@@ -327,6 +339,12 @@ def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None
         except Exception as e:
             # BigQuery error messages don't mention EXTRACT/EPOCH; surface directly.
             raise _wrap_db_error("freshness", table, ts_col, sql_bigquery, e) from e
+    elif is_snowflake:
+        sql_used = sql_snowflake
+        try:
+            delay = _scalar(con, sql_snowflake)
+        except Exception as e:
+            raise _wrap_db_error("freshness", table, ts_col, sql_snowflake, e) from e
     else:
         # Non-Spark engines: try the Postgres/DuckDB expression first.
         sql_used = sql_primary

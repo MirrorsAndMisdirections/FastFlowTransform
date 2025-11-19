@@ -1,7 +1,7 @@
 {{ config(
     materialized='table',
     tags=['example:materializations_demo', 'scope:dim',
-          'engine:duckdb', 'engine:postgres', 'engine:databricks_spark']
+          'engine:duckdb', 'engine:postgres', 'engine:databricks_spark', 'engine:bigquery', 'engine:snowflake_snowpark']
 ) }}
 
 -- Dimension table; stable per customer

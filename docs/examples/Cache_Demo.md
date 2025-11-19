@@ -60,6 +60,8 @@ make change_py         # edit py_constants.ff.py -> rebuilds that model
 make run_parallel      # runs entire DAG with 4 workers per level
 ```
 
+> Engines: set `ENGINE=<duckdb|postgres|databricks_spark|bigquery|snowflake_snowpark>` and copy the matching `.env.dev_*` file (`.env.dev_snowflake` for Snowflake; install `fastflowtransform[snowflake]`).
+
 Seeds stay immutable: `change_seed` assembles a temporary combined copy in `.local/seeds` using
 `patches/seed_users_patch.csv`, so the repo stays clean while fingerprints still change.
 

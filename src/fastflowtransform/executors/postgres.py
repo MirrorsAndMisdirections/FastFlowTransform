@@ -165,11 +165,8 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
         """
         Write/update _ff_meta in the current schema after a successful build.
         """
-        try:
-            ensure_meta_table(self)
-            upsert_meta(self, node.name, relation, fingerprint, "postgres")
-        except Exception:
-            pass
+        ensure_meta_table(self)
+        upsert_meta(self, node.name, relation, fingerprint, "postgres")
 
     # ── Incremental API ────────────────────────────────────────────────────
     def exists_relation(self, relation: str) -> bool:

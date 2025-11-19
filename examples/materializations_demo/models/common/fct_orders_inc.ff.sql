@@ -1,7 +1,7 @@
 {{ config(
     materialized='incremental',
     tags=['example:materializations_demo', 'scope:fct',
-          'engine:duckdb', 'engine:postgres', 'engine:databricks_spark'],
+          'engine:duckdb', 'engine:postgres', 'engine:databricks_spark', 'engine:bigquery', 'engine:snowflake_snowpark'],
     incremental={
         'updated_at_column': 'order_ts'
     },

@@ -47,7 +47,7 @@ Welcome! This page is your starting point for FastFlowTransform docs. Pick the t
 ### 1. Build & Operate Projects (Data Practitioners)
 
 - **Get set up quickly:** follow the dedicated [Quickstart](Quickstart.md) guide for installation, seeding, and a first run.
-- **Need local runtimes?** The [API demo local engine setup](examples/Local_Engine_Setup.md) walks through DuckDB, Postgres, and Databricks Spark.
+- **Need local runtimes?** The [API demo local engine setup](examples/Local_Engine_Setup.md) walks through DuckDB, Postgres, Databricks Spark, BigQuery, and Snowflake Snowpark.
 - **Understand the project layout & CLI workflow:** start with *Project Layout* in the [Technical Overview](Technical_Overview.md#project-layout) and pair it with the [CLI Guide](CLI_Guide.md) for command patterns.
 - **Configure runtimes & profiles:** review executor profiles and environment overrides in the dedicated [Profiles guide](Profiles.md) plus [Logging & Verbosity](Logging.md) for observability flags.
 - **Model data quality & troubleshoot runs:** combine the [Model Unit Tests guide](Unit_Tests.md) with [Troubleshooting & Error Codes](Troubleshooting.md) to keep runs deterministic and easy to debug.

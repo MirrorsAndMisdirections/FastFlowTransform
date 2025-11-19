@@ -368,6 +368,7 @@ def _make_executor(prof: Profile, jenv: Environment) -> tuple[Any, Callable, Cal
             "warehouse": prof.snowflake_snowpark.warehouse,
             "database": prof.snowflake_snowpark.database,
             "schema": prof.snowflake_snowpark.db_schema,
+            "allow_create_schema": prof.snowflake_snowpark.allow_create_schema,
         }
         if prof.snowflake_snowpark.role:
             cfg["role"] = prof.snowflake_snowpark.role

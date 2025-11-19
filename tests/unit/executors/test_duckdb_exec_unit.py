@@ -169,13 +169,15 @@ def test_format_source_reference_injects_catalog_when_matches_schema():
 
 
 # ---------------------------------------------------------------------------
-# on_node_built - best effort
+# on_node_built
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
 @pytest.mark.duckdb
-def test_on_node_built_best_effort(duck_exec: DuckExecutor, monkeypatch: pytest.MonkeyPatch):
+def test_on_node_built_invokes_meta_helpers(
+    duck_exec: DuckExecutor, monkeypatch: pytest.MonkeyPatch
+):
     called = {"ensure": 0, "upsert": 0}
 
     def fake_ensure(ex: Any) -> None:
@@ -184,8 +186,7 @@ def test_on_node_built_best_effort(duck_exec: DuckExecutor, monkeypatch: pytest.
     def fake_upsert(ex: Any, name: str, rel: str, fp: str, eng: str) -> None:
         called["upsert"] += 1
 
-    # patch the functions used in on_node_built
-    import fastflowtransform.executors.duckdb as duck_mod  # noqa PLC0415
+    import fastflowtransform.executors.duckdb as duck_mod  # noqa: PLC0415
 
     monkeypatch.setattr(duck_mod, "ensure_meta_table", fake_ensure, raising=True)
     monkeypatch.setattr(duck_mod, "upsert_meta", fake_upsert, raising=True)
@@ -194,6 +195,22 @@ def test_on_node_built_best_effort(duck_exec: DuckExecutor, monkeypatch: pytest.
 
     assert called["ensure"] == 1
     assert called["upsert"] == 1
+
+
+@pytest.mark.unit
+@pytest.mark.duckdb
+def test_on_node_built_propagates_meta_errors(
+    duck_exec: DuckExecutor, monkeypatch: pytest.MonkeyPatch
+):
+    import fastflowtransform.executors.duckdb as duck_mod  # noqa: PLC0415
+
+    def bad_ensure(ex: Any) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(duck_mod, "ensure_meta_table", bad_ensure, raising=True)
+
+    with pytest.raises(RuntimeError):
+        duck_exec.on_node_built(_node("m1"), "out_tbl", "fp123")
 
 
 # ---------------------------------------------------------------------------

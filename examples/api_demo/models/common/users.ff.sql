@@ -7,7 +7,8 @@
         'engine:duckdb',
         'engine:postgres',
         'engine:databricks_spark',
-        'engine:bigquery'
+        'engine:bigquery',
+        'engine:snowflake_snowpark'
     ],
 ) }}
 -- Simple staging table from seed

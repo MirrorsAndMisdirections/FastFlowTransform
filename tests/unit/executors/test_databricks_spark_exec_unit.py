@@ -295,7 +295,6 @@ def test__create_view_over_table_executes_expected_sql(exec_minimal):
 @pytest.mark.unit
 @pytest.mark.databricks_spark
 def test_on_node_built_calls_meta_helpers(exec_minimal, monkeypatch):
-    """on_node_built should best-effort call ensure_meta_table and upsert_meta."""
     ensure_called = {}
     upsert_called = {}
 
@@ -313,6 +312,20 @@ def test_on_node_built_calls_meta_helpers(exec_minimal, monkeypatch):
 
     assert ensure_called.get("ok") is True
     assert upsert_called["args"] == ("demo_node", "demo_tbl", "abc123", "databricks_spark")
+
+
+@pytest.mark.unit
+@pytest.mark.databricks_spark
+def test_on_node_built_raises_on_meta_failure(exec_minimal, monkeypatch):
+    def bad_upsert(executor, node_name, relation, fingerprint, engine):
+        raise RuntimeError("meta fail")
+
+    monkeypatch.setattr(mod, "upsert_meta", bad_upsert)
+
+    node = Node(name="demo_node", kind="sql", path=Path("x"))
+
+    with pytest.raises(RuntimeError):
+        exec_minimal.on_node_built(node, "demo_tbl", "abc123")
 
 
 @pytest.mark.unit

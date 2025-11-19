@@ -16,6 +16,7 @@ import pandas as pd
 
 from fastflowtransform import storage
 from fastflowtransform.config.seeds import SeedsSchemaConfig, load_seeds_schema
+from fastflowtransform.executors.snowflake_snowpark import SnowflakeSnowparkExecutor
 from fastflowtransform.logging import echo
 from fastflowtransform.settings import EngineType
 from fastflowtransform.typing import SDF, SparkAnalysisException, SparkSession
@@ -745,13 +746,75 @@ def _handle_spark(
     return True
 
 
+def _handle_snowflake_snowpark(
+    table: str,
+    df: pd.DataFrame,
+    executor: Any,
+    schema: str | None,
+) -> bool:
+    """
+    Seed loader for SnowflakeSnowparkExecutor.
+
+    Uses Session.write_pandas to create/overwrite the table in the configured
+    database + schema.
+    """
+    if not isinstance(executor, SnowflakeSnowparkExecutor):
+        return False
+
+    session = executor.session
+    target_db = getattr(executor, "database", None)
+    target_schema = schema or getattr(executor, "schema", None)
+
+    if not target_db or not target_schema:
+        # Not enough info to build a fully-qualified target
+        return False
+
+    # Optionally auto-create schema when allowed
+    created_schema = False
+    if getattr(executor, "allow_create_schema", False):
+        session.sql(f'CREATE SCHEMA IF NOT EXISTS "{target_db}"."{target_schema}"').collect()
+        created_schema = True
+
+    full_name = _qualify(table, target_schema, target_db)
+
+    t0 = perf_counter()
+    # Use Snowpark's write_pandas: CREATE+OVERWRITE semantics
+    session.write_pandas(
+        df,
+        table_name=table,
+        database=target_db,
+        schema=target_schema,
+        auto_create_table=True,
+        quote_identifiers=False,
+        overwrite=True,
+    )
+    dt_ms = int((perf_counter() - t0) * 1000)
+
+    _echo_seed_line(
+        full_name=full_name,
+        rows=len(df),
+        cols=df.shape[1],
+        engine="snowflake",
+        ms=dt_ms,
+        created_schema=created_schema,
+        action="replaced",
+    )
+    return True
+
+
 # ------------------------------------------------------------
 # Dispatcher
 # ------------------------------------------------------------
 
 Handler = Callable[[str, pd.DataFrame, Any, str | None], bool]
 
-_HANDLERS: Iterable[Handler] = (_handle_duckdb, _handle_sqlalchemy, _handle_spark, _handle_bigquery)
+_HANDLERS: Iterable[Handler] = (
+    _handle_duckdb,
+    _handle_sqlalchemy,
+    _handle_spark,
+    _handle_bigquery,
+    _handle_snowflake_snowpark,
+)
 
 
 def materialize_seed(

@@ -111,7 +111,8 @@ def _write_profiles(tmp_path: Path, yaml_text: str) -> None:
                 password: ""
                 warehouse: ""
                 database: ""
-                db_schema: ""
+                schema: ""
+                allow_create_schema: true
             """,
             {},
             True,

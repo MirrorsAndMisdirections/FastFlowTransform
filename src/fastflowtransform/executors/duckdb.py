@@ -200,12 +200,8 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
         """
         After successful materialization, ensure the meta table exists and upsert the row.
         """
-        # Best-effort: do not let meta errors break the run
-        try:
-            ensure_meta_table(self)
-            upsert_meta(self, node.name, relation, fingerprint, "duckdb")
-        except Exception:
-            pass
+        ensure_meta_table(self)
+        upsert_meta(self, node.name, relation, fingerprint, "duckdb")
 
     # ── Incremental API ────────────────────────────────────────────────────
     def exists_relation(self, relation: str) -> bool:
