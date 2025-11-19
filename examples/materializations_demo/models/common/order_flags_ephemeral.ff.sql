@@ -1,7 +1,7 @@
 {{ config(
     materialized='ephemeral',
     tags=['example:materializations_demo', 'scope:helpers',
-          'engine:duckdb', 'engine:postgres', 'engine:databricks_spark']
+          'engine:duckdb', 'engine:postgres', 'engine:databricks_spark', 'engine:bigquery', 'engine:snowflake_snowpark']
 ) }}
 
 -- Not persisted; will be inlined as a CTE where referenced

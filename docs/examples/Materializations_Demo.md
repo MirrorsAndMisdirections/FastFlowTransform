@@ -11,6 +11,8 @@ examples/materializations_demo/models/
 
 Each model type demonstrates how FastFlowTransform builds, caches, or executes models differently depending on its `materialized:` configuration.
 
+Supported engines: DuckDB, Postgres, Databricks/Spark, BigQuery (pandas & BigFrames), and Snowflake Snowpark.
+
 ---
 
 ## 🧩 1. View Models
@@ -54,7 +56,7 @@ from {{ ref('fct_orders_view') }}
 * Fully rebuilt every run
 * Good for final curated datasets or small tables
 * Overwrites previous contents (atomic replace)
-* Compatible with all engines (DuckDB, Postgres, BigQuery, etc.)
+* Compatible with all engines (DuckDB, Postgres, Databricks, BigQuery, Snowflake)
 
 ---
 

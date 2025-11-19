@@ -5,7 +5,7 @@
 PROJECT ?= .
 UV ?= uv
 
-# Engine selector (duckdb|postgres|databricks_spark)
+# Engine selector (duckdb|postgres|databricks_spark|bigquery|snowflake_snowpark)
 ENGINE ?= duckdb
 
 # BigQuery frame selector (pandas|bigframes)
@@ -40,6 +40,10 @@ ifeq ($(ENGINE),bigquery)
     PROFILE_ENV = dev_bigquery_bigframes
   endif
 endif
+ifeq ($(ENGINE),snowflake_snowpark)
+  PROFILE_ENV = dev_snowflake
+  ENGINE_TAG = engine:snowflake_snowpark
+endif
 
 BASE_ENV = FFT_ACTIVE_ENV=$(PROFILE_ENV) FF_ENGINE=$(ENGINE)
 
@@ -61,6 +65,8 @@ else ifeq ($(ENGINE),databricks_spark)
   CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine databricks_spark --env "$(PROFILE_ENV)" --project "$(PROJECT)"
 else ifeq ($(ENGINE),bigquery)
   CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine bigquery --env "$(PROFILE_ENV)" --project "$(PROJECT)"
+else ifeq ($(ENGINE),snowflake_snowpark)
+  CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine snowflake_snowpark --env "$(PROFILE_ENV)" --project "$(PROJECT)"
 else
   CLEAN_CMD = $(error Unsupported ENGINE=$(ENGINE) for cleanup)
 endif

@@ -1,6 +1,6 @@
 #  Incremental, Delta & Iceberg Demo
 
-This example project shows how to use **incremental models** and **Delta-/Iceberg-style merges** in FastFlowTransform across DuckDB, Postgres, Databricks Spark (Parquet, Delta & Iceberg), and BigQuery (pandas or BigFrames).
+This example project shows how to use **incremental models** and **Delta-/Iceberg-style merges** in FastFlowTransform across DuckDB, Postgres, Databricks Spark (Parquet, Delta & Iceberg), BigQuery (pandas or BigFrames), and Snowflake Snowpark.
 
 
 It is intentionally small and self-contained so you can copy/paste patterns into your own project.
@@ -26,6 +26,7 @@ incremental_demo/
   .env.dev_databricks_iceberg
   .env.dev_bigquery_pandas
   .env.dev_bigquery_bigframes
+  .env.dev_snowflake
   Makefile
   profiles.yml
   project.yml
@@ -51,6 +52,8 @@ incremental_demo/
           fct_events_py_incremental.ff.py
         bigframes/
           fct_events_py_incremental.ff.py
+      snowflake_snowpark/
+        fct_events_py_incremental.ff.py
 ```
 
 *Your actual filenames may differ slightly; the concepts are the same.*
@@ -79,6 +82,7 @@ The demo revolves around a tiny `events` dataset and three different ways to bui
      * DuckDB / Postgres: incremental insert/merge in SQL
      * Databricks Spark: `MERGE INTO` for Delta or Iceberg where available (Spark 4), with a fallback full-refresh strategy for other formats
      * BigQuery: pandas- or BigFrames-backed DataFrame models with incremental merge logic handled by the BigQuery executor
+     * Snowflake Snowpark: Snowpark DataFrame operations with merges handled by the Snowflake executor
 
 4. **Iceberg profile for Spark 4**
 
@@ -134,6 +138,8 @@ Conceptually:
         'engine:duckdb',
         'engine:postgres',
         'engine:databricks_spark',
+        'engine:bigquery',
+        'engine:snowflake_snowpark'
     ],
 ) }}
 
@@ -273,6 +279,8 @@ Here the model body only defines the **canonical SELECT** and does *not* contain
         'engine:duckdb',
         'engine:postgres',
         'engine:databricks_spark',
+        'engine:bigquery',
+        'engine:snowflake_snowpark',
     ],
 ) }}
 
@@ -580,6 +588,19 @@ FF_ENGINE=bigquery FF_ENGINE_VARIANT=bigframes FFT_ACTIVE_ENV=dev_bigquery_bigfr
 ```
 
 Ensure the service account credentials pointed to by `GOOGLE_APPLICATION_CREDENTIALS` can create/drop tables in the target dataset.
+
+### Snowflake Snowpark
+
+```bash
+# Seed / run / test (Snowflake profile)
+FFT_ACTIVE_ENV=dev_snowflake FF_ENGINE=snowflake_snowpark fft seed .
+FFT_ACTIVE_ENV=dev_snowflake FF_ENGINE=snowflake_snowpark fft run . \
+  --select tag:example:incremental_demo --select tag:engine:snowflake_snowpark --cache rw
+FFT_ACTIVE_ENV=dev_snowflake FF_ENGINE=snowflake_snowpark fft test . \
+  --select tag:example:incremental_demo
+```
+
+Make sure `.env.dev_snowflake` sets the required `FF_SF_*` variables and install `fastflowtransform[snowflake]` so the Snowpark executor and client libraries are available.
 
 ### Databricks Spark
 

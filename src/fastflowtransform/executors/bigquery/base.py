@@ -138,12 +138,8 @@ class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
         Write/update dataset._ff_meta after a successful build.
         Both pandas + BigFrames executors use the logical engine key 'bigquery'.
         """
-        try:
-            ensure_meta_table(self)
-            upsert_meta(self, node.name, relation, fingerprint, "bigquery")
-        except Exception:
-            # Best-effort: meta must not break the run
-            pass
+        ensure_meta_table(self)
+        upsert_meta(self, node.name, relation, fingerprint, "bigquery")
 
     # ── Incremental API (shared across BigQuery executors) ───────────────
     def exists_relation(self, relation: str) -> bool:

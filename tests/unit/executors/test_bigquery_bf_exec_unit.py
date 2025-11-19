@@ -390,7 +390,7 @@ def test_alter_table_sync_schema_adds_missing_columns(bq_exec):
 
 @pytest.mark.unit
 @pytest.mark.bigquery
-def test_on_node_built_best_effort(monkeypatch, bq_exec):
+def test_on_node_built_calls_meta(monkeypatch, bq_exec):
     called = {"ensure": 0, "upsert": 0}
 
     def fake_ensure(ex):
@@ -406,6 +406,18 @@ def test_on_node_built_best_effort(monkeypatch, bq_exec):
 
     assert called["ensure"] == 1
     assert called["upsert"] == 1
+
+
+@pytest.mark.unit
+@pytest.mark.bigquery
+def test_on_node_built_raises_on_meta_failure(monkeypatch, bq_exec):
+    def bad_upsert(ex, name, rel, fp, eng):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(bq_base_mod, "upsert_meta", bad_upsert)
+
+    with pytest.raises(RuntimeError):
+        bq_exec.on_node_built(Node(name="m", kind="sql", path=Path(".")), "p1.ds1.m", "fp123")
 
 
 @pytest.mark.unit

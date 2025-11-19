@@ -229,6 +229,77 @@ def cleanup_databricks(
     return warehouse_path
 
 
+def cleanup_snowflake(
+    *,
+    account: str | None,
+    user: str | None,
+    password: str | None,
+    warehouse: str | None,
+    database: str | None,
+    schema: str | None,
+    role: str | None,
+    dry_run: bool,
+) -> None:
+    """
+    Reset a Snowflake demo schema by dropping and recreating it.
+
+    Uses account/user/password/warehouse/database/schema/role from
+    args/env/profile; intended for isolated demo schemas, not shared prod.
+    """
+    missing = []
+    if not account:
+        missing.append("FF_SF_ACCOUNT or profile.snowflake_snowpark.account")
+    if not user:
+        missing.append("FF_SF_USER or profile.snowflake_snowpark.user")
+    if not password:
+        missing.append("FF_SF_PASSWORD or profile.snowflake_snowpark.password")
+    if not warehouse:
+        missing.append("FF_SF_WAREHOUSE or profile.snowflake_snowpark.warehouse")
+    if not database:
+        missing.append("FF_SF_DATABASE or profile.snowflake_snowpark.database")
+    if not schema:
+        missing.append("FF_SF_SCHEMA or profile.snowflake_snowpark.db_schema")
+
+    if missing:
+        raise ValueError("Snowflake cleanup requires: " + ", ".join(missing))
+
+    if dry_run:
+        _log(
+            f"[dry-run] Would drop and recreate Snowflake schema "
+            f'"{database}"."{schema}" on account "{account}" (warehouse={warehouse})'
+        )
+        return
+
+    # Local import so non-Snowflake users don't need the dependency
+    import snowflake.connector  # type: ignore[import]
+
+    _log(
+        f"Dropping schema '{database}.{schema}' on Snowflake "
+        f"(account={account}, warehouse={warehouse})"
+    )
+
+    conn = snowflake.connector.connect(
+        account=account,
+        user=user,
+        password=password,
+        warehouse=warehouse,
+        role=role or None,
+        database=database,
+    )
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute(f'USE DATABASE "{database}"')
+            cur.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+            cur.execute(f'CREATE SCHEMA "{schema}"')
+        finally:
+            with suppress(Exception):
+                cur.close()
+    finally:
+        with suppress(Exception):
+            conn.close()
+
+
 def cleanup_common_artifacts(
     *, project: Path, dry_run: bool, extra_paths: Iterable[Path] | None = None
 ) -> None:
@@ -286,7 +357,9 @@ def _load_profile(project: Path, env_name: str, engine: str | None):
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Reset FastFlowTransform example environments.")
     parser.add_argument(
-        "--engine", required=True, choices=["duckdb", "postgres", "databricks_spark", "bigquery"]
+        "--engine",
+        required=True,
+        choices=["duckdb", "postgres", "databricks_spark", "bigquery", "snowflake_snowpark"],
     )
     parser.add_argument("--project", default=".")
     parser.add_argument("--env", help="Profile environment name (e.g. dev_duckdb).")
@@ -319,7 +392,8 @@ def main(argv: list[str] | None = None) -> int:
         or os.getenv("FFT_ACTIVE_ENV")
         or (
             "dev_" + args.engine
-            if args.engine in {"duckdb", "postgres", "databricks_spark", "bigquery"}
+            if args.engine
+            in {"duckdb", "postgres", "databricks_spark", "bigquery", "snowflake_snowpark"}
             else "dev"
         )
     )
@@ -387,6 +461,28 @@ def main(argv: list[str] | None = None) -> int:
                 project_id=project_id,
                 dataset=dataset,
                 location=location,
+                dry_run=args.dry_run,
+            )
+        elif args.engine == "snowflake_snowpark":
+            profile_sf = getattr(profile, "snowflake_snowpark", None) if profile else None
+
+            # Prefer CLI/env over profile, just like other engines
+            account = os.getenv("FF_SF_ACCOUNT") or getattr(profile_sf, "account", None)
+            user = os.getenv("FF_SF_USER") or getattr(profile_sf, "user", None)
+            password = os.getenv("FF_SF_PASSWORD") or getattr(profile_sf, "password", None)
+            warehouse = os.getenv("FF_SF_WAREHOUSE") or getattr(profile_sf, "warehouse", None)
+            database = os.getenv("FF_SF_DATABASE") or getattr(profile_sf, "database", None)
+            schema = os.getenv("FF_SF_SCHEMA") or getattr(profile_sf, "db_schema", None)
+            role = os.getenv("FF_SF_ROLE") or getattr(profile_sf, "role", None)
+
+            cleanup_snowflake(
+                account=account,
+                user=user,
+                password=password,
+                warehouse=warehouse,
+                database=database,
+                schema=schema,
+                role=role,
                 dry_run=args.dry_run,
             )
     except Exception as exc:

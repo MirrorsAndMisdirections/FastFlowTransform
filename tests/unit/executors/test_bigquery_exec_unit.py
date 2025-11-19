@@ -298,7 +298,7 @@ def test_create_or_replace_view_from_table_calls_client_query(bq_exec):
 
 @pytest.mark.unit
 @pytest.mark.bigquery
-def test_on_node_built_best_effort(monkeypatch, bq_exec):
+def test_on_node_built_calls_meta(monkeypatch, bq_exec):
     called = {"ensure": 0, "upsert": 0}
 
     def fake_ensure(ex):
@@ -314,6 +314,18 @@ def test_on_node_built_best_effort(monkeypatch, bq_exec):
 
     assert called["ensure"] == 1
     assert called["upsert"] == 1
+
+
+@pytest.mark.unit
+@pytest.mark.bigquery
+def test_on_node_built_raises_on_meta_failure(monkeypatch, bq_exec):
+    def bad_ensure(ex):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(bq_base_mod, "ensure_meta_table", bad_ensure)
+
+    with pytest.raises(RuntimeError):
+        bq_exec.on_node_built(Node(name="m", kind="sql", path=Path(".")), "p1.ds1.m", "fp123")
 
 
 @pytest.mark.unit

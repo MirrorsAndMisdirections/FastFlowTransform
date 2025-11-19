@@ -33,6 +33,7 @@ class FakeSnowparkDataFrame:
     It needs:
       - .schema.names
       - .collect()
+      - .toDF()
       - .write.save_as_table(...)
     """
 
@@ -62,6 +63,9 @@ class FakeSnowparkDataFrame:
     @property
     def write(self) -> FakeSnowparkDataFrame._Writer:  # type: ignore[name-defined]
         return FakeSnowparkDataFrame._Writer(self)
+
+    def toDF(self, *cols: str) -> FakeSnowparkDataFrame:
+        return FakeSnowparkDataFrame(self._session, self._sql, list(cols))
 
 
 class FakeSession:
@@ -158,6 +162,7 @@ def sf_exec(monkeypatch):
         "warehouse": "wh",
         "database": "DB1",
         "schema": "SC1",
+        "allow_create_schema": True,
     }
     ex = SnowflakeSnowparkExecutor(cfg)
     # sanity: we actually got our fake session
@@ -183,7 +188,7 @@ def test_init_sets_db_schema_and_con(sf_exec):
 @pytest.mark.snowflake
 def test_q_and_qualified(sf_exec):
     assert sf_exec._q("x") == '"x"'
-    assert sf_exec._qualified("TBL") == '"DB1"."SC1"."TBL"'
+    assert sf_exec._qualified("TBL") == "DB1.SC1.TBL"
 
 
 @pytest.mark.unit
@@ -193,7 +198,7 @@ def test_read_relation_calls_session_table(sf_exec):
     df = sf_exec._read_relation("MY_TBL", node, deps=[])
     assert isinstance(df, FakeSnowparkDataFrame)
     # session should have been asked for the fully qualified name
-    assert sf_exec.session.table_calls == ['"DB1"."SC1"."MY_TBL"']
+    assert sf_exec.session.table_calls == ["DB1.SC1.MY_TBL"]
 
 
 @pytest.mark.unit
@@ -209,6 +214,16 @@ def test_materialize_relation_happy(sf_exec, monkeypatch):
             )
         )
     )
+    fake_df.schema = SimpleNamespace(names=["col1"])
+
+    def _fake_to_df(*cols: str):
+        return SimpleNamespace(
+            write=fake_df.write,
+            schema=SimpleNamespace(names=list(cols)),
+            toDF=_fake_to_df,
+        )
+
+    fake_df.toDF = _fake_to_df
 
     monkeypatch.setattr(
         sf_exec,
@@ -216,6 +231,7 @@ def test_materialize_relation_happy(sf_exec, monkeypatch):
         lambda obj: obj is fake_df,
         raising=True,
     )
+    fake_df.schema = SimpleNamespace(names=["col1"])
 
     node = Node(name="m", kind="python", path=Path("."))
 
@@ -223,7 +239,7 @@ def test_materialize_relation_happy(sf_exec, monkeypatch):
     sf_exec._materialize_relation("OUT_TBL", fake_df, node)
 
     # ASSERT
-    assert called["table"] == '"DB1"."SC1"."OUT_TBL"'
+    assert called["table"] == "DB1.SC1.OUT_TBL"
     assert called["mode"] == "overwrite"
 
 
@@ -242,8 +258,8 @@ def test_create_view_over_table_issues_sql(sf_exec):
     sf_exec._create_view_over_table("V_USERS", "USERS", node)
     assert any("CREATE OR REPLACE VIEW" in s for s in sf_exec.session.sql_calls)
     sql = sf_exec.session.sql_calls[-1]
-    assert '"DB1"."SC1"."V_USERS"' in sql
-    assert '"DB1"."SC1"."USERS"' in sql
+    assert "DB1.SC1.V_USERS" in sql
+    assert "DB1.SC1.USERS" in sql
 
 
 @pytest.mark.unit
@@ -276,8 +292,8 @@ def test_validate_required_single_df_missing(sf_exec):
 
     msg = str(exc.value)
     assert "missing columns" in msg
-    assert "NAME" in msg
-    assert "ID" in msg
+    assert "name" in msg.lower()
+    assert "id" in msg.lower()
 
 
 @pytest.mark.unit
@@ -307,6 +323,22 @@ def test_validate_required_multi_input_missing_key(sf_exec):
 
 @pytest.mark.unit
 @pytest.mark.snowflake
+def test_validate_required_is_case_insensitive(sf_exec):
+    SNDF = sf_mod.SNDF
+    df = SNDF(sf_exec.session)  # type: ignore[call-arg]
+    # Snowflake-style upper-case physical columns
+    df.schema = SimpleNamespace(names=["USER_ID", "EMAIL"])  # type: ignore[attr-defined]
+
+    # Logical requirements in lower-case should still pass
+    sf_exec._validate_required(
+        "model_ci",
+        df,
+        {"DB1.SC1.USERS": {"user_id", "email"}},
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.snowflake
 def test_columns_of(sf_exec):
     df = FakeSnowparkDataFrame(sf_exec.session, cols=["A", "B"])
     assert sf_exec._columns_of(df) == ["A", "B"]
@@ -332,7 +364,7 @@ def test_frame_name(sf_exec):
 @pytest.mark.snowflake
 def test_format_relation_for_ref(sf_exec):
     r = sf_exec._format_relation_for_ref("my_model")
-    assert '"DB1"' in r and '"SC1"' in r and "my_model" in r
+    assert r == "DB1.SC1.my_model"
 
 
 @pytest.mark.unit
@@ -340,7 +372,7 @@ def test_format_relation_for_ref(sf_exec):
 def test_format_source_reference_happy(sf_exec):
     cfg = {"identifier": "SRC_TBL", "database": "DBX", "schema": "RAW"}
     ref = sf_exec._format_source_reference(cfg, "src", "tbl")
-    assert ref == '"DBX"."RAW"."SRC_TBL"'
+    assert ref == "DBX.RAW.SRC_TBL"
 
 
 @pytest.mark.unit
@@ -381,13 +413,13 @@ def test_create_or_replace_view_from_table_calls_session_sql(sf_exec):
     sf_exec._create_or_replace_view_from_table("V1", "T1", node)
     sql = sf_exec.session.sql_calls[-1]
     assert "CREATE OR REPLACE VIEW" in sql
-    assert '"DB1"."SC1"."V1"' in sql
-    assert '"DB1"."SC1"."T1"' in sql
+    assert "DB1.SC1.V1" in sql
+    assert "DB1.SC1.T1" in sql
 
 
 @pytest.mark.unit
 @pytest.mark.snowflake
-def test_on_node_built_best_effort(monkeypatch, sf_exec):
+def test_on_node_built_calls_meta(monkeypatch, sf_exec):
     called = {"ensure": 0, "upsert": 0}
 
     def fake_ensure(ex):
@@ -403,6 +435,20 @@ def test_on_node_built_best_effort(monkeypatch, sf_exec):
 
     assert called["ensure"] == 1
     assert called["upsert"] == 1
+
+
+@pytest.mark.unit
+@pytest.mark.snowflake
+def test_on_node_built_raises_on_meta_error(monkeypatch, sf_exec):
+    def bad_upsert(ex, name, rel, fp, eng):
+        raise RuntimeError("meta boom")
+
+    monkeypatch.setattr(sf_exec_mod, "upsert_meta", bad_upsert)
+
+    with pytest.raises(RuntimeError):
+        sf_exec.on_node_built(
+            Node(name="m", kind="sql", path=Path(".")), '"DB1"."SC1"."M"', "fp123"
+        )
 
 
 @pytest.mark.unit
@@ -449,12 +495,20 @@ def test_incremental_insert_strips_semicolon(sf_exec):
 @pytest.mark.snowflake
 def test_incremental_merge_builds_two_statements(sf_exec):
     sf_exec.session.sql_calls.clear()
+
     sf_exec.incremental_merge("DST", "SELECT 1 AS id", ["id"])
-    sql = sf_exec.session.sql_calls[-1]
-    # both DELETE and INSERT statements should be in there
-    assert "DELETE FROM" in sql
-    assert "INSERT INTO" in sql
-    assert "WITH src AS" in sql
+
+    # We now emit two separate statements: DELETE ... and INSERT ...
+    assert len(sf_exec.session.sql_calls) == 2
+    delete_sql, insert_sql = sf_exec.session.sql_calls
+
+    # First: DELETE FROM ... USING (<body>) AS s WHERE ...
+    assert "DELETE FROM" in delete_sql
+    assert "USING (" in delete_sql
+
+    # Second: INSERT INTO ... SELECT * FROM (<body>)
+    assert "INSERT INTO" in insert_sql
+    assert "SELECT * FROM (" in insert_sql
 
 
 @pytest.mark.unit

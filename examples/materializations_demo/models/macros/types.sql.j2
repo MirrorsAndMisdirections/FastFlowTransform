@@ -4,6 +4,8 @@
   {% set eng = (var('engine') or env('FF_ENGINE') or '').lower() %}
   {% if eng in ('postgres', 'postgresql') %}
     double precision
+  {% elif eng == 'bigquery' %}
+    float64
   {% else %}
     double
   {% endif %}

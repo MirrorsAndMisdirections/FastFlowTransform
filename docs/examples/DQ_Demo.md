@@ -56,6 +56,7 @@ examples/dq_demo/
   .env.dev_databricks
   .env.dev_bigquery_pandas
   .env.dev_bigquery_bigframes
+  .env.dev_snowflake
   Makefile                  # optional, convenience wrapper around fft commands
   profiles.yml
   project.yml
@@ -107,7 +108,9 @@ examples/dq_demo/
           'scope:staging',
           'engine:duckdb',
           'engine:postgres',
-          'engine:databricks_spark'
+          'engine:databricks_spark',
+          'engine:bigquery',
+          'engine:snowflake_snowpark'
       ],
   ) }}
 
@@ -136,7 +139,9 @@ Aggregates orders per customer and prepares data for reconciliation + freshness:
         'scope:mart',
         'engine:duckdb',
         'engine:postgres',
-        'engine:databricks_spark'
+        'engine:databricks_spark',
+        'engine:bigquery',
+        'engine:snowflake_snowpark'
     ],
 ) }}
 
@@ -512,6 +517,31 @@ To run the same demo on BigQuery:
    ```
 
 Both profiles accept `allow_create_dataset` in `profiles.yml` if you want the example to create the dataset automatically.
+
+## Snowflake Snowpark variant
+
+To run on Snowflake:
+
+1. Copy `.env.dev_snowflake` to `.env` and populate:
+   ```bash
+   FF_SF_ACCOUNT=<account>
+   FF_SF_USER=<user>
+   FF_SF_PASSWORD=<password>
+   FF_SF_WAREHOUSE=COMPUTE_WH
+   FF_SF_DATABASE=DQ_DEMO
+   FF_SF_SCHEMA=DQ_DEMO
+   FF_SF_ROLE=<optional-role>
+   ```
+2. Install the Snowflake extra if needed:
+   ```bash
+   pip install "fastflowtransform[snowflake]"
+   ```
+3. Run via the Makefile:
+   ```bash
+   make demo ENGINE=snowflake_snowpark
+   ```
+
+The Snowflake profile enables `allow_create_schema`, so the schema is created automatically on first run when permitted.
 
 ## Things to experiment with
 

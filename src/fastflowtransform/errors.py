@@ -119,9 +119,33 @@ class ModelExecutionError(Exception):
     Carries friendly context for CLI formatting.
     """
 
-    def __init__(self, node_name: str, relation: str, message: str, sql_snippet: str | None = None):
+    def __init__(
+        self,
+        node_name: str,
+        relation: str,
+        message: str,
+        sql_snippet: str | None = None,
+    ):
         self.node_name = node_name
         self.relation = relation
         self.sql_snippet = sql_snippet
         self.message = message
         super().__init__(message)
+
+    def __str__(self) -> str:
+        """
+        Control how this error is rendered in the CLI.
+
+        The run CLI uses traceback.format_exception_only(type(e), e),
+        which calls str(e), so this is the single place we need to adjust.
+        """
+        base = self.message
+
+        # prepend relation if we have it
+        if self.relation:
+            base = f"{self.relation}: {base}"
+
+        if self.sql_snippet:
+            return f"{base}\n\n[SQL]\n{self.sql_snippet}"
+
+        return base

@@ -33,7 +33,7 @@ dev_bigquery_bigframes:
     dataset: "{{ env('FF_BQ_DATASET', 'basic_demo') }}"
     location: "{{ env('FF_BQ_LOCATION', 'EU') }}"
     use_bigframes: true
-    # allow_create_dataset: true   # uncomment to auto-create dataset on first run
+    allow_create_dataset: true
 
 dev_bigquery_pandas:
   engine: bigquery
@@ -42,4 +42,16 @@ dev_bigquery_pandas:
     dataset: "{{ env('FF_BQ_DATASET', 'basic_demo') }}"
     location: "{{ env('FF_BQ_LOCATION', 'EU') }}"
     use_bigframes: false
-    # allow_create_dataset: true   # uncomment to auto-create dataset on first run
+    allow_create_dataset: true
+
+dev_snowflake:
+  engine: snowflake_snowpark
+  snowflake_snowpark:
+    account: "{{ env('FF_SF_ACCOUNT') }}"
+    user: "{{ env('FF_SF_USER') }}"
+    password: "{{ env('FF_SF_PASSWORD') }}"
+    warehouse: "{{ env('FF_SF_WAREHOUSE', 'COMPUTE_WH') }}"
+    database: "{{ env('FF_SF_DATABASE', 'EXAMPLE_DEMO') }}"
+    schema: "{{ env('FF_SF_SCHEMA', 'BASIC_DEMO') }}"
+    role: "{{ env('FF_SF_ROLE', '') }}"
+    allow_create_schema: true

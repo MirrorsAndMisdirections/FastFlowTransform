@@ -58,8 +58,9 @@ class SnowflakeSnowparkConfig(BaseConfig):
     password: str
     warehouse: str
     database: str
-    db_schema: str | None = None
+    db_schema: str = Field(alias="schema")
     role: str | None = None
+    allow_create_schema: bool = False
 
 
 class DuckDBProfile(BaseConfig):
@@ -138,6 +139,7 @@ class EnvSettings(BaseSettings):
     SF_WAREHOUSE: str | None = None
     SF_DATABASE: str | None = None
     SF_SCHEMA: str | None = None
+    SF_ALLOW_CREATE_SCHEMA: int | None = None
 
     # --- HTTP / API (optional) ---
     HTTP_CACHE_DIR: str | None = None  # maps to FF_HTTP_CACHE_DIR
@@ -285,6 +287,13 @@ def _ov_snowflake_snowpark(raw: dict[str, Any], env: EnvSettings) -> None:
     _set_if(sf, "database", getattr(env, "SF_DATABASE", None))
     _set_if(sf, "schema", getattr(env, "SF_SCHEMA", None))
     _set_if(sf, "role", getattr(env, "SF_ROLE", None))
+
+    acs = getattr(env, "SF_ALLOW_CREATE_SCHEMA", None)
+    if acs is not None:
+        if isinstance(acs, str):
+            sf["allow_create_schema"] = acs.strip().lower() in {"1", "true", "yes", "on"}
+        else:
+            sf["allow_create_schema"] = bool(acs)
 
 
 # ---------- Sanity Checks ----------

@@ -404,15 +404,16 @@ def test_on_node_built_calls_meta(monkeypatch, fake_engine_and_conn, node_tmp):
 
 @pytest.mark.unit
 @pytest.mark.postgres
-def test_on_node_built_swallows_exceptions(monkeypatch, fake_engine_and_conn, node_tmp):
+def test_on_node_built_raises_when_meta_fails(monkeypatch, fake_engine_and_conn, node_tmp):
     ex = PostgresExecutor("postgresql+psycopg://x", schema="public")
 
     def bad_ensure(executor):
         raise RuntimeError("meta fail")
 
     monkeypatch.setattr(pgmod, "ensure_meta_table", bad_ensure)
-    # should not raise
-    ex.on_node_built(node_tmp, "t", "fp")
+
+    with pytest.raises(RuntimeError):
+        ex.on_node_built(node_tmp, "t", "fp")
 
 
 # ---------------------------------------------------------------------------
@@ -558,8 +559,14 @@ def test_create_or_replace_view_from_table_wraps_error(fake_engine_and_conn):
         ex._create_or_replace_view_from_table("v_broken", "src_tbl", node)
 
     err = exc.value
-    # message is just the original error text
-    assert str(err) == "db down"
+    # Error is wrapped with relation + original message for better context
+    assert isinstance(err, ModelExecutionError)
+    # Relation should be the qualified one the executor used
+    assert err.relation == '"public"."v_broken"'
+    assert err.node_name == "m_bad"
+    # String form includes both relation and original error text
+    assert str(err).endswith("db down")
+    assert str(err).startswith('"public"."v_broken":')
     # but the extra context must be present
     assert err.node_name == "m_bad"
     assert err.relation == '"public"."v_broken"'

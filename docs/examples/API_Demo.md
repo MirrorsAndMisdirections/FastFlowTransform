@@ -3,7 +3,7 @@
 The `examples/api_demo` scenario demonstrates how FastFlowTransform blends local data, external APIs, and multiple execution engines. It highlights:
 
 - **Hybrid data model**: joins a local seed (`crm.users`) with live user data from JSONPlaceholder.
-- **Multiple environments**: switch between DuckDB, Postgres, Databricks Spark, and BigQuery (pandas or BigFrames client) using `profiles.yml` + `.env.*`.
+- **Multiple environments**: switch between DuckDB, Postgres, Databricks Spark, BigQuery (pandas or BigFrames client), and Snowflake (Snowpark) using `profiles.yml` + `.env.*`.
 - **HTTP integration**: compare the built-in FastFlowTransform HTTP client (`api_users_http`) with a plain `requests` implementation (`api_users_requests`).
 - **Offline caching & telemetry**: inspect HTTP snapshots via `run_results.json`.
 - **Engine-aware registration**: scope Python models via `engine_model` and SQL models via `config(engines=[...])` so only the active engine’s nodes load.
@@ -21,7 +21,8 @@ The `examples/api_demo` scenario demonstrates how FastFlowTransform blends local
            'engine:duckdb',
            'engine:postgres',
            'engine:databricks_spark',
-           'engine:bigquery'
+           'engine:bigquery',
+           'engine:snowflake_snowpark'
        ]
    ) }}
    select id, email
@@ -32,11 +33,11 @@ The `examples/api_demo` scenario demonstrates how FastFlowTransform blends local
 2. **API enrichment** – engine-specific Python implementations under `models/engines/<engine>/`:
    - `api_users_http.ff.py` uses the built-in HTTP wrapper (`fastflowtransform.api.http.get_df`) with cache/offline support.
    - `api_users_requests.ff.py` uses raw `requests` for maximum flexibility.
-   - Engine-specific callables are scoped with `engine_model(only=...)` (DuckDB/Postgres/Spark) or `env_match={"FF_ENGINE": "bigquery", "FF_ENGINE_VARIANT": ...}` (BigQuery pandas/BigFrames) to stay isolated per engine.
+- Engine-specific callables are scoped with `engine_model(only=...)` (DuckDB/Postgres/Spark/Snowflake) or `env_match={"FF_ENGINE": "bigquery", "FF_ENGINE_VARIANT": ...}` (BigQuery pandas/BigFrames) to stay isolated per engine.
 
 3. **Mart join** – `models/common/mart_users_join.ff.sql`
    ```sql
-   {{ config(engines=['duckdb','postgres','databricks_spark','bigquery']) }}
+   {{ config(engines=['duckdb','postgres','databricks_spark','bigquery','snowflake_snowpark']) }}
    {% set api_users_model = var('api_users_model', 'api_users_http') %}
    {% set api_users_refs = {
        'api_users_http': ref('api_users_http'),
@@ -78,9 +79,21 @@ dev_bigquery_bigframes:
     dataset: "{{ env('FF_BQ_DATASET', 'api_demo') }}"
     location: "{{ env('FF_BQ_LOCATION', 'EU') }}"
     use_bigframes: true
+
+dev_snowflake:
+  engine: snowflake_snowpark
+  snowflake_snowpark:
+    account: "{{ env('FF_SF_ACCOUNT') }}"
+    user: "{{ env('FF_SF_USER') }}"
+    password: "{{ env('FF_SF_PASSWORD') }}"
+    warehouse: "{{ env('FF_SF_WAREHOUSE', 'COMPUTE_WH') }}"
+    database: "{{ env('FF_SF_DATABASE', 'API_DEMO') }}"
+    schema: "{{ env('FF_SF_SCHEMA', 'API_DEMO') }}"
+    role: "{{ env('FF_SF_ROLE', '') }}"
+    allow_create_schema: true
 ```
 
-`.env.dev_*` files supply the actual values. `_load_dotenv_layered()` loads them in priority order: repo `.env` → project `.env` → `.env.<env>` → shell overrides (highest priority). Secrets stay out of version control.
+`.env.dev_*` files supply the actual values (including `.env.dev_snowflake` for Snowflake credentials). `_load_dotenv_layered()` loads them in priority order: repo `.env` → project `.env` → `.env.<env>` → shell overrides (highest priority). Secrets stay out of version control.
 
 ### BigQuery specifics
 
@@ -91,7 +104,7 @@ dev_bigquery_bigframes:
 
 ## Makefile Workflow
 
-`Makefile` chooses the profile via `ENGINE` (`duckdb`/`postgres`/`databricks_spark`/`bigquery`) and wraps the main commands. For BigQuery, set `BQ_FRAME=pandas|bigframes`:
+`Makefile` chooses the profile via `ENGINE` (`duckdb`/`postgres`/`databricks_spark`/`bigquery`/`snowflake_snowpark`) and wraps the main commands. For BigQuery, set `BQ_FRAME=pandas|bigframes`:
 
 ```make
 ENGINE ?= duckdb
@@ -108,6 +121,9 @@ ifeq ($(ENGINE),bigquery)
     PROFILE_ENV = dev_bigquery_bigframes
   endif
 endif
+ifeq ($(ENGINE),snowflake_snowpark)
+  PROFILE_ENV = dev_snowflake
+endif
 
 seed:
 	uv run fft seed "$(PROJECT)" --env $(PROFILE_ENV)
@@ -122,6 +138,7 @@ Common targets:
 | `make ENGINE=duckdb seed`| Materialize seeds into DuckDB. |
 | `make ENGINE=postgres run`| Execute the full pipeline against Postgres. |
 | `make ENGINE=bigquery run BQ_FRAME=bigframes`| Run against BigQuery (default BigFrames client; set `BQ_FRAME=pandas` to switch). |
+| `make ENGINE=snowflake_snowpark run`| Execute the API demo on Snowflake via Snowpark (install `fastflowtransform[snowflake]`). |
 | `make dag`               | Render documentation (`site/dag/`). |
 | `make api-run`           | Run only API models (uses HTTP cache). |
 | `make api-offline`       | Force offline mode (`FF_HTTP_OFFLINE=1`). |
@@ -131,7 +148,7 @@ HTTP tuning parameters (`FF_HTTP_ALLOWED_DOMAINS`, cache dir, timeouts) live in 
 
 ## End-to-End Demo
 
-1. **Select engine**: `make ENGINE=duckdb` (default). Set `ENGINE=postgres`, `ENGINE=databricks_spark`, or `ENGINE=bigquery BQ_FRAME=<pandas|bigframes>` to switch.
+1. **Select engine**: `make ENGINE=duckdb` (default). Set `ENGINE=postgres`, `ENGINE=databricks_spark`, `ENGINE=bigquery BQ_FRAME=<pandas|bigframes>`, or `ENGINE=snowflake_snowpark` to switch.
 2. **Seed data**: `make seed`
 3. **Run pipeline**: `make run`
 4. **Explore docs**: `make dag` → open `examples/api_demo/site/dag/index.html`
