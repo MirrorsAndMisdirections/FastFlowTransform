@@ -327,9 +327,21 @@ def _normalize_node_names_or_warn(names: list[str] | None) -> set[str]:
     out: set[str] = set()
     for tok in _parse_select(names or []):
         try:
-            out.add(REGISTRY.get_node(tok).name)
+            node = REGISTRY.get_node(tok)
         except KeyError:
             warn(f"Unknown model in --rebuild: {tok}")
+            continue
+
+        if _is_snapshot_model(node):
+            warn(
+                f"Ignoring snapshot model in --rebuild: {tok} "
+                "(snapshot models are not executed via 'fft run'; "
+                "use 'fft snapshot run' instead)."
+            )
+            continue
+
+        out.add(node.name)
+
     return out
 
 
@@ -342,6 +354,15 @@ def _abbr(e: str) -> str:
         "snowflake_snowpark": "SNOW",
     }
     return mapping.get(e, e.upper()[:4])
+
+
+def _is_snapshot_model(node: Any) -> bool:
+    """
+    Return True if this node is a snapshot model (materialized='snapshot').
+    """
+    meta = getattr(node, "meta", {}) or {}
+    mat = str(meta.get("materialized") or "").lower()
+    return mat == "snapshot"
 
 
 # ----------------- helpers (run function) -----------------
@@ -357,7 +378,11 @@ def _build_engine_ctx(project, env_name, engine, vars, cache, no_cache):
 
 
 def _select_predicate_and_raw(
-    executor_engine: _RunEngine, ctx: CLIContext, select: SelectOpt
+    executor_engine: _RunEngine,
+    ctx: CLIContext,
+    select: SelectOpt,
+    *,
+    include_snapshots: bool = False,
 ) -> tuple[list[str], Callable[[Any], bool], list[str]]:
     select_tokens = _parse_select(select or [])
     base_tokens = [t for t in select_tokens if not t.startswith("state:modified")]
@@ -369,7 +394,13 @@ def _select_predicate_and_raw(
         modified_set = executor_engine.cache.modified_set(ctx.jinja_env, executor)
         select_pred = augment_with_state_modified(select_tokens, base_pred, modified_set)
 
-    raw_selected = [k for k, v in REGISTRY.nodes.items() if select_pred(v)]
+    raw_selected = []
+    for k, v in REGISTRY.nodes.items():
+        if not select_pred(v):
+            continue
+        if not include_snapshots and _is_snapshot_model(v):
+            continue
+        raw_selected.append(k)
     return select_tokens, select_pred, raw_selected
 
 

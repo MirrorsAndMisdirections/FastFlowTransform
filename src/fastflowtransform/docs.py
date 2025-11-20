@@ -160,6 +160,7 @@ def _materialization_legend() -> dict[str, dict[str, str]]:
         "view": {"label": "view", "class": "badge-view"},
         "ephemeral": {"label": "ephemeral", "class": "badge-ephemeral"},
         "incremental": {"label": "incremental", "class": "badge-incremental"},
+        "snapshot": {"label": "snapshot", "class": "badge-snapshot"},
     }
 
 

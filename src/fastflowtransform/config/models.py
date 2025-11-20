@@ -1,3 +1,4 @@
+# fastflowtransform/config/model.py
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -108,6 +109,40 @@ class IncrementalConfig(BaseModel):
         raise TypeError("must be a string or a sequence of strings")
 
 
+class SnapshotConfig(BaseModel):
+    """
+    Snapshot configuration block, for example:
+
+        {{ config(
+            materialized='snapshot',
+            snapshot={
+                "strategy": "timestamp",   # or "check"
+                "updated_at": "updated_at",
+                "check_cols": ["col1", "col2"],  # required for strategy='check'
+            },
+            unique_key=["id"],
+        ) }}
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    strategy: Literal["timestamp", "check"]
+    updated_at: str | None = None
+    updated_at_column: str | None = None
+    check_cols: list[str] | None = None
+
+    @field_validator("check_cols", mode="before")
+    @classmethod
+    def _normalize_check_cols(cls, v: Any) -> list[str] | None:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            return [v]
+        if isinstance(v, Sequence) and not isinstance(v, (str, bytes)):
+            return [str(x) for x in v]
+        raise TypeError("check_cols must be a string or a sequence of strings")
+
+
 # ---------------------------------------------------------------------------
 # ModelConfig - canonical form of config(...) / decorator meta
 # ---------------------------------------------------------------------------
@@ -132,7 +167,7 @@ class ModelConfig(BaseModel):
 
     # --- Core materialization & classification -----------------------------
 
-    materialized: Literal["table", "view", "incremental", "ephemeral"] | None = None
+    materialized: Literal["table", "view", "incremental", "ephemeral", "snapshot"] | None = None
 
     # Optional logical kind; useful for selectors (kind:python / kind:sql / etc.)
     kind: str | None = None
@@ -156,6 +191,9 @@ class ModelConfig(BaseModel):
     # Structured:
     #   - { ... IncrementalConfig fields ... }
     incremental: IncrementalConfig | None = None
+
+    # --- Snapshot configuration (structured) ---------------------------------
+    snapshot: SnapshotConfig | None = None
 
     # Top-level shortcuts (backwards-compatible)
     # These are used by existing executor logic.
@@ -273,6 +311,14 @@ class ModelConfig(BaseModel):
         if self.delta and not self.delta_sql:
             self.delta_sql = self.delta.sql
 
+        # Mirror snapshot hints onto top-level shortcuts for backwards compatibility.
+        snap = self.snapshot
+        if snap:
+            if self.updated_at is None and snap.updated_at is not None:
+                self.updated_at = snap.updated_at
+            if self.updated_at_column is None and snap.updated_at_column is not None:
+                self.updated_at_column = snap.updated_at_column
+
         return self
 
     # ----------------------------------------------------------------------
@@ -291,19 +337,26 @@ class ModelConfig(BaseModel):
     # Cross-field guardrails (fail fast with clear messages)
     # ----------------------------------------------------------------------
     @model_validator(mode="after")
-    def _validate_incremental_requirements(self) -> ModelConfig:
+    def _validate_model_requirements(self) -> ModelConfig:
         """
-        Enforce combinations that must hold for incremental materializations.
+        Enforce combinations that must hold for incremental and snapshot models.
 
-        Rules:
+        Incremental rules:
           1) If materialized == 'incremental', incremental must be effectively enabled.
           2) If incremental is enabled, at least one freshness/delta hint must exist:
              - updated_at / updated_at_column / updated_at_columns / timestamp_columns
                OR delta_sql OR delta_python.
           3) If both updated_at and updated_at_column are provided, they must match.
-          4) (Opinionated) Require unique_key when incremental is enabled
-             to avoid accidental cartesian merges. Relax if your executor permits.
+          4) Require unique_key when incremental is enabled.
+
+        Snapshot rules:
+          1) If materialized == 'snapshot', a snapshot config must be provided.
+          2) Snapshot models require unique_key (or primary_key).
+          3) strategy must be 'timestamp' or 'check'.
+          4) For 'timestamp', require updated_at / updated_at_column.
+          5) For 'check', require check_cols.
         """
+        # --- Incremental ---------------------------------------------------
         is_mat_inc = self.materialized == "incremental"
         is_inc_enabled = self.is_incremental_enabled()
 
@@ -347,6 +400,45 @@ class ModelConfig(BaseModel):
                 "incremental.enabled=True requires a unique_key (or primary_key) to be set "
                 "for safe merges. Example: unique_key: ['id']"
             )
+
+        # --- Snapshot-specific rules --------------------------------------
+        if self.materialized == "snapshot":
+            snap = self.snapshot
+            if snap is None:
+                raise ValueError(
+                    "materialized='snapshot' requires a snapshot config block. "
+                    "Example:\n"
+                    "  snapshot: { strategy: 'timestamp' }"
+                )
+
+            # business key
+            if not (self.unique_key or self.primary_key):
+                raise ValueError(
+                    "materialized='snapshot' requires a unique_key (or primary_key). "
+                    "Example: unique_key: ['id']"
+                )
+
+            # strategy is validated by SnapshotConfig (Literal), but we keep a guardrail here
+            if snap.strategy not in ("timestamp", "check"):
+                raise ValueError(
+                    "Snapshot models require strategy='timestamp' or 'check'. "
+                    "Example: snapshot: { strategy: 'timestamp' }"
+                )
+
+            # timestamp strategy: needs updated_at
+            snap_updated = snap.updated_at or snap.updated_at_column
+            if snap.strategy == "timestamp" and not snap_updated:
+                raise ValueError(
+                    "strategy='timestamp' snapshots require snapshot.updated_at or "
+                    "snapshot.updated_at_column."
+                )
+
+            # check strategy: needs check_cols
+            if snap.strategy == "check" and not snap.check_cols:
+                raise ValueError(
+                    "strategy='check' snapshots require snapshot.check_cols "
+                    "(string or list of column names)."
+                )
 
         return self
 

@@ -20,3 +20,4 @@ MAKEFILE_DIR := $(dir $(abspath $(firstword $(MAKEFILE_LIST))))
 
 include $(MAKEFILE_DIR)/Makefile.pipeline
 include $(MAKEFILE_DIR)/Makefile.dev
+include $(MAKEFILE_DIR)/Makefile.built

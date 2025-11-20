@@ -88,4 +88,15 @@ EXAMPLES: list[ExampleConfig] = [
             "databricks_spark": "dev_databricks",
         },
     ),
+    ExampleConfig(
+        name="snapshot_demo",
+        path=ROOT / "examples" / "snapshot_demo",
+        make_target="demo",
+        env_by_engine={
+            "duckdb": "dev_duckdb",
+            "postgres": "dev_postgres",
+            "databricks_spark": "dev_databricks",
+        },
+        spark_table_formats=["parquet", "delta", "iceberg"],
+    ),
 ]

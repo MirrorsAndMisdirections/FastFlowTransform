@@ -1,0 +1,119 @@
+name: snapshot_demo
+version: "0.1"
+models_dir: models
+
+docs:
+  dag_dir: site/dag
+
+vars: {}
+
+models:
+  storage:
+    mart_users_by_domain.ff:
+      path: ".local/spark/events_base"
+      # format: parquet
+    users_clean.ff:
+      path: ".local/spark/users_clean"
+      # format: parquet
+    users_clean_snapshot.ff:
+      path: ".local/spark/users_clean_snapshot"
+      # format: parquet
+    mart_users_by_domain_snapshot.ff:
+      path: ".local/spark/mart_users_by_domain_snapshot"
+      # format: parquet
+
+tests:
+  # --------------------------------------------------------------------------
+  # Base tests (similar to basic_demo, slightly simplified)
+  # --------------------------------------------------------------------------
+  - type: not_null
+    table: users_clean
+    column: email_domain
+    tags: [example_snapshot_demo]
+
+  - type: unique
+    table: users_clean
+    column: user_id
+    tags: [example_snapshot_demo]
+
+  - type: unique
+    table: mart_users_by_domain
+    column: email_domain
+    tags: [example_snapshot_demo]
+
+  # --------------------------------------------------------------------------
+  # Snapshot tables – basic sanity on business keys
+  # --------------------------------------------------------------------------
+  - type: not_null
+    table: users_clean_snapshot
+    column: user_id
+    tags: [example_snapshot_demo]
+
+  - type: not_null
+    table: mart_users_by_domain_snapshot
+    column: email_domain
+    tags: [example_snapshot_demo]
+
+  # --------------------------------------------------------------------------
+  # Snapshot tables – snapshot metadata columns
+  #
+  # Assumes snapshot columns:
+  #   _ff_valid_from   – version start
+  #   _ff_valid_to     – version end (nullable for current rows)
+  #   _ff_is_current   – boolean flag for open row
+  #   _ff_updated_at   – source updated_at used for snapshotting
+  #
+  # Adjust the column names if your BaseExecutor constants differ.
+  # --------------------------------------------------------------------------
+
+  # users_clean_snapshot: every row must have a valid_from timestamp
+  - type: not_null
+    table: users_clean_snapshot
+    column: _ff_valid_from
+    tags: [example_snapshot_demo]
+
+  # users_clean_snapshot: is_current flag should always be set (true/false)
+  - type: not_null
+    table: users_clean_snapshot
+    column: _ff_is_current
+    tags: [example_snapshot_demo]
+
+  # users_clean_snapshot: updated_at metadata should be populated
+  - type: not_null
+    table: users_clean_snapshot
+    column: _ff_updated_at
+    tags: [example_snapshot_demo]
+
+  # mart_users_by_domain_snapshot: every row must have a valid_from timestamp
+  - type: not_null
+    table: mart_users_by_domain_snapshot
+    column: _ff_valid_from
+    tags: [example_snapshot_demo]
+
+  # mart_users_by_domain_snapshot: is_current flag should always be set (true/false)
+  - type: not_null
+    table: mart_users_by_domain_snapshot
+    column: _ff_is_current
+    tags: [example_snapshot_demo]
+
+  # mart_users_by_domain_snapshot: updated_at metadata should be populated
+  - type: not_null
+    table: mart_users_by_domain_snapshot
+    column: _ff_updated_at
+    tags: [example_snapshot_demo]
+
+  # --------------------------------------------------------------------------
+  # Optional: row-count sanity for snapshots
+  # (for the demo data – tweak or remove if you change the seed)
+  # --------------------------------------------------------------------------
+  - type: row_count_between
+    table: users_clean_snapshot
+    min_rows: 3
+    max_rows: 50
+    tags: [example_snapshot_demo]
+
+  - type: row_count_between
+    table: mart_users_by_domain_snapshot
+    min_rows: 1
+    max_rows: 50
+    tags: [example_snapshot_demo]

@@ -43,3 +43,25 @@ def test_get_json_offline_cache_hit_records_stats(monkeypatch, tmp_path):
     assert snap["used_offline"] is True
     assert snap["bytes"] > 0
     assert isinstance(snap["keys"], list) and len(snap["keys"]) == 1
+
+
+@pytest.mark.unit
+@pytest.mark.http
+def test_get_json_cache_hit_online_not_reported_offline(monkeypatch, tmp_path):
+    monkeypatch.setenv("FF_HTTP_OFFLINE", "0")
+    monkeypatch.setenv("FF_HTTP_CACHE_DIR", str(tmp_path))
+    importlib.reload(http)
+
+    url = "https://api.example.com/users"
+    params = {"page": 1}
+    payload = {"data": [{"id": 1}]}
+    _seed_cache(http, Path(tmp_path), url, params, payload)
+
+    ctx.reset_for_node("online_node")
+
+    out = http.get_json(url, params=params)
+    assert out == payload
+
+    snap = ctx.snapshot()
+    assert snap["cache_hits"] == 1
+    assert snap["used_offline"] is False

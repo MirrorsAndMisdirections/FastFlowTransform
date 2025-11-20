@@ -62,6 +62,7 @@ from fastflowtransform.cli.selectors import (
     _selected_subgraph_names,
     _selector,
 )
+from fastflowtransform.cli.snapshot_cmd import register as _register_snapshot, snapshot
 from fastflowtransform.cli.sync_db_comments_cmd import (
     _pg_fq_table,
     _pg_quote_ident,
@@ -128,6 +129,7 @@ _register_utest(app)
 _register_docgen(app)
 _register_sync_db_comments(app)
 _register_init(app)
+_register_snapshot(app)
 
 
 __all__ = [
@@ -191,6 +193,7 @@ __all__ = [
     "run",
     "schedule",
     "seed",
+    "snapshot",
     "sync_db_comments",
     "test",
     "topo_sort",

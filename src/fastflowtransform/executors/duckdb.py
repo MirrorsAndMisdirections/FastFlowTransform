@@ -9,10 +9,13 @@ from typing import Any
 import duckdb
 import pandas as pd
 from duckdb import CatalogException
+from jinja2 import Environment
 
 from fastflowtransform.core import Node, relation_for
 from fastflowtransform.executors.base import BaseExecutor
+from fastflowtransform.logging import echo
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
+from fastflowtransform.snapshots import resolve_snapshot_config
 
 
 def _q(ident: str) -> str:
@@ -284,3 +287,220 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
                 self.con.execute(f"alter table {target} add column {col} varchar")
             except Exception:
                 self.con.execute(f"alter table {target} add column {col} varchar")
+
+    def run_snapshot_sql(self, node: Node, env: Environment) -> None:
+        """
+        Snapshot materialization for DuckDB.
+
+        Config (node.meta):
+          - materialized='snapshot'
+          - snapshot: { ... }  # strategy + per-strategy hints
+          - unique_key: str | list[str]
+
+        Behaviour:
+          - First run: create table with one current row per unique key.
+          - Subsequent runs:
+              * close changed current rows (set valid_to, is_current=false)
+              * insert new current rows for new/changed keys.
+        """
+        if node.kind != "sql":
+            raise TypeError(
+                f"Snapshot materialization is only supported for SQL models, "
+                f"got kind={node.kind!r} for {node.name}."
+            )
+
+        meta = getattr(node, "meta", {}) or {}
+        if not self._meta_is_snapshot(meta):
+            raise ValueError(f"Node {node.name} is not configured with materialized='snapshot'.")
+
+        # ---- Extract & normalise snapshot config (shared helper) ----
+        cfg = resolve_snapshot_config(node, meta)
+        strategy = cfg.strategy
+        unique_key = cfg.unique_key
+        updated_at = cfg.updated_at
+        check_cols = cfg.check_cols
+
+        # ---- Render SQL and extract SELECT body ----
+        sql_rendered = self.render_sql(
+            node,
+            env,
+            ref_resolver=lambda name: self._resolve_ref(name, env),
+            source_resolver=self._resolve_source,
+        )
+        sql = self._strip_leading_config(sql_rendered).strip()
+        body = self._selectable_body(sql).rstrip(" ;\n\t")
+
+        rel_name = relation_for(node.name)
+        target = self._qualified(rel_name)
+
+        vf = BaseExecutor.SNAPSHOT_VALID_FROM_COL
+        vt = BaseExecutor.SNAPSHOT_VALID_TO_COL
+        is_cur = BaseExecutor.SNAPSHOT_IS_CURRENT_COL
+        hash_col = BaseExecutor.SNAPSHOT_HASH_COL
+        upd_meta = BaseExecutor.SNAPSHOT_UPDATED_AT_COL
+
+        # ---- First run: create snapshot table ----
+        if not self.exists_relation(rel_name):
+            if strategy == "timestamp":
+                # valid_from + updated_at come from the source updated_at column
+                create_sql = f"""
+create table {target} as
+select
+    s.*,
+    s.{updated_at} as {upd_meta},
+    s.{updated_at} as {vf},
+    cast(null as timestamp) as {vt},
+    true as {is_cur},
+    cast(null as varchar) as {hash_col}
+from ({body}) as s
+"""
+            else:  # strategy == "check"
+                # Hash over check_cols to detect changes
+                col_exprs = [f"coalesce(cast(s.{col} as varchar), '')" for col in check_cols]
+                concat_expr = " || '||' || ".join(col_exprs)
+                hash_expr = f"cast(md5({concat_expr}) as varchar)"
+                upd_expr = f"s.{updated_at}" if updated_at else "current_timestamp"
+                create_sql = f"""
+create table {target} as
+select
+    s.*,
+    {upd_expr} as {upd_meta},
+    current_timestamp as {vf},
+    cast(null as timestamp) as {vt},
+    true as {is_cur},
+    {hash_expr} as {hash_col}
+from ({body}) as s
+"""
+            self.con.execute(create_sql)
+            return
+
+        # ---- Incremental snapshot update ----
+
+        # Stage current source rows in a temp view for reuse
+        src_view_name = f"__ff_snapshot_src_{rel_name}".replace(".", "_")
+        src_quoted = _q(src_view_name)
+        self.con.execute(f"create or replace temp view {src_quoted} as {body}")
+
+        try:
+            # Join predicate on unique keys
+            keys_pred = " AND ".join([f"t.{k} = s.{k}" for k in unique_key])
+
+            # Change condition & hash for staging rows
+            if strategy == "timestamp":
+                change_condition = f"s.{updated_at} > t.{upd_meta}"
+                hash_expr_s = "NULL"
+                new_upd_expr = f"s.{updated_at}"
+                new_valid_from_expr = f"s.{updated_at}"
+                new_hash_expr = "NULL"
+            else:
+                col_exprs_s = [f"coalesce(cast(s.{col} as varchar), '')" for col in check_cols]
+                concat_expr_s = " || '||' || ".join(col_exprs_s)
+                hash_expr_s = f"cast(md5({concat_expr_s}) as varchar)"
+                change_condition = f"coalesce({hash_expr_s}, '') <> coalesce(t.{hash_col}, '')"
+                new_upd_expr = f"s.{updated_at}" if updated_at else "current_timestamp"
+                new_valid_from_expr = "current_timestamp"
+                new_hash_expr = hash_expr_s
+
+            # 1) Close changed current rows
+            close_sql = f"""
+update {target} as t
+set
+    {vt} = current_timestamp,
+    {is_cur} = false
+from {src_quoted} as s
+where
+    {keys_pred}
+    and t.{is_cur} = true
+    and {change_condition};
+"""
+            self.con.execute(close_sql)
+
+            # 2) Insert new current versions (new keys or changed rows)
+            first_key = unique_key[0]
+            insert_sql = f"""
+insert into {target}
+select
+    s.*,
+    {new_upd_expr} as {upd_meta},
+    {new_valid_from_expr} as {vf},
+    cast(null as timestamp) as {vt},
+    true as {is_cur},
+    {new_hash_expr} as {hash_col}
+from {src_quoted} as s
+left join {target} as t
+  on {keys_pred}
+  and t.{is_cur} = true
+where
+    t.{first_key} is null
+    or {change_condition};
+"""
+            self.con.execute(insert_sql)
+        finally:
+            with suppress(Exception):
+                self.con.execute(f"drop view if exists {src_quoted}")
+
+    def snapshot_prune(
+        self,
+        relation: str,
+        unique_key: list[str],
+        keep_last: int,
+        *,
+        dry_run: bool = False,
+    ) -> None:
+        """
+        Delete older snapshot versions while keeping the most recent `keep_last`
+        rows per business key (including the current row).
+        """
+        if keep_last <= 0:
+            return
+
+        target = self._qualified(relation)
+        vf = BaseExecutor.SNAPSHOT_VALID_FROM_COL
+        keys = [k for k in unique_key if k]
+
+        if not keys:
+            return
+
+        part_by = ", ".join([k for k in keys])
+        key_select = ", ".join(keys)
+
+        ranked_sql = f"""
+select
+  {key_select},
+  {vf},
+  row_number() over (
+    partition by {part_by}
+    order by {vf} desc
+  ) as rn
+from {target}
+"""
+
+        if dry_run:
+            sql = f"""
+with ranked as (
+  {ranked_sql}
+)
+select count(*) as rows_to_delete
+from ranked
+where rn > {int(keep_last)}
+"""
+            res = self.con.execute(sql).fetchone()
+            rows = int(res[0]) if res else 0
+
+            echo(
+                f"[DRY-RUN] snapshot_prune({relation}): would delete {rows} row(s) "
+                f"(keep_last={keep_last})"
+            )
+            return
+
+        delete_sql = f"""
+delete from {target} t
+using (
+  {ranked_sql}
+) r
+where
+  r.rn > {int(keep_last)}
+  and {" AND ".join([f"t.{k} = r.{k}" for k in keys])}
+  and t.{vf} = r.{vf};
+"""
+        self.con.execute(delete_sql)
