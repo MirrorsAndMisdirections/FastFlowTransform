@@ -136,7 +136,7 @@ def record(
     if content_hash and (not stats.hashes or stats.hashes[-1] != content_hash):
         stats.hashes.append(content_hash)
 
-    stats.used_offline = bool(used_offline)
+    stats.used_offline = bool(stats.used_offline or used_offline)
 
 
 def snapshot() -> dict[str, Any]:

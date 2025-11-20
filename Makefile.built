@@ -1,0 +1,35 @@
+# Makefile for fastflowtransform
+
+# Change this if your venv has a different name/path
+VENV = .venv
+
+.PHONY: help venv build check upload-test upload clean
+
+help:
+	@echo "Useful commands:"
+	@echo "  make venv        - create virtualenv and install build"
+	@echo "  make build       - build wheel + sdist into dist/"
+	@echo "  make check       - run twine check on dist/*"
+	@echo "  make upload-test - upload dist/* to TestPyPI (using uvx + twine)"
+	@echo "  make upload      - upload dist/* to PyPI (using uvx + twine)"
+	@echo "  make clean       - remove build artifacts"
+
+venv:
+	python3 -m venv $(VENV)
+	$(VENV)/bin/python -m pip install --upgrade pip
+	$(VENV)/bin/uv pip install build
+
+build: venv
+	$(VENV)/bin/python -m build
+
+check:
+	uvx twine check dist/*
+
+upload-test: build check
+	uvx twine upload --repository testpypi dist/*
+
+upload: build check
+	uvx twine upload dist/*
+
+clean:
+	rm -rf build dist *.egg-info

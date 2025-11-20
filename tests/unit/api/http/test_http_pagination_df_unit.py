@@ -1,6 +1,7 @@
 import importlib
 import json
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -55,3 +56,35 @@ def test_get_df_pagination_concatenates(monkeypatch, tmp_path):
     cache_hit_count = 2
     assert snap["requests"] == request_count
     assert snap["cache_hits"] == cache_hit_count
+
+
+@pytest.mark.unit
+@pytest.mark.http
+def test_raw_get_pagination_returns_pages(monkeypatch, tmp_path):
+    monkeypatch.setenv("FF_HTTP_OFFLINE", "0")
+    monkeypatch.setenv("FF_HTTP_CACHE_DIR", str(tmp_path))
+    importlib.reload(http)
+
+    calls: list[dict[str, Any]] = []
+
+    def fake_http_request(method, u, *, params=None, headers=None, timeout=None):
+        calls.append({"url": u, "params": params, "headers": headers})
+        if "page=1" in u:
+            body = json.dumps({"next": "https://api.example.com/users?page=2"}).encode("utf-8")
+        else:
+            body = json.dumps({"next": None}).encode("utf-8")
+        return 200, {}, body
+
+    monkeypatch.setattr(http, "_http_request", fake_http_request)
+
+    def paginator(u: str, p: dict | None, payload: Any):
+        nxt = payload.get("next") if isinstance(payload, dict) else None
+        if not nxt:
+            return None
+        return {"next_request": {"url": nxt, "headers": {"X-Token": "abc"}}}
+
+    pages = http.get("https://api.example.com/users?page=1", paginator=paginator)
+    assert isinstance(pages, list)
+    assert len(pages) == 2
+    assert calls[0]["headers"] == {}
+    assert calls[1]["headers"] == {"X-Token": "abc"}

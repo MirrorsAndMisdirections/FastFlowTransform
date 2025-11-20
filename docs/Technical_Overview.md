@@ -53,7 +53,24 @@
 
 ### Project Layout
 
-For an up-to-date view, browse the repository tree or run `find . -maxdepth 2` from the root; all examples live under `examples/` with their own READMEs.
+The repository is structured so you can jump straight to the area you need without spelunking:
+
+```
+fastflowtransform/
+├── src/fastflowtransform/        # core package (CLI, executors, docs, streaming, settings)
+│   ├── api/, cli/, executors/, testing/, templates/ and friends
+│   └── entry-points such as core.py, dag.py, seeding.py, validation.py
+├── docs/                         # user + developer docs (this file plus guides)
+├── examples/                     # canonical SQL/Python demo projects with seeds + READMEs
+├── examples_article/             # long-form tutorial artifacts referenced by articles
+├── articles/, tickets/, _exports/ # content pipelines + planning notes
+├── tests/                        # pytest coverage for internal modules
+├── _scripts/, rel_dir/, dist/, site/, htmlcov/  # tooling + build outputs
+├── pyproject.toml, uv.lock       # build system + dependency lock
+└── Makefile*, docker-compose.yml # dev workflow shortcuts and services
+```
+
+Treat `fastflowtransform/` as the project root when running commands from this doc.
 
 ### Example Projects and Seeds
 

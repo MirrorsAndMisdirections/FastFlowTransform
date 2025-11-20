@@ -1,0 +1,70 @@
+# Connection profiles for the snapshot demo.
+
+dev_duckdb:
+  engine: duckdb
+  duckdb:
+    path: "{{ env('FF_DUCKDB_PATH', '.local/snapshot_demo.duckdb') }}"
+
+dev_postgres:
+  engine: postgres
+  postgres:
+    dsn: "{{ env('FF_PG_DSN') }}"
+    db_schema: "{{ env('FF_PG_SCHEMA', 'snapshot_demo') }}"
+
+dev_databricks_delta:
+  engine: databricks_spark
+  databricks_spark:
+    master: "{{ env('FF_SPARK_MASTER', 'local[*]') }}"
+    app_name: "{{ env('FF_SPARK_APP_NAME', 'snapshot_demo') }}"
+    warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse"
+    extra_conf:
+      spark.hadoop.javax.jdo.option.ConnectionURL: "jdbc:derby:{{ project_dir() }}/.local/metastore_db;create=true"
+      spark.hadoop.datanucleus.rdbms.datastoreAdapterClassName: "org.datanucleus.store.rdbms.adapter.DerbyAdapter"
+      spark.hadoop.datanucleus.schema.autoCreateAll: "true"
+      spark.hadoop.javax.jdo.option.ConnectionDriverName: "org.apache.derby.jdbc.EmbeddedDriver"
+      spark.driver.extraJavaOptions: "-Dderby.stream.error.file={{ project_dir() }}/.local/derby.log"
+
+dev_databricks_iceberg:
+  engine: databricks_spark
+  databricks_spark:
+    master: "{{ env('FF_SPARK_MASTER', 'local[*]') }}"
+    app_name: "{{ env('FF_SPARK_APP_NAME', 'snapshot_demo') }}"
+    warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse"
+    table_format: "iceberg"
+    extra_conf:
+      spark.jars.packages: "org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.0"
+      spark.sql.catalog.iceberg: "org.apache.iceberg.spark.SparkCatalog"
+      spark.sql.catalog.iceberg.type: "hadoop"
+      spark.sql.catalog.iceberg.warehouse: "file://{{ project_dir() }}/.local/iceberg_warehouse"
+      spark.sql.catalog.iceberg.write.metadata.version-hint.enabled: "false"
+      spark.sql.catalog.iceberg.read.metadata.version-hint.enabled: "false"
+
+dev_bigquery_bigframes:
+  engine: bigquery
+  bigquery:
+    project: "{{ env('FF_BQ_PROJECT') }}"
+    dataset: "{{ env('FF_BQ_DATASET', 'snapshot_demo') }}"
+    location: "{{ env('FF_BQ_LOCATION', 'EU') }}"
+    use_bigframes: true
+    # allow_create_dataset: true   # uncomment to auto-create dataset on first run
+
+dev_bigquery_pandas:
+  engine: bigquery
+  bigquery:
+    project: "{{ env('FF_BQ_PROJECT') }}"
+    dataset: "{{ env('FF_BQ_DATASET', 'snapshot_demo') }}"
+    location: "{{ env('FF_BQ_LOCATION', 'EU') }}"
+    use_bigframes: false
+    # allow_create_dataset: true   # uncomment to auto-create dataset on first run
+
+dev_snowflake:
+  engine: snowflake_snowpark
+  snowflake_snowpark:
+    account: "{{ env('FF_SF_ACCOUNT') }}"
+    user: "{{ env('FF_SF_USER') }}"
+    password: "{{ env('FF_SF_PASSWORD') }}"
+    warehouse: "{{ env('FF_SF_WAREHOUSE', 'COMPUTE_WH') }}"
+    database: "{{ env('FF_SF_DATABASE', 'EXAMPLE_DEMO') }}"
+    schema: "{{ env('FF_SF_SCHEMA', 'SNAPSHOT_DEMO') }}"
+    role: "{{ env('FF_SF_ROLE', '') }}"
+    allow_create_schema: true

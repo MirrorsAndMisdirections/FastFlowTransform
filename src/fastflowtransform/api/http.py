@@ -133,6 +133,21 @@ def _write_cache(key: str, status: int, headers: dict, body: bytes, url: str) ->
     return meta
 
 
+def _maybe_json_payload(body: bytes) -> Any:
+    with suppress(Exception):
+        return json.loads(body.decode("utf-8"))
+    with suppress(Exception):
+        return json.loads(body)
+    return body
+
+
+def _json_payload(body: bytes) -> Any:
+    try:
+        return json.loads(body.decode("utf-8"))
+    except Exception:
+        return json.loads(body)
+
+
 def _http_request(
     method: str,
     url: str,
@@ -153,6 +168,115 @@ def _backoff_sleep(i: int) -> None:
     time.sleep(base + random.random() * 0.3 * base)
 
 
+def _request_with_cache(
+    method: str,
+    url: str,
+    params: dict | None,
+    headers: dict | None,
+    ttl: int | None,
+    timeout: float | None,
+) -> tuple[bytes, dict[str, Any]]:
+    hdrs = dict(headers or {})
+    key = _cache_key(method, url, params, hdrs)
+    meta, body, hit = _read_cache(key, ttl)
+    if hit:
+        meta_dict: dict[str, Any] = meta or {}
+        payload = body or b""
+        _ctx.record(
+            key,
+            meta_dict.get("content_hash", ""),
+            True,
+            len(payload),
+            used_offline=_OFFLINE,
+        )
+        return payload, meta_dict
+    if _OFFLINE:
+        raise RuntimeError(f"HTTP offline mode - cache miss for {url}")
+
+    tries = max(_DEF_MAX_RETRIES, 1)
+    for i in range(tries):
+        try:
+            status, resp_headers, resp_body = _http_request(
+                method, url, params=params, headers=hdrs, timeout=timeout
+            )
+        except _HTTP.TimeoutException as exc:
+            if i < tries - 1:
+                _backoff_sleep(i)
+                continue
+            raise RuntimeError(f"HTTP timeout after {timeout or _DEF_TIMEOUT}s for {url}") from exc
+        except _HTTP.RequestError as exc:
+            if i < tries - 1:
+                _backoff_sleep(i)
+                continue
+            raise RuntimeError(f"HTTP request error for {url}: {exc}") from exc
+        if status in (429, 500, 502, 503, 504) and i < tries - 1:
+            ra = resp_headers.get("Retry-After")
+            if ra:
+                try:
+                    time.sleep(float(ra))
+                except Exception:
+                    _backoff_sleep(i)
+            else:
+                _backoff_sleep(i)
+            continue
+        http_status_200 = 200
+        http_status_300 = 300
+        http_status_304 = 304
+        if http_status_200 <= status < http_status_300 or status == http_status_304:
+            meta_out = _write_cache(key, status, resp_headers, resp_body, url)
+            _ctx.record(
+                key,
+                meta_out.get("content_hash", ""),
+                False,
+                len(resp_body),
+                used_offline=False,
+            )
+            return resp_body, meta_out
+        raise RuntimeError(f"HTTP {status} for {url}")
+    raise RuntimeError(f"HTTP error after retries for {url}")
+
+
+def _collect_pages(
+    method: str,
+    url: str,
+    params: dict | None,
+    headers: dict[str, Any],
+    ttl: int | None,
+    timeout: float | None,
+    paginator: Callable[[str, dict | None, Any], dict | None] | None,
+    *,
+    keep_payload: bool,
+    payload_factory: Callable[[bytes], Any] | None,
+) -> list[tuple[bytes, dict[str, Any], Any]]:
+    cur_url = url
+    cur_params = params
+    cur_headers = dict(headers or {})
+    pages: list[tuple[bytes, dict[str, Any], Any]] = []
+    while True:
+        body, meta = _request_with_cache(method, cur_url, cur_params, cur_headers, ttl, timeout)
+        need_payload = keep_payload or paginator is not None
+        payload = None
+        if payload_factory and need_payload:
+            payload = payload_factory(body)
+        stored_payload = payload if keep_payload else None
+        pages.append((body, meta, stored_payload))
+        if paginator is None:
+            break
+        nxt = paginator(cur_url, cur_params, payload)
+        if not nxt:
+            break
+        req = nxt.get("next_request") if isinstance(nxt, dict) else None
+        if not req:
+            break
+        cur_url = req.get("url") or cur_url
+        if "params" in req:
+            cur_params = req.get("params")
+        if "headers" in req:
+            nxt_headers = req.get("headers")
+            cur_headers = dict(nxt_headers) if nxt_headers is not None else {}
+    return pages
+
+
 # ---- Public API ---------------------------------------------------------
 def get(
     url: str,
@@ -160,13 +284,15 @@ def get(
     params: dict | None = None,
     headers: dict | None = None,
     ttl: int | None = None,
-    paginator: Callable[[str, dict | None, dict], dict | None] | None = None,
+    paginator: Callable[[str, dict | None, Any], dict | None] | None = None,
     timeout: float | None = None,
-) -> bytes:
+) -> bytes | list[bytes]:
     """
     Raw GET with optional FS cache and simple pagination.
     If paginator is provided, it should return
     {"next_request": {"url": "...", "params": {...}}} or None.
+    When pagination is active the result is a list of response bodies; otherwise
+    a single bytes object is returned.
     """
     if not _domain_ok(url):
         raise RuntimeError(f"HTTP domain not allowed by FF_HTTP_ALLOWED_DOMAINS: {url}")
@@ -174,70 +300,22 @@ def get(
     ttl = _DEF_TTL if ttl is None else ttl
     headers = dict(headers or {})
 
-    def _one(method: str, url_: str, params_: dict | None) -> tuple[bytes, dict]:
-        key = _cache_key(method, url_, params_, headers)
-        meta, body, hit = _read_cache(key, ttl)
-        if hit:
-            # meta can be None -> normalize to empty dict before accessing .get
-            meta_dict = meta or {}
-            _ctx.record(
-                key, meta_dict.get("content_hash", ""), True, len(body or b""), used_offline=True
-            )
-            return body or b"", meta_dict
-        if _OFFLINE:
-            raise RuntimeError(f"HTTP offline mode - cache miss for {url_}")
-
-        tries = max(_DEF_MAX_RETRIES, 1)
-        for i in range(tries):
-            try:
-                status, resp_headers, resp_body = _http_request(
-                    method, url_, params=params_, headers=headers, timeout=timeout
-                )
-            except _HTTP.TimeoutException as exc:
-                if i < tries - 1:
-                    _backoff_sleep(i)
-                    continue
-                raise RuntimeError(
-                    f"HTTP timeout after {timeout or _DEF_TIMEOUT}s for {url_}"
-                ) from exc
-            except _HTTP.RequestError as exc:
-                if i < tries - 1:
-                    _backoff_sleep(i)
-                    continue
-                raise RuntimeError(f"HTTP request error for {url_}: {exc}") from exc
-            if status in (429, 500, 502, 503, 504) and i < tries - 1:
-                # honor Retry-After (seconds) if present
-                ra = resp_headers.get("Retry-After")
-                if ra:
-                    try:
-                        time.sleep(float(ra))
-                    except Exception:
-                        _backoff_sleep(i)
-                else:
-                    _backoff_sleep(i)
-                continue
-            # write cache for any success or 304
-            http_status_200 = 200
-            http_status_300 = 300
-            http_status_304 = 304
-            if http_status_200 <= status < http_status_300 or status == http_status_304:
-                meta = _write_cache(key, status, resp_headers, resp_body, url_)
-                _ctx.record(
-                    key, meta.get("content_hash", ""), False, len(resp_body), used_offline=False
-                )
-                return resp_body, meta
-            raise RuntimeError(f"HTTP {status} for {url_}")
-        # should not reach
-        raise RuntimeError(f"HTTP error after retries for {url_}")
-
-    body, _ = _one("GET", url, params)
-    if not paginator:
+    if paginator is None:
+        body, _ = _request_with_cache("GET", url, params, headers, ttl, timeout)
         return body
 
-    # paginate: concatenated bytes are not helpful
-    # → collect JSON pages and join later in get_json/get_df
-    # Here we just return the first page; get_json/get_df implement paging across JSON.
-    return body
+    pages = _collect_pages(
+        "GET",
+        url,
+        params,
+        headers,
+        ttl,
+        timeout,
+        paginator,
+        keep_payload=False,
+        payload_factory=_maybe_json_payload,
+    )
+    return [body for body, _, _ in pages]
 
 
 def get_json(
@@ -246,37 +324,25 @@ def get_json(
     params: dict | None = None,
     headers: dict | None = None,
     ttl: int | None = None,
-    paginator: Callable[[str, dict | None, dict], dict | None] | None = None,
+    paginator: Callable[[str, dict | None, Any], dict | None] | None = None,
     timeout: float | None = None,
 ) -> Any:
     """GET returning parsed JSON. If paginator is provided, it follows pages via callback."""
     ttl = _DEF_TTL if ttl is None else ttl
     headers = dict(headers or {})
-
-    def _load_one(u: str, p: dict | None) -> tuple[Any, dict]:
-        raw = get(u, params=p, headers=headers, ttl=ttl, paginator=None, timeout=timeout)
-        try:
-            js = json.loads(raw.decode("utf-8"))
-        except Exception:
-            js = json.loads(raw)  # if already str
-        return js, {}
-
-    pages: list[Any] = []
-    u, p = url, params
-    while True:
-        js, _ = _load_one(u, p)
-        pages.append(js)
-        if paginator is None:
-            break
-        nxt = paginator(u, p, js)
-        if not nxt:
-            break
-        req = nxt.get("next_request")
-        if not req:
-            break
-        u = req.get("url") or u
-        p = req.get("params")
-    return pages[0] if paginator is None else pages
+    pages = _collect_pages(
+        "GET",
+        url,
+        params,
+        headers,
+        ttl,
+        timeout,
+        paginator,
+        keep_payload=True,
+        payload_factory=_json_payload,
+    )
+    payloads = [payload for _, _, payload in pages]
+    return payloads[0] if paginator is None else payloads
 
 
 MetaEntry = str | list[str]
@@ -293,7 +359,7 @@ def get_df(
     params: dict | None = None,
     headers: dict | None = None,
     ttl: int | None = None,
-    paginator: Callable[[str, dict | None, dict], dict | None] | None = None,
+    paginator: Callable[[str, dict | None, Any], dict | None] | None = None,
     json_path: list[str] | None = None,
     record_path: Sequence[str] | None = None,
     meta: MetaArgIn | None = None,

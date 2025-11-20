@@ -19,7 +19,7 @@ from fastflowtransform.api import context as _http_ctx
 from fastflowtransform.core import REGISTRY, Node, relation_for, resolve_source_entry
 from fastflowtransform.errors import ModelExecutionError
 from fastflowtransform.incremental import _normalize_unique_key
-from fastflowtransform.logging import echo_debug
+from fastflowtransform.logging import echo, echo_debug
 from fastflowtransform.validation import validate_required_columns
 
 
@@ -116,6 +116,13 @@ class BaseExecutor[TFrame](ABC):
       - _is_frame
       - (optional) _frame_name
     """
+
+    # Standard meta columns used by snapshot materialization.
+    SNAPSHOT_VALID_FROM_COL = "_ff_valid_from"
+    SNAPSHOT_VALID_TO_COL = "_ff_valid_to"
+    SNAPSHOT_IS_CURRENT_COL = "_ff_is_current"
+    SNAPSHOT_HASH_COL = "_ff_snapshot_hash"
+    SNAPSHOT_UPDATED_AT_COL = "_ff_updated_at"
 
     # ---------- SQL ----------
     def render_sql(
@@ -236,6 +243,18 @@ class BaseExecutor[TFrame](ABC):
             # Delegates to incremental engine: render, schema sync, merge/insert, etc.
             return _ff_incremental.run_or_dispatch(self, node, env)
 
+        if self._meta_is_snapshot(meta):
+            # Snapshots are executed via the dedicated CLI: `fft snapshot run`.
+            raise ModelExecutionError(
+                node_name=node.name,
+                relation=relation_for(node.name),
+                message=(
+                    "Snapshot models cannot be executed via 'fft run'. "
+                    "Use 'fft snapshot run' instead."
+                ),
+                sql_snippet="",
+            )
+
         sql_rendered = self.render_sql(
             node,
             env,
@@ -288,6 +307,17 @@ class BaseExecutor[TFrame](ABC):
                 message=str(e),
                 sql_snippet=preview,
             ) from e
+
+    def run_snapshot_sql(self, node: Node, env: Environment) -> None:
+        """
+        Execute a SQL model materialized as 'snapshot'.
+
+        Default implementation: engines must override this or snapshots
+        will fail with a clear error.
+        """
+        raise NotImplementedError(
+            f"Snapshot materialization is not implemented for engine '{self.engine_name}'."
+        )
 
     # --- Helpers for materialization & ephemeral inlining (instance methods) ---
     def _first_select_body(self, sql: str) -> str:
@@ -593,7 +623,22 @@ class BaseExecutor[TFrame](ABC):
             return
 
         with suppress(Exception):
-            (node.meta or {}).update({"_http_snapshot": snap})
+            if not isinstance(node.meta, dict) or not node.meta:
+                node.meta = {}
+            node.meta["_http_snapshot"] = snap
+
+        requests = int(snap.get("requests") or 0)
+        if requests <= 0:
+            return
+        cache_hits = int(snap.get("cache_hits") or 0)
+        bytes_read = int(snap.get("bytes") or 0)
+        offline = bool(snap.get("used_offline"))
+        echo(
+            f"HTTP stats for {node.name}: requests={requests} cache_hits={cache_hits} "
+            f"bytes={bytes_read} offline={offline}"
+        )
+        if offline:
+            echo(f"Node {node.name} served responses from offline cache")
 
     # -------- Python model view helpers (shared) --------
     def _py_view_backing_name(self, relation: str) -> str:
@@ -711,7 +756,7 @@ class BaseExecutor[TFrame](ABC):
         cfg.setdefault("options", {})
         return self._format_source_reference(cfg, source_name, table_name)
 
-    # ---------- Abstrakte Frame-Hooks ----------
+    # ---------- Abstract Frame-Hooks ----------
     @abstractmethod
     def _read_relation(self, relation: str, node: Node, deps: Iterable[str]) -> TFrame: ...
 
@@ -815,6 +860,36 @@ class BaseExecutor[TFrame](ABC):
 
         # Fallback: any non-empty incremental value is treated as "enabled".
         return bool(incremental_cfg)
+
+    # ── Snapshot API ──────────────────────────────────────────────────
+    def snapshot_prune(
+        self,
+        relation: str,
+        unique_key: list[str],
+        keep_last: int,
+        *,
+        dry_run: bool = False,
+    ) -> None:  # pragma: no cover - abstract
+        """
+        Prune old snapshot versions for the given relation.
+
+        Engines may implement this in a best-effort manner. Default: not supported.
+        """
+        raise NotImplementedError(
+            f"Snapshot pruning is not implemented for engine '{self.engine_name}'."
+        )
+
+    @staticmethod
+    def _meta_is_snapshot(meta: Mapping[str, Any] | None) -> bool:
+        """
+        Return True if the given meta mapping describes a snapshot model.
+
+        For now we define snapshots purely by materialized='snapshot'.
+        """
+        if not meta:
+            return False
+        materialized = str(meta.get("materialized") or "").lower()
+        return materialized == "snapshot"
 
     ENGINE_NAME: str = "generic"
 

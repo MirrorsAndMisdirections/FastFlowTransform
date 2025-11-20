@@ -49,6 +49,15 @@ class DQResult:
     example_sql: str | None = None
 
 
+def _is_snapshot_model(node: Any) -> bool:
+    """
+    Return True if this node is a snapshot model (materialized='snapshot').
+    """
+    meta = getattr(node, "meta", {}) or {}
+    mat = str(meta.get("materialized") or "").lower()
+    return mat == "snapshot"
+
+
 def _print_model_error_block(node_name: str, relation: str, message: str, sql: str | None) -> None:
     header = "┌" + "─" * 70
     footer = "└" + "─" * 70
@@ -99,7 +108,11 @@ def _run_models(
     before: Callable[[str, Any], None] | None = None,
     on_error: Callable[[str, Any, Exception], None] | None = None,
 ) -> None:
-    order = [n for n in topo_sort(REGISTRY.nodes) if pred(REGISTRY.nodes[n])]
+    order = [
+        n
+        for n in topo_sort(REGISTRY.nodes)
+        if pred(REGISTRY.nodes[n]) and not _is_snapshot_model(REGISTRY.nodes[n])
+    ]
     _execute_models(order, run_sql, run_py, before=before, on_error=on_error)
 
 

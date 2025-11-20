@@ -3,11 +3,15 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from contextlib import suppress
-from typing import Any
+from typing import Any, cast
+
+from jinja2 import Environment
 
 from fastflowtransform.core import Node, relation_for
 from fastflowtransform.executors.base import BaseExecutor
+from fastflowtransform.logging import echo
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
+from fastflowtransform.snapshots import resolve_snapshot_config
 from fastflowtransform.typing import SNDF, SnowparkSession as Session
 
 
@@ -290,6 +294,222 @@ class SnowflakeSnowparkExecutor(BaseExecutor[SNDF]):
         # Column names are identifiers → _q is correct here
         cols_sql = ", ".join(f"{self._q(c)} STRING" for c in to_add)
         self.session.sql(f"ALTER TABLE {qrel} ADD COLUMN {cols_sql}").collect()
+
+    # ── Snapshot API ─────────────────────────────────────────────────────
+    def run_snapshot_sql(self, node: Node, env: Environment) -> None:
+        """
+        Snapshot materialization for Snowflake Snowpark.
+
+        Uses the shared snapshot config resolver so all engines share the
+        same semantics and validation.
+        """
+        if node.kind != "sql":
+            raise TypeError(
+                f"Snapshot materialization is only supported for SQL models, "
+                f"got kind={node.kind!r} for {node.name}."
+            )
+
+        meta = getattr(node, "meta", {}) or {}
+        if not self._meta_is_snapshot(meta):
+            raise ValueError(f"Node {node.name} is not configured with materialized='snapshot'.")
+
+        cfg = resolve_snapshot_config(node, meta)
+
+        # Render model SQL and extract the SELECT body
+        rendered = self.render_sql(
+            node,
+            env,
+            ref_resolver=lambda name: self._resolve_ref(name, env),
+            source_resolver=self._resolve_source,
+        )
+        sql = self._strip_leading_config(rendered).strip()
+        body = self._selectable_body(sql).rstrip(";\n\t ")
+
+        rel_name = relation_for(node.name)
+        target = self._qualified(rel_name)
+
+        vf = BaseExecutor.SNAPSHOT_VALID_FROM_COL
+        vt = BaseExecutor.SNAPSHOT_VALID_TO_COL
+        is_cur = BaseExecutor.SNAPSHOT_IS_CURRENT_COL
+        hash_col = BaseExecutor.SNAPSHOT_HASH_COL
+        upd_meta = BaseExecutor.SNAPSHOT_UPDATED_AT_COL
+
+        # ---- First run: create snapshot table ----
+        if not self.exists_relation(rel_name):
+            if cfg.strategy == "timestamp":
+                # cfg.updated_at is guaranteed non-None by resolve_snapshot_config
+                if cfg.updated_at is None:  # defensive, for type-checkers
+                    raise ValueError(
+                        "strategy='timestamp' snapshot requires a non-null updated_at column."
+                    )
+                create_sql = f"""
+CREATE OR REPLACE TABLE {target} AS
+SELECT
+  s.*,
+  s.{cfg.updated_at} AS {upd_meta},
+  s.{cfg.updated_at} AS {vf},
+  CAST(NULL AS TIMESTAMP) AS {vt},
+  TRUE AS {is_cur},
+  CAST(NULL AS VARCHAR) AS {hash_col}
+FROM ({body}) AS s
+"""
+            else:  # strategy == "check"
+                # hash over check_cols to detect changes
+                col_exprs = [f"COALESCE(CAST(s.{col} AS VARCHAR), '')" for col in cfg.check_cols]
+                concat_expr = " || '||' || ".join(col_exprs) or "''"
+                hash_expr = f"CAST(MD5({concat_expr}) AS VARCHAR)"
+                upd_expr = (
+                    f"s.{cfg.updated_at}" if cfg.updated_at is not None else "CURRENT_TIMESTAMP()"
+                )
+                create_sql = f"""
+CREATE OR REPLACE TABLE {target} AS
+SELECT
+  s.*,
+  {upd_expr} AS {upd_meta},
+  CURRENT_TIMESTAMP() AS {vf},
+  CAST(NULL AS TIMESTAMP) AS {vt},
+  TRUE AS {is_cur},
+  {hash_expr} AS {hash_col}
+FROM ({body}) AS s
+"""
+            self.session.sql(create_sql).collect()
+            return
+
+        # ---- Incremental snapshot update ----
+        src_name = f"__ff_snapshot_src_{rel_name}".replace(".", "_")
+
+        # Use a temporary view for the current source rows
+        self.session.sql(f"CREATE OR REPLACE TEMPORARY VIEW {src_name} AS {body}").collect()
+
+        try:
+            keys_pred = " AND ".join([f"t.{k} = s.{k}" for k in cfg.unique_key]) or "FALSE"
+
+            if cfg.strategy == "timestamp":
+                if cfg.updated_at is None:
+                    raise ValueError(
+                        "strategy='timestamp' snapshot requires a non-null updated_at column."
+                    )
+                change_condition = f"s.{cfg.updated_at} > t.{upd_meta}"
+                hash_expr_s = "NULL"
+                new_upd_expr = f"s.{cfg.updated_at}"
+                new_valid_from_expr = f"s.{cfg.updated_at}"
+                new_hash_expr = "NULL"
+            else:
+                col_exprs_s = [f"COALESCE(CAST(s.{col} AS VARCHAR), '')" for col in cfg.check_cols]
+                concat_expr_s = " || '||' || ".join(col_exprs_s) or "''"
+                hash_expr_s = f"CAST(MD5({concat_expr_s}) AS VARCHAR)"
+                change_condition = f"COALESCE({hash_expr_s}, '') <> COALESCE(t.{hash_col}, '')"
+                new_upd_expr = (
+                    f"s.{cfg.updated_at}" if cfg.updated_at is not None else "CURRENT_TIMESTAMP()"
+                )
+                new_valid_from_expr = "CURRENT_TIMESTAMP()"
+                new_hash_expr = hash_expr_s
+
+            # 1) Close changed current rows
+            close_sql = f"""
+UPDATE {target} AS t
+SET
+  {vt} = CURRENT_TIMESTAMP(),
+  {is_cur} = FALSE
+FROM {src_name} AS s
+WHERE
+  {keys_pred}
+  AND t.{is_cur} = TRUE
+  AND {change_condition}
+"""
+            self.session.sql(close_sql).collect()
+
+            # 2) Insert new current versions (new keys or changed rows)
+            first_key = cfg.unique_key[0]
+            insert_sql = f"""
+INSERT INTO {target}
+SELECT
+  s.*,
+  {new_upd_expr} AS {upd_meta},
+  {new_valid_from_expr} AS {vf},
+  CAST(NULL AS TIMESTAMP) AS {vt},
+  TRUE AS {is_cur},
+  {new_hash_expr} AS {hash_col}
+FROM {src_name} AS s
+LEFT JOIN {target} AS t
+  ON {keys_pred}
+ AND t.{is_cur} = TRUE
+WHERE
+  t.{first_key} IS NULL
+  OR {change_condition}
+"""
+            self.session.sql(insert_sql).collect()
+        finally:
+            with suppress(Exception):
+                self.session.sql(f"DROP VIEW IF EXISTS {src_name}").collect()
+
+    def snapshot_prune(
+        self,
+        relation: str,
+        unique_key: list[str],
+        keep_last: int,
+        *,
+        dry_run: bool = False,
+    ) -> None:
+        """
+        Delete older snapshot versions while keeping the most recent `keep_last`
+        rows per business key (including the current row).
+        """
+        if keep_last <= 0:
+            return
+
+        keys = [k for k in unique_key if k]
+        if not keys:
+            return
+
+        target = self._qualified(relation)
+        vf = BaseExecutor.SNAPSHOT_VALID_FROM_COL
+
+        part_by = ", ".join(keys)
+        key_select = ", ".join(keys)
+
+        ranked_sql = f"""
+SELECT
+  {key_select},
+  {vf},
+  ROW_NUMBER() OVER (
+    PARTITION BY {part_by}
+    ORDER BY {vf} DESC
+  ) AS rn
+FROM {target}
+"""
+
+        if dry_run:
+            sql = f"""
+WITH ranked AS (
+  {ranked_sql}
+)
+SELECT COUNT(*) AS rows_to_delete
+FROM ranked
+WHERE rn > {int(keep_last)}
+"""
+            res_raw = self.session.sql(sql).collect()
+            # Snowflake returns a list of Row objects; treat them as tuples for typing.
+            res = cast("list[tuple[Any, ...]]", res_raw)
+            rows = int(res[0][0]) if res else 0
+
+            echo(
+                f"[DRY-RUN] snapshot_prune({relation}): would delete {rows} row(s) "
+                f"(keep_last={keep_last})"
+            )
+            return
+
+        delete_sql = f"""
+DELETE FROM {target} t
+USING (
+  {ranked_sql}
+) r
+WHERE
+  r.rn > {int(keep_last)}
+  AND {" AND ".join([f"t.{k} = r.{k}" for k in keys])}
+  AND t.{vf} = r.{vf}
+"""
+        self.session.sql(delete_sql).collect()
 
 
 # ────────────────────────── local testing shim ───────────────────────────

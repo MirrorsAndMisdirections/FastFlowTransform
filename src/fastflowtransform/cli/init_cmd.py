@@ -11,7 +11,6 @@ _SUPPORTED_ENGINES = {
     "duckdb",
     "postgres",
     "bigquery",
-    "bigquery_bf",
     "databricks_spark",
     "snowflake_snowpark",
 }
@@ -28,47 +27,51 @@ class _InitContext:
 def _build_profiles_yaml(ctx: _InitContext) -> str:
     engine_block = {
         "duckdb": [
-            "  # DuckDB profile example. See docs/Profiles.md#duckdb for details.",
+            "  # DuckDB profile example. See docs/Profiles.md#engines-and-sections for details.",
             "  duckdb:",
             "    path: \"{{ env('FF_DUCKDB_PATH', '.local/dev.duckdb') }}\"  # Path to your DuckDB database file.",  # Noqa E501
         ],
         "postgres": [
-            "  # Postgres profile example. See docs/Profiles.md#postgres for required keys.",
+            "  # Postgres profile example. See docs/Profiles.md#engines-and-sections "
+            "    for required keys.",
             "  postgres:",
             "    dsn: \"{{ env('FF_PG_DSN') }}\"  # Full Postgres DSN, e.g. postgresql://user:pass@host/db",
             "    db_schema: \"{{ env('FF_PG_SCHEMA', 'analytics') }}\"",
         ],
         "bigquery": [
-            "  # BigQuery profile example. See docs/Profiles.md#bigquery.",
+            "  # BigQuery profile example. See docs/Profiles.md#engines-and-sections.",
             "  bigquery:",
-            "    project: \"{{ env('FF_BQ_PROJECT') }}\"  # GCP project id.",
+            "    project: \"{{ env('FF_BQ_PROJECT') }}\"  # Optional if your ADC "
+            "    default project is set.",
             "    dataset: \"{{ env('FF_BQ_DATASET') }}\"  # Target dataset for models.",
-            "    location: US  # Update to match your dataset location.",
-        ],
-        "bigquery_bf": [
-            "  # BigQuery BigFrames profile example. See docs/Profiles.md#bigquery.",
-            "  bigquery_bf:",
-            "    project: \"{{ env('FF_BQ_PROJECT') }}\"",
-            "    dataset: \"{{ env('FF_BQ_DATASET') }}\"",
-            "    location: US",
+            "    location: \"{{ env('FF_BQ_LOCATION', 'US') }}\"  # Must match dataset location.",
+            "    use_bigframes: true  # Run Python models through BigQuery DataFrames (BigFrames).",
+            "    allow_create_dataset: false  # Set true to auto-create the dataset on first run.",
         ],
         "databricks_spark": [
-            "  # Databricks Spark profile example. See docs/Profiles.md#databricks-spark.",
+            "  # Databricks Spark profile example. See docs/Profiles.md#engines-and-sections.",
             "  databricks_spark:",
             "    master: \"{{ env('FF_SPARK_MASTER') }}\"  # e.g. spark://host:7077 or a Databricks cluster URL.",  # Noqa E501
             "    app_name: \"{{ env('FF_SPARK_APP_NAME', 'fft-project') }}\"",
             "    warehouse_dir: \"{{ env('FF_SPARK_WAREHOUSE', '/tmp/fft-warehouse') }}\"",
             "    use_hive_metastore: false",
+            "    extra_conf: {}  # Provide Spark conf overrides here.",
+            "    catalog: \"{{ env('FF_SPARK_CATALOG', '') }}\"  # Unity catalog (optional).",
+            "    database: \"{{ env('FF_SPARK_DATABASE', 'default') }}\"",
+            "    table_format: \"{{ env('FF_SPARK_TABLE_FORMAT', 'parquet') }}\"",
+            "    table_options: {}",
         ],
         "snowflake_snowpark": [
-            "  # Snowflake Snowpark profile example. See docs/Profiles.md#snowflake-snowpark.",
+            "  # Snowflake Snowpark profile example. See docs/Profiles.md#engines-and-sections.",
             "  snowflake_snowpark:",
             "    account: \"{{ env('FF_SF_ACCOUNT') }}\"",
             "    user: \"{{ env('FF_SF_USER') }}\"",
             "    password: \"{{ env('FF_SF_PASSWORD') }}\"",
             "    warehouse: \"{{ env('FF_SF_WAREHOUSE') }}\"",
             "    database: \"{{ env('FF_SF_DATABASE') }}\"",
-            "    db_schema: \"{{ env('FF_SF_SCHEMA', 'PUBLIC') }}\"",
+            "    schema: \"{{ env('FF_SF_SCHEMA', 'PUBLIC') }}\"",
+            "    role: \"{{ env('FF_SF_ROLE') }}\"",
+            "    allow_create_schema: true",
         ],
     }[ctx.engine]
 
@@ -100,7 +103,7 @@ def _build_project_yaml(ctx: _InitContext) -> str:
             "",
             "docs:",
             "  # Adjust `dag_dir` to change where `fft dag --html` writes documentation "
-            "(docs/Technical_Overview.md#documentation).",
+            "(docs/Technical_Overview.md#auto-docs-and-lineage).",
             "  dag_dir: site/dag",
             "",
             "# Project-level variables accessible via {{ var('key') }} inside models.",
@@ -122,7 +125,7 @@ def _build_sources_yaml() -> str:
         [
             "# Source declarations describe external tables. See docs/Sources.md for details.",
             "version: 2",
-            "sources:",
+            "# sources:",
             "  # Example:",
             "  # - name: raw",
             "  #   schema: staging",
@@ -170,13 +173,23 @@ def _create_directory_notes(target: Path) -> None:
                 "",
             ]
         ),
+        "tests/dq/README.md": "\n".join(
+            [
+                "# Data quality tests",
+                "",
+                "Store custom data-quality tests that run via `fft test` "
+                "(docs/Data_Quality_Tests.md).",
+                "Use this directory for schema-bound tests separate from unit specs.",
+                "",
+            ]
+        ),
         "docs/README.md": "\n".join(
             [
                 "# Project documentation",
                 "",
                 "Write operator or contributor notes here and keep "
                 "them in sync with generated docs.",
-                "See docs/Technical_Overview.md#documentation "
+                "See docs/Technical_Overview.md#auto-docs-and-lineage "
                 "for `fft dag` / `fft docgen` guidance.",
                 "",
             ]
@@ -220,7 +233,7 @@ def init(
             "--engine",
             help=(
                 "Executor engine for the default profile. "
-                "Supported values: duckdb, postgres, bigquery, bigquery_bf, "
+                "Supported values: duckdb, postgres, bigquery, "
                 "databricks_spark, snowflake_snowpark."
             ),
         ),
@@ -261,7 +274,7 @@ def init(
         engine=resolved_engine,
     )
 
-    for sub in ("models", "seeds", "tests/unit", "docs"):
+    for sub in ("models", "seeds", "tests/unit", "tests/dq", "docs"):
         (project_dir / sub).mkdir(parents=True, exist_ok=True)
 
     _write_file(project_dir / "project.yml", _build_project_yaml(ctx))

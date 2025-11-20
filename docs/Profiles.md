@@ -50,11 +50,13 @@ Supported engines and their expected sections:
 |----------------------|--------------------|---------------------------------------------------|
 | `duckdb`             | `duckdb`           | `path` (file path or `:memory:`)                  |
 | `postgres`           | `postgres`         | `dsn`, `db_schema`                                |
-| `bigquery`           | `bigquery`         | `project` (optional), `dataset`, `location`       |
-| `databricks_spark`   | `databricks_spark` | `master`, `app_name`, optional `extra_conf`, `warehouse_dir`, `use_hive_metastore`, `database`, `table_format`, `table_options` |
-| `snowflake_snowpark` | `snowflake_snowpark`| `account`, `user`, `password`, `warehouse`, `database`, `db_schema`, optional `role` |
+| `bigquery`           | `bigquery`         | `project` (optional), `dataset`, `location`, `use_bigframes`, `allow_create_dataset` |
+| `databricks_spark`   | `databricks_spark` | `master`, `app_name`, optional `extra_conf`, `warehouse_dir`, `use_hive_metastore`, `catalog`, `database`, `table_format`, `table_options` |
+| `snowflake_snowpark` | `snowflake_snowpark`| `account`, `user`, `password`, `warehouse`, `database`, `schema` (`db_schema` alias), optional `role`, `allow_create_schema` |
 
 Each profile can define its own `vars:` block (values exposed via `var('key')` inside templates).
+
+> Snowflake note: the CLI scaffold shows `schema:` while the docs often mention `db_schema:`. The configuration accepts either key because `schema` is an alias for `db_schema` in the settings model.
 
 ## Environment Variables
 
