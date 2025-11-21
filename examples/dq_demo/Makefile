@@ -85,6 +85,9 @@ test:
 dag:
 	env $(RUN_ENV) $(UV) run fft dag "$(PROJECT)" --env $(PROFILE_ENV) $(SELECT_FLAGS) --html
 
+freshness:
+	env $(RUN_ENV) $(UV) run fft source freshness "$(PROJECT)" --env $(PROFILE_ENV)
+
 artifacts:
 	@echo
 	@echo "== 📦 Artifacts =="
@@ -105,6 +108,7 @@ demo: clean
 	@echo "== 🧪 dq_demo (Data Quality) =="
 	@echo "Profile=$(PROFILE_ENV)  PROJECT=$(PROJECT)"
 	+$(MAKE) seed
+	+$(MAKE) freshness
 	+$(MAKE) run
 	+$(MAKE) dag
 	+$(MAKE) test

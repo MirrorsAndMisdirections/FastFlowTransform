@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from jinja2 import TemplateNotFound
 
 import fastflowtransform.docs as docs_mod
 from fastflowtransform.core import Node
@@ -40,7 +41,10 @@ class _FakeEnv:
         }
 
     def get_template(self, name: str) -> _FakeTemplate:
-        return self._tmpls[name]
+        try:
+            return self._tmpls[name]
+        except KeyError as exc:
+            raise TemplateNotFound(name) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +127,23 @@ def test_materialization_legend_has_incremental():
     legend = docs_mod._materialization_legend()
     assert "incremental" in legend
     assert legend["incremental"]["label"] == "incremental"
+
+
+@pytest.mark.unit
+def test_scan_source_refs(tmp_path: Path):
+    models_dir = tmp_path / "models"
+    models_dir.mkdir(parents=True)
+    sql_path = models_dir / "model_a.sql"
+    sql_path.write_text("select * from {{ source('crm', 'customers') }}", encoding="utf-8")
+
+    nodes = {
+        "model_a": SimpleNamespace(name="model_a", kind="sql", path=sql_path, deps=[], meta={})
+    }
+
+    by_source, by_model = docs_mod._scan_source_refs(nodes)
+
+    assert by_source[("crm", "customers")] == ["model_a"]
+    assert by_model["model_a"] == [("crm", "customers")]
 
 
 # ---------------------------------------------------------------------------

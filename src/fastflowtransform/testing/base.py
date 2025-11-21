@@ -9,6 +9,7 @@ from sqlalchemy.engine import Connection as _SAConn
 from sqlalchemy.sql.elements import ClauseElement
 
 from fastflowtransform.logging import dprint
+from fastflowtransform.utils.timefmt import format_duration_minutes
 
 # ===== Execution helpers (consistent for DuckDB / Postgres / BigQuery) ==
 
@@ -238,52 +239,29 @@ def row_count_between(con: Any, table: str, min_rows: int = 1, max_rows: int | N
         raise TestFailure(f"{table} has too many rows: {c} > {max_rows}")
 
 
-def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None:
-    """
-    Fail if the latest timestamp in `ts_col` is older than `max_delay_minutes`.
-
-    Behaviour:
-    - First, run a lightweight probe on max(ts_col) to detect clearly wrong types
-      (e.g. VARCHAR) and emit an actionable error instead of an engine-specific
-      type/binder exception.
-    - Then compute the delay in minutes using an engine-friendly expression:
-      * Postgres / DuckDB: date_part('epoch', now() - max(ts_col)) / 60.0
-      * Spark / Databricks:
-        (unix_timestamp(current_timestamp()) - unix_timestamp(max(ts_col))) / 60.0
-
-    For Spark-like connections we go straight to the unix_timestamp variant so
-    we do not trigger noisy INVALID_EXTRACT_FIELD logs from the planner.
-    """
-    # 1) Probe type: read max(ts_col) and inspect the Python value that comes back.
+def _freshness_probe(con: Any, table: str, ts_col: str) -> Any:
+    """Read max(ts_col) and wrap engine errors with context."""
     probe_sql = f"select max({ts_col}) from {table}"
     try:
-        probe = _scalar(con, probe_sql)
+        return _scalar(con, probe_sql)
     except Exception as e:
         # Column missing or other metadata-related DB error
         raise _wrap_db_error("freshness", table, ts_col, probe_sql, e) from e
 
-    # If max(...) comes back as a string, this is almost certainly a typed-as-VARCHAR
-    # timestamp column. Fail with a clear hint instead of letting the engine throw.
-    if probe is not None and isinstance(probe, str):
-        raise TestFailure(
-            f"[freshness] {table}.{ts_col} must be a TIMESTAMP-like column, but "
-            f"max({ts_col}) returned a value of type {type(probe).__name__}.\n"
-            f"Hint: cast the column in your model, for example:\n"
-            f"  select ..., CAST({ts_col} AS TIMESTAMP) as {ts_col}, ...\n"
-            f"and then reference that column in the freshness test."
-        )
 
-    # 2) Decide which SQL to use based on the connection type.
-    #
-    # We cannot rely on a formal engine flag here, but the Databricks/Spark
-    # test connection lives in the databricks_spark module and/or wraps
-    # a SparkSession. We use a simple heuristic on the connection type name
-    # and module to detect "Spark-like" behaviour.
+def _detect_engine(con: Any) -> tuple[bool, bool, bool, bool]:
+    """
+    Detect engine flavour from the connection object.
+
+    Returns:
+        (is_spark_like, is_bigquery, is_snowflake, is_duckdb)
+    """
     con_type = type(con)
     mod = getattr(con_type, "__module__", "") or ""
     name = getattr(con_type, "__name__", "") or ""
     mod_l = mod.lower()
     name_l = name.lower()
+
     is_spark_like = any(token in mod_l or token in name_l for token in ("spark", "databricks"))
     is_bigquery = (
         "bigquery" in mod_l
@@ -297,10 +275,33 @@ def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None
         or "snowpark" in name_l
         or hasattr(con, "_session")
     )
+    is_duckdb = "duckdb" in mod_l or "duckdb" in name_l
 
+    return is_spark_like, is_bigquery, is_snowflake, is_duckdb
+
+
+def _compute_delay_minutes(
+    con: Any,
+    table: str,
+    ts_col: str,
+    is_spark_like: bool,
+    is_bigquery: bool,
+    is_snowflake: bool,
+    is_duckdb: bool,
+) -> tuple[float | None, str]:
+    """
+    Compute delay in minutes for max(ts_col) depending on engine type.
+
+    Returns:
+        (delay_minutes, sql_used)
+    """
     # Primary SQL (Postgres / DuckDB style)
+    now_expr = "now()"
+    if is_duckdb:
+        now_expr = "cast(now() as timestamp)"
+
     sql_primary = (
-        f"select date_part('epoch', now() - max({ts_col})) / 60.0 as delay_min from {table}"
+        f"select date_part('epoch', {now_expr} - max({ts_col})) / 60.0 as delay_min from {table}"
     )
 
     # Spark / Databricks: unix_timestamp over timestamps
@@ -312,16 +313,19 @@ def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None
 
     # BigQuery: TIMESTAMP_DIFF returns integer minutes; keep float compatibility
     sql_bigquery = (
-        f"select cast(TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), max({ts_col}), MINUTE) as float64) "
-        f"as delay_min from {table}"
-    )
-    # Snowflake: DATEDIFF on minutes; cast to float to align with other engines
-    sql_snowflake = (
-        f"select DATEDIFF('minute', max({ts_col}), CURRENT_TIMESTAMP())::float as delay_min "
+        "select cast("
+        f"TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), max({ts_col}), MINUTE) as float64"
+        ") as delay_min "
         f"from {table}"
     )
 
-    delay = None
+    # Snowflake: DATEDIFF on minutes; cast to float to align with other engines
+    sql_snowflake = (
+        "select DATEDIFF('minute', max({ts_col}), CURRENT_TIMESTAMP())::float "
+        f"as delay_min from {table}"
+    )
+
+    delay: float | None = None
     sql_used: str
 
     if is_spark_like:
@@ -332,6 +336,7 @@ def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None
             delay = _scalar(con, sql_spark)
         except Exception as e:
             raise _wrap_db_error("freshness", table, ts_col, sql_spark, e) from e
+
     elif is_bigquery:
         sql_used = sql_bigquery
         try:
@@ -339,12 +344,14 @@ def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None
         except Exception as e:
             # BigQuery error messages don't mention EXTRACT/EPOCH; surface directly.
             raise _wrap_db_error("freshness", table, ts_col, sql_bigquery, e) from e
+
     elif is_snowflake:
         sql_used = sql_snowflake
         try:
             delay = _scalar(con, sql_snowflake)
         except Exception as e:
             raise _wrap_db_error("freshness", table, ts_col, sql_snowflake, e) from e
+
     else:
         # Non-Spark engines: try the Postgres/DuckDB expression first.
         sql_used = sql_primary
@@ -367,10 +374,58 @@ def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None
             else:
                 raise _wrap_db_error("freshness", table, ts_col, sql_primary, e) from e
 
+    return delay, sql_used
+
+
+def freshness(con: Any, table: str, ts_col: str, max_delay_minutes: int) -> None:
+    """
+    Fail if the latest timestamp in `ts_col` is older than `max_delay_minutes`.
+
+    Behaviour:
+    - First, run a lightweight probe on max(ts_col) to detect clearly wrong types
+      (e.g. VARCHAR) and emit an actionable error instead of an engine-specific
+      type/binder exception.
+    - Then compute the delay in minutes using an engine-friendly expression:
+      * Postgres / DuckDB: date_part('epoch', now() - max(ts_col)) / 60.0
+      * Spark / Databricks:
+        (unix_timestamp(current_timestamp()) - unix_timestamp(max(ts_col))) / 60.0
+
+    For Spark-like connections we go straight to the unix_timestamp variant so
+    we do not trigger noisy INVALID_EXTRACT_FIELD logs from the planner.
+    """
+    # 1) Probe type: read max(ts_col) and inspect the Python value that comes back.
+    probe = _freshness_probe(con, table, ts_col)
+
+    # If max(...) comes back as a string, this is almost certainly a typed-as-VARCHAR
+    # timestamp column. Fail with a clear hint instead of letting the engine throw.
+    if probe is not None and isinstance(probe, str):
+        raise TestFailure(
+            f"[freshness] {table}.{ts_col} must be a TIMESTAMP-like column, but "
+            f"max({ts_col}) returned a value of type {type(probe).__name__}.\n"
+            "Hint: cast the column in your model, for example:\n"
+            f"  select ..., CAST({ts_col} AS TIMESTAMP) as {ts_col}, ...\n"
+            "and then reference that column in the freshness test."
+        )
+
+    # 2) Compute delay based on connection type.
+    is_spark_like, is_bigquery, is_snowflake, is_duckdb = _detect_engine(con)
+    delay, sql_used = _compute_delay_minutes(
+        con=con,
+        table=table,
+        ts_col=ts_col,
+        is_spark_like=is_spark_like,
+        is_bigquery=is_bigquery,
+        is_snowflake=is_snowflake,
+        is_duckdb=is_duckdb,
+    )
+
     dprint("freshness:", sql_used, "=>", delay)
+
     if delay is None or delay > max_delay_minutes:
         raise TestFailure(
-            f"freshness of {table}.{ts_col} too old: {delay} min > {max_delay_minutes} min"
+            f"freshness of {table}.{ts_col} too old: "
+            f"{format_duration_minutes(delay)} > "
+            f"{format_duration_minutes(max_delay_minutes)}"
         )
 
 

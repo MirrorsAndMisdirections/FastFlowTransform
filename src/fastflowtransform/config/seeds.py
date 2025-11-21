@@ -63,6 +63,35 @@ class SeedTargetConfig(BaseModel):
         return self
 
 
+class SeedColumnConfig(BaseModel):
+    """Column typing metadata for seeds/schema.yml."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    type_: str | None = Field(default=None, alias="type")
+    engines: dict[EngineType, str] = Field(default_factory=dict)
+
+    @field_validator("type_")
+    @classmethod
+    def _strip_type(cls, value: str | None) -> str | None:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return cleaned or None
+        return value
+
+    @field_validator("engines")
+    @classmethod
+    def _strip_engines(cls, value: dict[str, str]) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for eng, typ in (value or {}).items():
+            if not isinstance(typ, str):
+                continue
+            typ_clean = typ.strip()
+            if typ_clean:
+                out[eng] = typ_clean
+        return out
+
+
 class SeedsSchemaConfig(BaseModel):
     """
     Top-level configuration for seeds/schema.yml.
@@ -78,12 +107,20 @@ class SeedsSchemaConfig(BaseModel):
         <table-key>:
           column_a: string
           column_b: int64
+
+      columns:
+        <table-key>:
+          <column-name>:
+            type: string|integer|timestamp|...
+            engines:
+              postgres: timestamptz
     """
 
     model_config = ConfigDict(extra="forbid")
 
     targets: dict[str, SeedTargetConfig] = Field(default_factory=dict)
     dtypes: dict[str, dict[str, str]] = Field(default_factory=dict)
+    columns: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @field_validator("dtypes")
     @classmethod
@@ -100,6 +137,30 @@ class SeedsSchemaConfig(BaseModel):
                 dtype_clean = dtype.strip()
                 if col_clean and dtype_clean:
                     clean_cols[col_clean] = dtype_clean
+            if clean_cols:
+                out[table_key] = clean_cols
+        return out
+
+    @field_validator("columns")
+    @classmethod
+    def _normalize_columns(
+        cls, value: dict[str, dict[str, Any]]
+    ) -> dict[str, dict[str, SeedColumnConfig]]:
+        out: dict[str, dict[str, SeedColumnConfig]] = {}
+        for table_key, cols in (value or {}).items():
+            if not isinstance(cols, dict):
+                continue
+            clean_cols: dict[str, SeedColumnConfig] = {}
+            for col_name, payload in cols.items():
+                if not isinstance(col_name, str):
+                    continue
+                col_clean = col_name.strip()
+                if not col_clean:
+                    continue
+                if isinstance(payload, dict):
+                    clean_cols[col_clean] = SeedColumnConfig.model_validate(payload)
+                elif isinstance(payload, str):
+                    clean_cols[col_clean] = SeedColumnConfig(type=payload)
             if clean_cols:
                 out[table_key] = clean_cols
         return out

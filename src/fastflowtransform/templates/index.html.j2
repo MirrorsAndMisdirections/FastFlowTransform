@@ -68,6 +68,7 @@
     .chip { font-size:12px; padding:2px 10px; border-radius:999px; border:1px solid var(--border); }
     .chip.sql { background: var(--chip-sql-bg); color: var(--chip-sql-fg); }
     .chip.py  { background: var(--chip-py-bg);  color: var(--chip-py-fg);  }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid var(--border); font-size:12px; margin-right:4px; }
 
     .badge { font: 12px/1.6 system-ui, sans-serif; padding: 2px 8px; border-radius: 999px; border: 1px solid transparent; }
     .badge-table { background:#eef7ff; color:#0a3a77; border-color:#bcd8fb; }
@@ -187,6 +188,61 @@
         </table>
       {% else %}
         <p>No macros found.</p>
+      {% endif %}
+    </section>
+
+    <section class="card">
+      <h2>Sources</h2>
+      {% if sources and sources|length %}
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Relation</th>
+              <th>Freshness</th>
+              <th>Consumers</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for s in sources %}
+              <tr>
+                <td class="nowrap">
+                  <a href="{{ s.doc_filename }}">{{ s.source_name }}.{{ s.table_name }}</a>
+                  {% if s.description_html %}
+                    <span class="subline">{{ s.description_html|striptags|trim|truncate(160, True, '…') }}</span>
+                  {% endif %}
+                </td>
+                <td><code>{{ s.relation }}</code></td>
+                <td class="muted">
+                  {% if s.loaded_at_field %}
+                    <div class="mono">field: <code>{{ s.loaded_at_field }}</code></div>
+                  {% endif %}
+                  <div>
+                    {% if s.warn_after_minutes is not none %}
+                      <span class="pill" style="background:#fff7e8;color:#7a4a00;border-color:#f6db9b;">warn {{ s.warn_after_minutes }}m</span>
+                    {% else %}
+                      <span class="pill" style="background:rgba(127,127,127,.08);color:var(--muted);">no warn</span>
+                    {% endif %}
+                    {% if s.error_after_minutes is not none %}
+                      <span class="pill" style="background:#fef2f2;color:#991b1b;border-color:#fecaca;">error {{ s.error_after_minutes }}m</span>
+                    {% else %}
+                      <span class="pill" style="background:rgba(127,127,127,.08);color:var(--muted);">no error</span>
+                    {% endif %}
+                  </div>
+                </td>
+                <td>
+                  {% if s.consumers and s.consumers|length %}
+                    {{ s.consumers|length }} model{{ 's' if s.consumers|length > 1 else '' }}
+                  {% else %}
+                    <span class="muted">–</span>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="muted">No sources declared.</p>
       {% endif %}
     </section>
   </div>

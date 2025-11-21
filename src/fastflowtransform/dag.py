@@ -96,25 +96,47 @@ def _quote_label(s: str) -> str:
     return f'"{s}"'
 
 
-def mermaid(nodes: dict[str, Node]) -> str:
+def _source_node_id(source_name: str, table_name: str) -> str:
+    return _mm_id(f"src_{source_name}_{table_name}")
+
+
+def mermaid(
+    nodes: dict[str, Node],
+    source_links: dict[tuple[str, str], dict[str, str]] | None = None,
+    model_source_refs: dict[str, list[tuple[str, str]]] | None = None,
+) -> str:
     lines = [
         "flowchart TD",
         "  classDef sql fill:#e8f1ff,stroke:#5b8def,color:#0a1f44;",
         "  classDef py  fill:#e9fbf1,stroke:#2bb673,color:#0b2e1f;",
     ]
+    if source_links:
+        lines.append("  classDef source fill:#fef3c7,stroke:#f59e0b,color:#78350f;")
 
     # Nodes
     for n in sorted(nodes.values(), key=lambda x: x.name):
         nid = _mm_id(n.name)
         phys = relation_for(n.name)
-        # Wichtig: Label quoten, KEINE Backslashes vor Klammern
         label = _quote_label(f"{n.name}<br/>({phys})")
         if n.kind == "python":
-            lines.append(f"  {nid}({label})")  # runde Ecken
+            lines.append(f"  {nid}({label})")
             lines.append(f"  class {nid} py;")
         else:
-            lines.append(f"  {nid}[{label}]")  # Rechteck
+            lines.append(f"  {nid}[{label}]")
             lines.append(f"  class {nid} sql;")
+        lines.append(f'  click {nid} "{n.name}.html" "View model"')
+
+    source_ids: dict[tuple[str, str], str] = {}
+    if source_links:
+        for (src_name, tbl_name), meta in sorted(source_links.items(), key=lambda x: x[0]):
+            sid = _source_node_id(src_name, tbl_name)
+            label = _quote_label(meta.get("label") or f"{src_name}.{tbl_name}")
+            lines.append(f"  {sid}[[{label}]]")
+            lines.append(f"  class {sid} source;")
+            link = meta.get("file")
+            if link:
+                lines.append(f'  click {sid} "{link}" "View source"')
+            source_ids[(src_name, tbl_name)] = sid
 
     # Edges
     for n in nodes.values():
@@ -122,6 +144,13 @@ def mermaid(nodes: dict[str, Node]) -> str:
         for d in n.deps:
             if d in nodes:
                 lines.append(f"  {_mm_id(d)} --> {tgt}")
+        if model_source_refs and source_ids:
+            for ref in model_source_refs.get(n.name, []):
+                ref_id = source_ids.get(ref)
+                if ref_id is None:
+                    continue
+                sid = ref_id
+                lines.append(f"  {sid} --> {tgt}")
 
     lines.append("")
     return "\n".join(lines)

@@ -16,7 +16,8 @@ from pandas import DataFrame as _PDDataFrame
 
 from fastflowtransform import incremental as _ff_incremental
 from fastflowtransform.api import context as _http_ctx
-from fastflowtransform.core import REGISTRY, Node, relation_for, resolve_source_entry
+from fastflowtransform.config.sources import resolve_source_entry
+from fastflowtransform.core import REGISTRY, Node, relation_for
 from fastflowtransform.errors import ModelExecutionError
 from fastflowtransform.incremental import _normalize_unique_key
 from fastflowtransform.logging import echo, echo_debug

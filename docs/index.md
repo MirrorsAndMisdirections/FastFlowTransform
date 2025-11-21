@@ -59,6 +59,7 @@ Use this page as the front door into the docs: start with the orientation sectio
 
 - **Schema-bound YAML tests:** [YAML Tests](YAML_Tests.md) details how to define and run column-level constraints declared in `.yml`.
 - **Reusable data-quality suites:** [Data Quality Tests](Data_Quality_Tests.md) catalogs reconciliation, freshness, and anomaly rules that can attach to models or sources.
+- **Source freshness guard-rails:** [Source Freshness](Source_Freshness.md) covers `fft source freshness`, metadata in `sources.yml`, and interpreting warn/error thresholds in the docs UI.
 - **Fast model unit tests:** [Unit Tests](Unit_Tests.md) shows how to author `.sql` / `.py` assertions, seed fixtures, and run them via `fft utest`.
 
 ---

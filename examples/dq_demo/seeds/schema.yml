@@ -1,0 +1,20 @@
+# Target placement for demo seeds
+targets:
+  seed_customers:
+    schema: dq_demo
+  seed_orders:
+    schema: dq_demo
+
+columns:
+  seed_customers:
+    customer_id: integer
+    name: string
+    status: string
+    created_at:
+      type: timestamp
+  seed_orders:
+    order_id: integer
+    customer_id: integer
+    amount: double
+    order_ts:
+      type: timestamp

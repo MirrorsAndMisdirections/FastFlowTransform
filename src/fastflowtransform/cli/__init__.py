@@ -63,6 +63,7 @@ from fastflowtransform.cli.selectors import (
     _selector,
 )
 from fastflowtransform.cli.snapshot_cmd import register as _register_snapshot, snapshot
+from fastflowtransform.cli.source_cmd import register as _register_source
 from fastflowtransform.cli.sync_db_comments_cmd import (
     _pg_fq_table,
     _pg_quote_ident,
@@ -130,6 +131,7 @@ _register_docgen(app)
 _register_sync_db_comments(app)
 _register_init(app)
 _register_snapshot(app)
+_register_source(app)
 
 
 __all__ = [

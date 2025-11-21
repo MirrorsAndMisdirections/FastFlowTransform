@@ -7,6 +7,7 @@ import shutil
 import uuid
 from collections.abc import Callable, Iterable
 from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any, NamedTuple, cast
@@ -15,7 +16,7 @@ from urllib.parse import unquote, urlparse
 import pandas as pd
 
 from fastflowtransform import storage
-from fastflowtransform.config.seeds import SeedsSchemaConfig, load_seeds_schema
+from fastflowtransform.config.seeds import SeedColumnConfig, SeedsSchemaConfig, load_seeds_schema
 from fastflowtransform.executors.snowflake_snowpark import SnowflakeSnowparkExecutor
 from fastflowtransform.logging import echo
 from fastflowtransform.settings import EngineType
@@ -62,6 +63,123 @@ def _apply_schema(
     except Exception:
         # Prefer loading data over failing the run; you may log a warning here.
         return df
+
+
+_DEFAULT_COL_TYPE = "string"
+
+_TYPE_ALIASES = {
+    "varchar": "string",
+    "text": "string",
+    "str": "string",
+    "int": "integer",
+    "int4": "integer",
+    "integer": "integer",
+    "bigint": "bigint",
+    "int8": "bigint",
+    "double": "double",
+    "float": "double",
+    "float64": "double",
+    "numeric": "numeric",
+    "decimal": "numeric",
+    "boolean": "boolean",
+    "bool": "boolean",
+    "timestamp": "timestamp",
+    "datetime": "timestamp",
+    "timestamptz": "timestamptz",
+    "date": "date",
+}
+
+
+def _canonical_type(value: str | None) -> str:
+    if not value:
+        return _DEFAULT_COL_TYPE
+    low = value.strip().lower()
+    return _TYPE_ALIASES.get(low, low or _DEFAULT_COL_TYPE)
+
+
+def _column_schema_for_table(
+    schema_cfg: SeedsSchemaConfig | None,
+    table: str,
+) -> dict[str, SeedColumnConfig]:
+    if not schema_cfg:
+        return {}
+    return schema_cfg.columns.get(table) or {}
+
+
+def _resolve_column_type_for_engine(
+    column: SeedColumnConfig | None,
+    engine: str,
+) -> str:
+    if column is None:
+        return _DEFAULT_COL_TYPE
+    engine_key = cast(EngineType, engine)
+    override = column.engines.get(engine_key)
+    if override:
+        return _canonical_type(override)
+    return _canonical_type(column.type_)
+
+
+def _cast_series_to_type(series: pd.Series, target: str, table: str, column: str) -> pd.Series:
+    kind = target or _DEFAULT_COL_TYPE
+    if kind in {"string", "varchar", "text"}:
+        return series.astype("string")
+    if kind in {"integer", "bigint"}:
+        numeric = pd.to_numeric(series, errors="raise")
+        return numeric.astype("Int64")
+    if kind in {"double", "numeric"}:
+        return pd.to_numeric(series, errors="raise")
+    if kind == "boolean":
+        return series.astype("boolean")
+    if kind == "timestamp":
+        return pd.to_datetime(series, errors="raise")
+    if kind == "timestamptz":
+        return pd.to_datetime(series, errors="raise", utc=True)
+    if kind == "date":
+        dt = pd.to_datetime(series, errors="raise")
+        return dt.dt.date
+    raise ValueError(f"Unsupported column type '{target}' for {table}.{column} in seeds/schema.yml")
+
+
+def _apply_column_schema(
+    df: pd.DataFrame,
+    table: str,
+    schema_cfg: SeedsSchemaConfig | None,
+    executor: Any,
+) -> pd.DataFrame:
+    column_cfg = _column_schema_for_table(schema_cfg, table)
+    if not column_cfg:
+        return df
+
+    engine = _engine_name_from_executor(executor)
+    missing = [col for col in column_cfg if col not in df.columns]
+    if missing:
+        cols = ", ".join(missing)
+        raise ValueError(
+            f"seeds/schema.yml declares column(s) {cols} "
+            f"for table '{table}', but they are not present"
+        )
+
+    df_out = df.copy()
+    for col in df.columns:
+        target_type = _resolve_column_type_for_engine(column_cfg.get(col), engine)
+        try:
+            df_out[col] = _cast_series_to_type(df_out[col], target_type, table, col)
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to cast column '{col}' in '{table}' to type '{target_type}': {exc}"
+            ) from exc
+
+    return df_out
+
+
+def _inject_seed_metadata(df: pd.DataFrame, seed_id: str, path: Path) -> pd.DataFrame:
+    """Append metadata columns that track load info for every seed."""
+    stamp = datetime.now(UTC)
+    df_out = df.copy()
+    df_out["_ff_loaded_at"] = stamp
+    df_out["_ff_seed_id"] = seed_id
+    df_out["_ff_seed_file"] = str(path)
+    return df_out
 
 
 # -------------------------------- Identifier utilities --------------------------------
@@ -787,6 +905,7 @@ def _handle_snowflake_snowpark(
         auto_create_table=True,
         quote_identifiers=False,
         overwrite=True,
+        use_logical_type=True,
     )
     dt_ms = int((perf_counter() - t0) * 1000)
 
@@ -920,8 +1039,10 @@ def seed_project(project_dir: Path, executor: Any, default_schema: str | None = 
             )
 
         df = _read_seed_file(path)
-        # Use the resolved *table* key for dtypes (allows rename-aware dtype mapping in cfg).
+        # Use the resolved *table* key for schema enforcement (allows rename-aware mapping).
         df = _apply_schema(df, table, schema_cfg)
+        df = _apply_column_schema(df, table, schema_cfg, executor)
+        df = _inject_seed_metadata(df, seedid, path)
 
         materialize_seed(table, df, executor, schema=schema)
         count += 1
