@@ -444,7 +444,7 @@ def snowflake_executor_fake() -> Any:
     session = FakeSnowflakeSession()
     ex.session = session
     if _SFCursorShim is not None:
-        ex.con = _SFCursorShim(session)
+        ex.con = _SFCursorShim(session)  # type: ignore[arg-type]
     else:
         # Cheap fallback if for some reason the shim isn't available
         ex.con = types.SimpleNamespace(execute=lambda sql, params=None: None)

@@ -68,6 +68,10 @@ class FakeSnowparkDataFrame:
         return FakeSnowparkDataFrame(self._session, self._sql, list(cols))
 
 
+# Make sure the executor treats FakeSnowparkDataFrame as SNDF when optional deps are missing.
+sf_mod.SNDF = FakeSnowparkDataFrame  # type: ignore[attr-defined]
+
+
 class FakeSession:
     """
     Minimal session mock:
@@ -265,8 +269,8 @@ def test_create_view_over_table_issues_sql(sf_exec):
 @pytest.mark.unit
 @pytest.mark.snowflake_snowpark
 def test_validate_required_single_df_ok(sf_exec):
-    SNDF = sf_mod.SNDF
-    df = SNDF(sf_exec.session)  # type: ignore[call-arg]
+    df = FakeSnowparkDataFrame(sf_exec.session, cols=["ID", "NAME", "AGE"])
+
     df.schema = SimpleNamespace(names=["ID", "NAME", "AGE"])  # type: ignore[attr-defined]
 
     sf_exec._validate_required(
@@ -279,8 +283,8 @@ def test_validate_required_single_df_ok(sf_exec):
 @pytest.mark.unit
 @pytest.mark.snowflake_snowpark
 def test_validate_required_single_df_missing(sf_exec):
-    SNDF = sf_mod.SNDF
-    df = SNDF(sf_exec.session)  # type: ignore[call-arg]
+    df = FakeSnowparkDataFrame(sf_exec.session, cols=["ID", "NAME", "AGE"])
+
     df.schema = SimpleNamespace(names=["ID"])  # type: ignore[attr-defined]
 
     with pytest.raises(ValueError) as exc:
@@ -324,8 +328,8 @@ def test_validate_required_multi_input_missing_key(sf_exec):
 @pytest.mark.unit
 @pytest.mark.snowflake_snowpark
 def test_validate_required_is_case_insensitive(sf_exec):
-    SNDF = sf_mod.SNDF
-    df = SNDF(sf_exec.session)  # type: ignore[call-arg]
+    df = FakeSnowparkDataFrame(sf_exec.session, cols=["ID", "NAME", "AGE"])
+
     # Snowflake-style upper-case physical columns
     df.schema = SimpleNamespace(names=["USER_ID", "EMAIL"])  # type: ignore[attr-defined]
 
