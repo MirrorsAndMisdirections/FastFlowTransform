@@ -10,7 +10,7 @@ import pandas as pd
 
 # Optional dependency: provide lightweight fallbacks when google libs are absent.
 try:
-    from google.api_core.exceptions import BadRequest, NotFound
+    from google.api_core.exceptions import BadRequest, NotFound  # type: ignore[attr-defined]
 except Exception:  # pragma: no cover - when google is not installed
 
     class BadRequest(Exception):
@@ -39,6 +39,13 @@ class FakeDFResult:
     def __init__(self, rows: list[tuple] | None = None, schema: list[FakeField] | None = None):
         self._rows = rows or []
         self._schema = schema or []
+
+    def __iter__(self):
+        # Allow patterns like: list(job.result())
+        return iter(self._rows)
+
+    def __len__(self) -> int:
+        return len(self._rows)
 
     def to_dataframe(self, create_bqstorage_client: bool = True):
         if not self._rows:
@@ -112,6 +119,7 @@ class FakeClient:
         self.queries: list[tuple[str, str | None, Any | None]] = []
         self._datasets: dict[str, FakeDataset] = {}
         self._tables: dict[str, list[Any]] = {}
+        self._relations: set[str] = set()
 
     # ---- Test helper ----
     def add_dataset(self, ds_id: str) -> None:
@@ -123,20 +131,70 @@ class FakeClient:
     # ---- Emulator methods ----
     def query(self, sql: str, location: str | None = None, job_config: Any | None = None):
         self.queries.append((sql, location, job_config))
+        upper_sql = sql.upper()
 
-        # INFORMATION_SCHEMA → 1 Row back
-        if "INFORMATION_SCHEMA.TABLES" in sql or "INFORMATION_SCHEMA.VIEWS" in sql:
-            return FakeJob(rows=[(1,)])
+        # --- INFORMATION_SCHEMA existence checks ---
+        if "INFORMATION_SCHEMA.TABLES" in upper_sql or "INFORMATION_SCHEMA.VIEWS" in upper_sql:
+            rel_name: str | None = None
+            # Extract the @rel parameter from QueryJobConfig, if present
+            if job_config is not None and hasattr(job_config, "kwargs"):
+                params = job_config.kwargs.get("query_parameters") or []
+                for p in params:
+                    if getattr(p, "name", None) == "rel":
+                        rel_name = getattr(p, "value", None)
+                        break
 
-        # Probe-Query (SELECT ... WHERE 1=0) → Schema back
-        if "WHERE 1=0" in sql:
-            return FakeJob(schema=[FakeField("id"), FakeField("new_col", "INT64")])
+            if rel_name and rel_name in self._relations:
+                # Relation exists
+                return FakeJob(rows=[(1,)])
+            # Relation does NOT exist
+            return FakeJob(rows=[])
 
-        # ALTER TABLE ... ADD COLUMN ...
-        if sql.lstrip().upper().startswith("ALTER TABLE"):
+        # --- CREATE TABLE / CREATE OR REPLACE TABLE ---
+        trimmed_upper = upper_sql.lstrip()
+        trimmed_orig = sql.lstrip()
+
+        lower_trimmed = trimmed_orig.lower()
+        if trimmed_upper.startswith("CREATE TABLE") or trimmed_upper.startswith(
+            "CREATE OR REPLACE TABLE"
+        ):
+            # After "table" comes the identifier: `project.dataset.table` or similar
+            after_table = trimmed_orig[lower_trimmed.index("table") + len("table") :].strip()
+            if after_table.lower().startswith("if not exists"):
+                after_table = after_table[len("if not exists") :].strip()
+            # Cut at common delimiters: AS / ( / whitespace-newline
+            for sep in [" AS", " (", "\n", "\t"]:
+                idx = after_table.find(sep)
+                if idx != -1:
+                    after_table = after_table[:idx]
+                    break
+            ident = after_table.strip().strip("`")
+            table_name = ident.split(".")[-1]
+            self._relations.add(table_name)
             return FakeJob()
 
-        # everything else → empty return
+        # --- CREATE OR REPLACE VIEW ---
+        if trimmed_upper.startswith("CREATE OR REPLACE VIEW"):
+            after_view = trimmed_orig[lower_trimmed.index("view") + len("view") :].strip()
+            for sep in [" AS", " (", "\n", "\t"]:
+                idx = after_view.find(sep)
+                if idx != -1:
+                    after_view = after_view[:idx]
+                    break
+            ident = after_view.strip().strip("`")
+            view_name = ident.split(".")[-1]
+            self._relations.add(view_name)
+            return FakeJob()
+
+        # --- Probe-Query (SELECT ... WHERE 1=0) → schema back for alter_table_sync_schema ---
+        if "WHERE 1=0" in upper_sql:
+            return FakeJob(schema=[FakeField("id"), FakeField("new_col", "INT64")])
+
+        # --- ALTER TABLE ... ADD COLUMN ... ---
+        if trimmed_upper.startswith("ALTER TABLE"):
+            return FakeJob()
+
+        # Default: generic, empty job
         return FakeJob()
 
     def list_tables(self, dataset_id: str):

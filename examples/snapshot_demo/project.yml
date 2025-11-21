@@ -7,20 +7,7 @@ docs:
 
 vars: {}
 
-models:
-  storage:
-    mart_users_by_domain.ff:
-      path: ".local/spark/events_base"
-      # format: parquet
-    users_clean.ff:
-      path: ".local/spark/users_clean"
-      # format: parquet
-    users_clean_snapshot.ff:
-      path: ".local/spark/users_clean_snapshot"
-      # format: parquet
-    mart_users_by_domain_snapshot.ff:
-      path: ".local/spark/mart_users_by_domain_snapshot"
-      # format: parquet
+models: {}
 
 tests:
   # --------------------------------------------------------------------------

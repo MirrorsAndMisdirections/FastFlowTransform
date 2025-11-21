@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import Any
 
 from fastflowtransform.table_formats.base import SparkFormatHandler
@@ -24,8 +25,10 @@ class IcebergFormatHandler(SparkFormatHandler):
         *,
         table_options: dict[str, Any] | None = None,
     ) -> None:
-        super().__init__(spark, table_format="iceberg", table_options=table_options or {})
-        self.catalog_name = "iceberg"
+        options = dict(table_options or {})
+        catalog = options.pop("catalog_name", None) or options.pop("__catalog_name__", None)
+        self.catalog_name = str(catalog) if catalog else "iceberg"
+        super().__init__(spark, table_format="iceberg", table_options=options)
 
     # ---------- Core helpers ----------
     def _qualify_table_name(self, table_name: str, database: str | None = None) -> str:
@@ -60,10 +63,57 @@ class IcebergFormatHandler(SparkFormatHandler):
     def relation_exists(self, table_name: str, *, database: str | None = None) -> bool:
         ident = self.qualify_identifier(table_name, database=database)
         try:
-            self.spark.table(ident)
-            return True
+            return bool(self.spark.catalog.tableExists(ident))
         except Exception:
             return False
+
+    @staticmethod
+    def _quote_part(value: str) -> str:
+        return f"`{value.replace('`', '``')}`"
+
+    def _sql_identifier(self, table_name: str, *, database: str | None = None) -> str:
+        qualified = self._qualify_table_name(table_name, database=database)
+        parts = [p for p in qualified.split(".") if p]
+        return ".".join(self._quote_part(part) for part in parts)
+
+    @staticmethod
+    def _sql_literal(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    def _restore_table_metadata(
+        self,
+        table_ident: str,
+        *,
+        table_comment: str | None,
+        column_comments: dict[str, str],
+        table_properties: dict[str, Any],
+    ) -> None:
+        if table_comment:
+            with suppress(Exception):
+                self.spark.sql(
+                    f"COMMENT ON TABLE {table_ident} IS {self._sql_literal(table_comment)}"
+                )
+
+        if table_properties:
+            assignments = []
+            for key, value in table_properties.items():
+                if value is None:
+                    continue
+                key_str = str(key)
+                if key_str.lower() in {"transient_lastddltime"}:
+                    continue
+                assignments.append(f"{self._sql_literal(key_str)}={self._sql_literal(str(value))}")
+            if assignments:
+                props = ", ".join(assignments)
+                with suppress(Exception):
+                    self.spark.sql(f"ALTER TABLE {table_ident} SET TBLPROPERTIES ({props})")
+
+        for name, comment in column_comments.items():
+            if not comment:
+                continue
+            col_ident = f"{table_ident}.{self._quote_part(name)}"
+            with suppress(Exception):
+                self.spark.sql(f"COMMENT ON COLUMN {col_ident} IS {self._sql_literal(comment)}")
 
     # ---------- Required API ----------
     def save_df_as_table(self, table_name: str, df: SDF) -> None:
@@ -75,13 +125,50 @@ class IcebergFormatHandler(SparkFormatHandler):
             df.writeTo("iceberg.db.table").using("iceberg").createOrReplace()
         """
         full_name = self._qualify_table_name(table_name)
-
         writer = df.writeTo(full_name).using("iceberg")
         for k, v in self.table_options.items():
             writer = writer.tableProperty(str(k), str(v))
 
+        existed = False
+        table_comment: str | None = None
+        table_properties: dict[str, Any] = {}
+        column_comments: dict[str, str] = {}
+        table_ident = self._sql_identifier(table_name)
+
+        try:
+            existed = bool(self.spark.catalog.tableExists(full_name))
+        except Exception:
+            existed = False
+
+        if existed:
+            try:
+                info = self.spark.catalog.getTable(full_name)
+                table_comment = getattr(info, "description", None)
+                props = getattr(info, "properties", None)
+                if isinstance(props, dict):
+                    table_properties = dict(props)
+            except Exception:
+                pass
+
+            try:
+                cols = self.spark.catalog.listColumns(full_name)
+                for col in cols:
+                    comment = getattr(col, "comment", None)
+                    if comment:
+                        column_comments[col.name] = comment
+            except Exception:
+                column_comments = {}
+
         # Upsert semantics for seeds / full-refresh
         writer.createOrReplace()
+
+        if existed:
+            self._restore_table_metadata(
+                table_ident,
+                table_comment=table_comment,
+                column_comments=column_comments,
+                table_properties=table_properties,
+            )
 
     # ---------- Incremental API ----------
     def incremental_insert(self, table_name: str, select_body_sql: str) -> None:
@@ -89,7 +176,7 @@ class IcebergFormatHandler(SparkFormatHandler):
         if not body.lower().startswith("select"):
             raise ValueError(f"incremental_insert expects SELECT body, got: {body[:40]!r}")
 
-        full_name = self._qualify_table_name(table_name)
+        full_name = self._sql_identifier(table_name)
         self.spark.sql(f"INSERT INTO {full_name} {body}")
 
     def incremental_merge(
@@ -112,7 +199,7 @@ class IcebergFormatHandler(SparkFormatHandler):
             self.incremental_insert(table_name, body)
             return
 
-        full_name = self._qualify_table_name(table_name)
+        full_name = self._sql_identifier(table_name)
         pred = " AND ".join([f"t.`{k}` = s.`{k}`" for k in unique_key])
 
         self.spark.sql(

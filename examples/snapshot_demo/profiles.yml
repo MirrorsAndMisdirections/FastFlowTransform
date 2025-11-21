@@ -11,12 +11,27 @@ dev_postgres:
     dsn: "{{ env('FF_PG_DSN') }}"
     db_schema: "{{ env('FF_PG_SCHEMA', 'snapshot_demo') }}"
 
+dev_databricks_parquet: &snapshot_demo_databricks_parquet
+  engine: databricks_spark
+  databricks_spark:
+    master: "{{ env('FF_SPARK_MASTER', 'local[*]') }}"
+    app_name: "{{ env('FF_SPARK_APP_NAME', 'snapshot_demo_parquet') }}"
+    warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse_parquet"
+    database: "{{ env('FF_DBR_DATABASE', 'snapshot_demo_parquet') }}"
+    extra_conf:
+      spark.hadoop.javax.jdo.option.ConnectionURL: "jdbc:derby:{{ project_dir() }}/.local/metastore_db;create=true"
+      spark.hadoop.datanucleus.rdbms.datastoreAdapterClassName: "org.datanucleus.store.rdbms.adapter.DerbyAdapter"
+      spark.hadoop.datanucleus.schema.autoCreateAll: "true"
+      spark.hadoop.javax.jdo.option.ConnectionDriverName: "org.apache.derby.jdbc.EmbeddedDriver"
+      spark.driver.extraJavaOptions: "-Dderby.stream.error.file={{ project_dir() }}/.local/derby.log"
+
 dev_databricks_delta:
   engine: databricks_spark
   databricks_spark:
     master: "{{ env('FF_SPARK_MASTER', 'local[*]') }}"
-    app_name: "{{ env('FF_SPARK_APP_NAME', 'snapshot_demo') }}"
-    warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse"
+    app_name: "{{ env('FF_SPARK_APP_NAME', 'snapshot_demo_delta') }}"
+    warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse_delta"
+    database: "{{ env('FF_DBR_DATABASE', 'snapshot_demo_delta') }}"
     extra_conf:
       spark.hadoop.javax.jdo.option.ConnectionURL: "jdbc:derby:{{ project_dir() }}/.local/metastore_db;create=true"
       spark.hadoop.datanucleus.rdbms.datastoreAdapterClassName: "org.datanucleus.store.rdbms.adapter.DerbyAdapter"
@@ -28,16 +43,21 @@ dev_databricks_iceberg:
   engine: databricks_spark
   databricks_spark:
     master: "{{ env('FF_SPARK_MASTER', 'local[*]') }}"
-    app_name: "{{ env('FF_SPARK_APP_NAME', 'snapshot_demo') }}"
-    warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse"
+    app_name: "{{ env('FF_SPARK_APP_NAME', 'snapshot_demo_iceberg') }}"
+    warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse_iceberg"
+    database: "{{ env('FF_DBR_DATABASE', 'snapshot_demo_iceberg') }}"
     table_format: "iceberg"
     extra_conf:
       spark.jars.packages: "org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.0"
       spark.sql.catalog.iceberg: "org.apache.iceberg.spark.SparkCatalog"
       spark.sql.catalog.iceberg.type: "hadoop"
-      spark.sql.catalog.iceberg.warehouse: "file://{{ project_dir() }}/.local/iceberg_warehouse"
+      spark.sql.catalog.iceberg.warehouse: "file://{{ project_dir() }}/.local/iceberg_warehouse_snapshot"
       spark.sql.catalog.iceberg.write.metadata.version-hint.enabled: "false"
       spark.sql.catalog.iceberg.read.metadata.version-hint.enabled: "false"
+
+# Backwards-compatible alias (defaults to parquet)
+dev_databricks:
+  <<: *snapshot_demo_databricks_parquet
 
 dev_bigquery_bigframes:
   engine: bigquery

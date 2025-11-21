@@ -33,15 +33,15 @@ endif
 ifeq ($(ENGINE),databricks_spark)
   ENGINE_TAG = engine:databricks_spark
   # Choose profile based on table format so we can have separate configs:
+  # - dev_databricks_parquet (managed parquet)
   # - dev_databricks_delta   (Delta Lake)
   # - dev_databricks_iceberg (Iceberg)
-  # - dev_databricks         (generic / parquet)
   ifeq ($(DBR_TABLE_FORMAT),delta)
     PROFILE_ENV = dev_databricks_delta
   else ifeq ($(DBR_TABLE_FORMAT),iceberg)
     PROFILE_ENV = dev_databricks_iceberg
   else
-    PROFILE_ENV = dev_databricks_delta
+    PROFILE_ENV = dev_databricks_parquet
   endif
 endif
 ifeq ($(ENGINE),bigquery)

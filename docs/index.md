@@ -9,13 +9,13 @@ Use this page as the front door into the docs: start with the orientation sectio
 ## Table of Contents
 
 - [Quick Orientation](#quick-orientation)
-- [Build & Run Projects](#build--run-projects)
-- [Modeling & Configuration](#modeling--configuration)
-- [Execution & State Management](#execution--state-management)
-- [Testing & Data Quality](#testing--data-quality)
-- [Docs, Debugging & Operations](#docs-debugging--operations)
-- [Examples & Tutorials](#examples--tutorials)
-- [Reference & Contribution](#reference--contribution)
+- [Build & Run Projects](#build-run-projects)
+- [Modeling & Configuration](#modeling-configuration)
+- [Execution & State Management](#execution-state-management)
+- [Testing & Data Quality](#testing-data-quality)
+- [Docs, Debugging & Operations](#docs-debugging-operations)
+- [Examples & Tutorials](#examples-tutorials)
+- [Reference & Contribution](#reference-contribution)
 - [Need Help?](#need-help)
 
 ---
@@ -85,7 +85,7 @@ All demos live in the top-level `examples/` directory and ship with Makefiles pl
 
 ## Reference & Contribution
 
-- **API reference:** Browse the generated [API Reference](reference/) (MkDocStrings) for public functions, classes, and executors under `src/fastflowtransform`.
+- **API reference:** Browse the generated [API Reference](reference/index.md) (MkDocStrings) for public functions, classes, and executors under `src/fastflowtransform`.
 - **Architecture internals:** The [Technical Overview](Technical_Overview.md#part-ii-architecture-internals) dives into registries, DAG building, validation, and engine abstractions.
 - **Contributing:** Follow [Contributing.md](Contributing.md) for dev environment setup (`uv`, `pyproject.toml`), coding standards, tests, and PR expectations.
 - **License:** Apache 2.0 — see [License.md](License.md).

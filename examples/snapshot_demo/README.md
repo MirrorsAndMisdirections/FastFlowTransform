@@ -12,8 +12,12 @@ Copy one of the `.env.dev_*` files and export it before running `make`:
 | --- | --- |
 | `.env.dev_duckdb` | Local DuckDB file for the demo |
 | `.env.dev_postgres` | Postgres DSN/schema |
-| `.env.dev_databricks_delta` | Local Spark or Databricks defaults for parquet/Delta tables |
+| `.env.dev_databricks_parquet` | Local Spark defaults for managed parquet tables |
+| `.env.dev_databricks_delta` | Local Spark defaults for Delta Lake tables |
 | `.env.dev_databricks_iceberg` | Spark 4+/Databricks configuration with the Iceberg catalog wired in |
+
+Each Databricks profile uses its own managed database/warehouse (`snapshot_demo_parquet`,
+`snapshot_demo_delta`, `snapshot_demo_iceberg`) so switching formats never reuses stale metadata.
 
 `FF_DBR_TABLE_FORMAT` can always override the physical Spark table format (`parquet`, `delta`,
 `iceberg`) even if the profile defaults differ.

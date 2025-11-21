@@ -21,8 +21,8 @@ The snapshot demo is intentionally tiny and mirrors the basic demo structure:
 | `models/staging/users_clean.ff.sql`            | Same as in the basic demo: cleans emails, casts types, derives `email_domain`.                      |
 | `models/marts/mart_users_by_domain.ff.sql`     | Same as in the basic demo: aggregates users per email domain.                                       |
 | `models/snapshots/users_clean_snapshot.ff.sql` | **New:** snapshot model that captures slowly changing history of `users_clean.ff`.                  |
-| `profiles.yml`                                 | Reused from the basic demo: defines `dev_duckdb`, `dev_postgres`, `dev_databricks_delta`, `dev_databricks_iceberg`, `dev_bigquery`. |
-| `.env.dev_*`                                   | Engine-specific environment files (`.env.dev_duckdb`, `.env.dev_postgres`, `.env.dev_databricks_delta`, `.env.dev_databricks_iceberg`). |
+| `profiles.yml`                                 | Reused from the basic demo: defines `dev_duckdb`, `dev_postgres`, `dev_databricks_parquet`, `dev_databricks_delta`, `dev_databricks_iceberg`, `dev_bigquery`. |
+| `.env.dev_*`                                   | Engine-specific environment files (`.env.dev_duckdb`, `.env.dev_postgres`, `.env.dev_databricks_parquet`, `.env.dev_databricks_delta`, `.env.dev_databricks_iceberg`). |
 | `Makefile`                                     | Adds snapshot-aware targets on top of the usual `seed` / `run` / `test` / `dag`.                    |
 
 ### The snapshot model
@@ -96,8 +96,9 @@ Assuming you’ve already wired `examples/snapshot_demo/Makefile` similarly to t
    # set -a; source .env.dev_postgres; set +a
 
    # Or Databricks
-   # Delta/parquet: set -a; source .env.dev_databricks_delta; set +a
-   # Iceberg:      set -a; source .env.dev_databricks_iceberg; set +a
+   # Parquet: set -a; source .env.dev_databricks_parquet; set +a
+   # Delta:   set -a; source .env.dev_databricks_delta; set +a
+   # Iceberg: set -a; source .env.dev_databricks_iceberg; set +a
    # (optionally export FF_DBR_TABLE_FORMAT=delta|iceberg to override the table format)
 
    # Or BigQuery (requires GCP setup)
@@ -128,15 +129,20 @@ Assuming you’ve already wired `examples/snapshot_demo/Makefile` similarly to t
 
 Just like the incremental demo, the snapshot project lets you flip Spark table formats without
 editing models. Pass `DBR_TABLE_FORMAT=parquet|delta|iceberg` to `make snapshot_demo` or export
-`FF_DBR_TABLE_FORMAT` when invoking `fft` directly. The `dev_databricks_delta` profile uses the same
-Hive-compatible metastore as before, while `dev_databricks_iceberg` wires in an Iceberg catalog
-(`spark.jars.packages` / `spark.sql.catalog.iceberg.*`). When running locally you still need the
-matching Python packages (for example `pip install delta-spark` for Delta Lake and the Iceberg
-runtime JARs bundled via the profile).
+`FF_DBR_TABLE_FORMAT` when invoking `fft` directly. `dev_databricks_parquet`,
+`dev_databricks_delta`, and `dev_databricks_iceberg` each point to their own managed database /
+warehouse (`snapshot_demo_parquet`, `snapshot_demo_delta`, `snapshot_demo_iceberg`), so switching
+formats never reuses stale Hive metadata. The Iceberg profile wires in the catalog via
+`spark.sql.catalog.iceberg.*`; Delta still requires the `delta-spark` package.
 
 Manual CLI examples:
 
 ```bash
+# Parquet snapshots
+FF_DBR_TABLE_FORMAT=parquet \
+  FFT_ACTIVE_ENV=dev_databricks_parquet FF_ENGINE=databricks_spark \
+  fft snapshot run . --select tag:example:snapshot_demo --select tag:engine:databricks_spark
+
 # Delta Lake snapshots
 FF_DBR_TABLE_FORMAT=delta \
   FFT_ACTIVE_ENV=dev_databricks_delta FF_ENGINE=databricks_spark \

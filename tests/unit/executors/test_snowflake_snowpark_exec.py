@@ -68,6 +68,10 @@ class FakeSnowparkDataFrame:
         return FakeSnowparkDataFrame(self._session, self._sql, list(cols))
 
 
+# Make sure the executor treats FakeSnowparkDataFrame as SNDF when optional deps are missing.
+sf_mod.SNDF = FakeSnowparkDataFrame  # type: ignore[attr-defined]
+
+
 class FakeSession:
     """
     Minimal session mock:
@@ -176,7 +180,7 @@ def sf_exec(monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_init_sets_db_schema_and_con(sf_exec):
     assert sf_exec.database == "DB1"
     assert sf_exec.schema == "SC1"
@@ -185,14 +189,14 @@ def test_init_sets_db_schema_and_con(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_q_and_qualified(sf_exec):
     assert sf_exec._q("x") == '"x"'
     assert sf_exec._qualified("TBL") == "DB1.SC1.TBL"
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_read_relation_calls_session_table(sf_exec):
     node = Node(name="n", kind="sql", path=Path("."))
     df = sf_exec._read_relation("MY_TBL", node, deps=[])
@@ -202,7 +206,7 @@ def test_read_relation_calls_session_table(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_materialize_relation_happy(sf_exec, monkeypatch):
     called: dict[str, str] = {}
 
@@ -244,7 +248,7 @@ def test_materialize_relation_happy(sf_exec, monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_materialize_relation_raises_on_non_frame(sf_exec):
     node = Node(name="m", kind="python", path=Path("."))
     with pytest.raises(TypeError):
@@ -252,7 +256,7 @@ def test_materialize_relation_raises_on_non_frame(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_create_view_over_table_issues_sql(sf_exec):
     node = Node(name="x", kind="sql", path=Path("."))
     sf_exec._create_view_over_table("V_USERS", "USERS", node)
@@ -263,10 +267,10 @@ def test_create_view_over_table_issues_sql(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_validate_required_single_df_ok(sf_exec):
-    SNDF = sf_mod.SNDF
-    df = SNDF(sf_exec.session)  # type: ignore[call-arg]
+    df = FakeSnowparkDataFrame(sf_exec.session, cols=["ID", "NAME", "AGE"])
+
     df.schema = SimpleNamespace(names=["ID", "NAME", "AGE"])  # type: ignore[attr-defined]
 
     sf_exec._validate_required(
@@ -277,10 +281,10 @@ def test_validate_required_single_df_ok(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_validate_required_single_df_missing(sf_exec):
-    SNDF = sf_mod.SNDF
-    df = SNDF(sf_exec.session)  # type: ignore[call-arg]
+    df = FakeSnowparkDataFrame(sf_exec.session, cols=["ID", "NAME", "AGE"])
+
     df.schema = SimpleNamespace(names=["ID"])  # type: ignore[attr-defined]
 
     with pytest.raises(ValueError) as exc:
@@ -297,7 +301,7 @@ def test_validate_required_single_df_missing(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_validate_required_multi_input_ok(sf_exec):
     df1 = FakeSnowparkDataFrame(sf_exec.session, cols=["ID", "NAME"])
     df2 = FakeSnowparkDataFrame(sf_exec.session, cols=["USER_ID", "ORDER_ID"])
@@ -309,7 +313,7 @@ def test_validate_required_multi_input_ok(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_validate_required_multi_input_missing_key(sf_exec):
     df1 = FakeSnowparkDataFrame(sf_exec.session, cols=["ID", "NAME"])
     with pytest.raises(ValueError) as exc:
@@ -322,10 +326,10 @@ def test_validate_required_multi_input_missing_key(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_validate_required_is_case_insensitive(sf_exec):
-    SNDF = sf_mod.SNDF
-    df = SNDF(sf_exec.session)  # type: ignore[call-arg]
+    df = FakeSnowparkDataFrame(sf_exec.session, cols=["ID", "NAME", "AGE"])
+
     # Snowflake-style upper-case physical columns
     df.schema = SimpleNamespace(names=["USER_ID", "EMAIL"])  # type: ignore[attr-defined]
 
@@ -338,14 +342,14 @@ def test_validate_required_is_case_insensitive(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_columns_of(sf_exec):
     df = FakeSnowparkDataFrame(sf_exec.session, cols=["A", "B"])
     assert sf_exec._columns_of(df) == ["A", "B"]
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_is_frame(sf_exec):
     df = sf.DataFrame(sf_exec.session)
     df.schema = SimpleNamespace(names=["ID"])  # type: ignore[attr-defined]
@@ -355,20 +359,20 @@ def test_is_frame(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_frame_name(sf_exec):
     assert sf_exec._frame_name() == "Snowpark"
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_format_relation_for_ref(sf_exec):
     r = sf_exec._format_relation_for_ref("my_model")
     assert r == "DB1.SC1.my_model"
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_format_source_reference_happy(sf_exec):
     cfg = {"identifier": "SRC_TBL", "database": "DBX", "schema": "RAW"}
     ref = sf_exec._format_source_reference(cfg, "src", "tbl")
@@ -376,7 +380,7 @@ def test_format_source_reference_happy(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_format_source_reference_raises_on_location(sf_exec):
     cfg = {"identifier": "X", "location": "s3://foo"}
     with pytest.raises(NotImplementedError):
@@ -384,14 +388,14 @@ def test_format_source_reference_raises_on_location(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_format_source_reference_raises_on_missing_identifier(sf_exec):
     with pytest.raises(KeyError):
         sf_exec._format_source_reference({}, "src", "tbl")
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_create_or_replace_view_calls_session_sql(sf_exec):
     node = Node(name="x", kind="sql", path=Path("."))
     sf_exec._create_or_replace_view('"DB1"."SC1"."V1"', "SELECT 1", node)
@@ -399,7 +403,7 @@ def test_create_or_replace_view_calls_session_sql(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_create_or_replace_table_calls_session_sql(sf_exec):
     node = Node(name="x", kind="sql", path=Path("."))
     sf_exec._create_or_replace_table('"DB1"."SC1"."T1"', "SELECT 1", node)
@@ -407,7 +411,7 @@ def test_create_or_replace_table_calls_session_sql(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_create_or_replace_view_from_table_calls_session_sql(sf_exec):
     node = Node(name="x", kind="sql", path=Path("."))
     sf_exec._create_or_replace_view_from_table("V1", "T1", node)
@@ -418,7 +422,7 @@ def test_create_or_replace_view_from_table_calls_session_sql(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_on_node_built_calls_meta(monkeypatch, sf_exec):
     called = {"ensure": 0, "upsert": 0}
 
@@ -438,7 +442,7 @@ def test_on_node_built_calls_meta(monkeypatch, sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_on_node_built_raises_on_meta_error(monkeypatch, sf_exec):
     def bad_upsert(ex, name, rel, fp, eng):
         raise RuntimeError("meta boom")
@@ -452,7 +456,7 @@ def test_on_node_built_raises_on_meta_error(monkeypatch, sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_exists_relation_true(sf_exec, monkeypatch):
     # our fake session already returns one row for information_schema.tables
     ok = sf_exec.exists_relation("SOME_TBL")
@@ -460,7 +464,7 @@ def test_exists_relation_true(sf_exec, monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_exists_relation_false_on_error(sf_exec, monkeypatch):
     def boom(sql: str):
         raise RuntimeError("bad")
@@ -471,7 +475,7 @@ def test_exists_relation_false_on_error(sf_exec, monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_create_table_as_strips_semicolon(sf_exec):
     sf_exec.session.sql_calls.clear()
     sf_exec.create_table_as("DST", "SELECT 1;")
@@ -482,7 +486,7 @@ def test_create_table_as_strips_semicolon(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_incremental_insert_strips_semicolon(sf_exec):
     sf_exec.session.sql_calls.clear()
     sf_exec.incremental_insert("DST", "SELECT 1;")
@@ -492,7 +496,7 @@ def test_incremental_insert_strips_semicolon(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_incremental_merge_builds_two_statements(sf_exec):
     sf_exec.session.sql_calls.clear()
 
@@ -512,7 +516,7 @@ def test_incremental_merge_builds_two_statements(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_alter_table_sync_schema_adds_missing(sf_exec):
     sf_exec.session.sql_calls.clear()
     sf_exec.alter_table_sync_schema("EXISTING", "SELECT 1 AS ID, 2 AS NEW_COL")
@@ -521,7 +525,7 @@ def test_alter_table_sync_schema_adds_missing(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_alter_table_sync_schema_noop_on_unknown_mode(sf_exec):
     sf_exec.session.sql_calls.clear()
     sf_exec.alter_table_sync_schema("EXISTING", "SELECT 1", mode="replace_all")  # unknown
@@ -530,7 +534,7 @@ def test_alter_table_sync_schema_noop_on_unknown_mode(sf_exec):
 
 
 @pytest.mark.unit
-@pytest.mark.snowflake
+@pytest.mark.snowflake_snowpark
 def test_sfcursorshim_execute_returns_rows(sf_exec):
     class FakeRow:
         """Mimic Snowpark Row: has attributes *and* asDict()."""

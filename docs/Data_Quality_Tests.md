@@ -20,7 +20,7 @@ The following values are currently supported for `type`:
 
 In addition, you can register **custom tests** (Python or SQL) with any logical
 name (e.g. `min_positive_share`, `no_future_orders`) and use that name in
-`project.yml → tests:`. See [Custom DQ Tests (Python & SQL)](#custom-dq-tests-python--sql).
+`project.yml → tests:`. See [Custom DQ Tests (Python & SQL)](#custom-dq-tests-python-sql).
 
 ## Usage Overview
 

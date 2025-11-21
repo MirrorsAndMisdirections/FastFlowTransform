@@ -9,12 +9,27 @@ dev_postgres:
     dsn: "{{ env('FF_PG_DSN') }}"
     db_schema: "{{ env('FF_PG_SCHEMA', 'public') }}"
 
+dev_databricks_parquet: &incremental_databricks_parquet
+  engine: databricks_spark
+  databricks_spark:
+    master: "{{ env('FF_SPARK_MASTER', 'local[*]') }}"
+    app_name: "{{ env('FF_SPARK_APP_NAME', 'incremental_demo_parquet') }}"
+    warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse_parquet"
+    database: "{{ env('FF_DBR_DATABASE', 'incremental_demo_parquet') }}"
+    extra_conf:
+      spark.hadoop.javax.jdo.option.ConnectionURL: "jdbc:derby:{{ project_dir() }}/.local/metastore_db;create=true"
+      spark.hadoop.datanucleus.rdbms.datastoreAdapterClassName: "org.datanucleus.store.rdbms.adapter.DerbyAdapter"
+      spark.hadoop.datanucleus.schema.autoCreateAll: "true"
+      spark.hadoop.javax.jdo.option.ConnectionDriverName: "org.apache.derby.jdbc.EmbeddedDriver"
+      spark.driver.extraJavaOptions: "-Dderby.stream.error.file={{ project_dir() }}/.local/derby.log"
+
 dev_databricks_delta:
   engine: databricks_spark
   databricks_spark:
     master: "{{ env('FF_SPARK_MASTER', 'local[*]') }}"
-    app_name: "{{ env('FF_SPARK_APP_NAME', 'incremental_demo') }}"
-    warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse"
+    app_name: "{{ env('FF_SPARK_APP_NAME', 'incremental_demo_delta') }}"
+    warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse_delta"
+    database: "{{ env('FF_DBR_DATABASE', 'incremental_demo_delta') }}"
     extra_conf:
       spark.hadoop.javax.jdo.option.ConnectionURL: "jdbc:derby:{{ project_dir() }}/.local/metastore_db;create=true"
       spark.hadoop.datanucleus.rdbms.datastoreAdapterClassName: "org.datanucleus.store.rdbms.adapter.DerbyAdapter"
@@ -28,6 +43,7 @@ dev_databricks_iceberg:
     master: "{{ env('FF_SPARK_MASTER', 'local[*]') }}"
     app_name: "{{ env('FF_SPARK_APP_NAME', 'incremental_demo_iceberg') }}"
     warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse_iceberg"
+    database: "{{ env('FF_DBR_DATABASE', 'incremental_demo_iceberg') }}"
     table_format: "iceberg"
     extra_conf:
       spark.jars.packages: "org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.0"
@@ -95,3 +111,7 @@ dev_snowflake:
     schema: "{{ env('FF_SF_SCHEMA', 'INCREMENTAL_DEMO') }}"
     role: "{{ env('FF_SF_ROLE', '') }}"
     allow_create_schema: true
+
+# Backwards-compatible alias for scripts referencing dev_databricks
+dev_databricks:
+  <<: *incremental_databricks_parquet

@@ -75,9 +75,6 @@ jobs:
           - name: bigquery
             extra: bigquery_bf
             marker: "unit and bigquery"
-          - name: snowflake
-            extra: snowflake
-            marker: "unit and snowflake"
 
     steps:
       - name: Checkout

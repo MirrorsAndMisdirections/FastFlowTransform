@@ -64,7 +64,7 @@ EXAMPLES: list[ExampleConfig] = [
         env_by_engine={
             "duckdb": "dev_duckdb",
             "postgres": "dev_postgres",
-            "databricks_spark": "dev_databricks",
+            "databricks_spark": "dev_databricks_parquet",
         },
         spark_table_formats=["parquet", "delta", "iceberg"],
     ),
@@ -95,7 +95,7 @@ EXAMPLES: list[ExampleConfig] = [
         env_by_engine={
             "duckdb": "dev_duckdb",
             "postgres": "dev_postgres",
-            "databricks_spark": "dev_databricks",
+            "databricks_spark": "dev_databricks_parquet",
         },
         spark_table_formats=["parquet", "delta", "iceberg"],
     ),

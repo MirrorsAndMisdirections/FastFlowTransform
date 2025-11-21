@@ -31,7 +31,7 @@ ifeq ($(ENGINE),databricks_spark)
   else ifeq ($(DBR_TABLE_FORMAT),iceberg)
     PROFILE_ENV = dev_databricks_iceberg
   else
-    PROFILE_ENV = dev_databricks_delta
+    PROFILE_ENV = dev_databricks_parquet
   endif
 endif
 ifeq ($(ENGINE),bigquery)

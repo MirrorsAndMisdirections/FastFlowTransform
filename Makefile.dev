@@ -31,7 +31,7 @@ utest-duckdb:
 
 # Lint & format helpers
 fmt:
-	$(UV) run ruff format src tests
+	$(UV) run ruff format
 
 lint:
 	$(UV) run ruff check src tests --no-cache
