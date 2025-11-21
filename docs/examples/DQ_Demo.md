@@ -82,10 +82,14 @@ examples/dq_demo/
 ### Seeds
 
 * `seeds/customers.csv`
-  Simple customer dimension (e.g. `customer_id`, `name`, `status`).
+  Simple customer dimension with a creation timestamp:
+  `customer_id`, `name`, `status`, `created_at` (ISO-8601, e.g. `2025-01-01T10:00:00`).
+  The demo ships with three rows (Alice, Bob, Carol) so it’s easy to reason about failures.
 
 * `seeds/orders.csv`
-  Order fact data (e.g. `order_id`, `customer_id`, `amount`, `order_ts` as a string).
+  Order fact data with per-order timestamps:
+  `order_id`, `customer_id`, `amount`, `order_ts` (ISO-8601, e.g. `2025-01-10T09:00:00`).
+  One order has `amount = 0.00` so the custom `min_positive_share` test has something to complain about.
 
 ### Models
 
@@ -94,6 +98,28 @@ examples/dq_demo/
 * Materialized as a table.
 * Casts IDs and other fields into proper types.
 * Used as the “clean” customer dimension for downstream checks.
+
+  ```sql
+  {{ config(
+      materialized='table',
+      tags=[
+          'example:dq_demo',
+          'scope:staging',
+          'engine:duckdb',
+          'engine:postgres',
+          'engine:databricks_spark',
+          'engine:bigquery',
+          'engine:snowflake_snowpark'
+      ],
+  ) }}
+
+  select
+    cast(customer_id as int)       as customer_id,
+    name,
+    status,
+    cast(created_at as timestamp)  as created_at
+  from {{ source('crm', 'customers') }};
+  ```
 
 **2. Staging: `orders.ff.sql`**
 
@@ -212,11 +238,11 @@ tests:
     column: amount
     tags: [example:dq_demo, batch]
 
-  # 4) Customer status values must be within a known set
+ # 4) Customer status values must be within a known set
   - type: accepted_values
     table: mart_orders_agg
     column: status
-    values: ["active", "churned", "prospect"]
+    values: ["active", "inactive", "prospect"]
     severity: warn         # show as warning, not hard failure
     tags: [example:dq_demo, batch]
 
@@ -571,3 +597,16 @@ The Data Quality Demo is designed to be:
   * reconciling sums and row counts across tables.
 
 Once you’re comfortable with this example, you can copy the patterns into your real project: start with staging-level checks, then layer in reconciliations and freshness on your most important marts.
+
+> **Tip – Source vs. table freshness**
+> 
+> The demo uses the `freshness` test type on the mart (`mart_orders_agg.last_order_ts`).
+> For *source-level freshness* (e.g. “when was `crm.orders` last loaded?”), define
+> freshness rules on your sources and run:
+> 
+> ```bash
+> fft source freshness examples/dq_demo --env dev_duckdb
+> ```
+> 
+> This complements table-level DQ tests by checking whether your inputs are recent enough
+> *before* you even build marts.

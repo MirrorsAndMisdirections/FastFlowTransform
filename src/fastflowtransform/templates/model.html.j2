@@ -112,6 +112,19 @@
           {% endif %}
         </div>
 
+        <div class="muted">Sources</div>
+        <div>
+          {% if sources_used and sources_used|length %}
+            <ul class="inline">
+              {% for src in sources_used %}
+                <li><a href="{{ src.doc_filename }}">{{ src.source_name }}.{{ src.table_name }}</a></li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <span class="muted">No source() refs</span>
+          {% endif %}
+        </div>
+
         {% if used_by is defined and used_by %}
         <div class="muted">Referenced by</div>
         <div>

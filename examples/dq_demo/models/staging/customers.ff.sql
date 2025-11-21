@@ -13,8 +13,8 @@
 
 -- Staging table for customers
 select
-  customer_id,
+  cast(customer_id as int)        as customer_id,
   name,
   status,
-  created_at
+  cast(created_at as timestamp)   as created_at
 from {{ source('crm', 'customers') }};

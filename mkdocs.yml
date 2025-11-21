@@ -32,6 +32,7 @@ nav:
   - State Selection: State_Selection.md
   - YAML Tests: YAML_Tests.md
   - Data Quality Tests: Data_Quality_Tests.md
+  - Source Freshness: Source_Freshness.md
   - CLI Guide: CLI_Guide.md
   - Auto Docs: Auto_Docs.md
   - Logging: Logging.md

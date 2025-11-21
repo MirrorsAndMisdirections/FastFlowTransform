@@ -68,6 +68,7 @@
     .chip { font-size:12px; padding:2px 10px; border-radius:999px; border:1px solid var(--border); }
     .chip.sql { background: var(--chip-sql-bg); color: var(--chip-sql-fg); }
     .chip.py  { background: var(--chip-py-bg);  color: var(--chip-py-fg);  }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid var(--border); font-size:12px; margin-right:4px; }
 
     .badge { font: 12px/1.6 system-ui, sans-serif; padding: 2px 8px; border-radius: 999px; border: 1px solid transparent; }
     .badge-table { background:#eef7ff; color:#0a3a77; border-color:#bcd8fb; }
@@ -127,15 +128,24 @@
       <div class="mermaid" id="dag">flowchart TD
   classDef sql fill:#e8f1ff,stroke:#5b8def,color:#0a1f44;
   classDef py  fill:#e9fbf1,stroke:#2bb673,color:#0b2e1f;
+  classDef source fill:#fef3c7,stroke:#f59e0b,color:#78350f;
   events_base_ff["events_base.ff<br/>(events_base)"]
   class events_base_ff sql;
+  click events_base_ff "events_base.ff.html" "View model"
   fct_events_py_incremental("fct_events_py_incremental<br/>(fct_events_py_incremental)")
   class fct_events_py_incremental py;
+  click fct_events_py_incremental "fct_events_py_incremental.html" "View model"
   fct_events_sql_inline_ff["fct_events_sql_inline.ff<br/>(fct_events_sql_inline)"]
   class fct_events_sql_inline_ff sql;
+  click fct_events_sql_inline_ff "fct_events_sql_inline.ff.html" "View model"
   fct_events_sql_yaml_ff["fct_events_sql_yaml.ff<br/>(fct_events_sql_yaml)"]
   class fct_events_sql_yaml_ff sql;
+  click fct_events_sql_yaml_ff "fct_events_sql_yaml.ff.html" "View model"
+  src_raw_events[["raw.events"]]
+  class src_raw_events source;
+  click src_raw_events "source_raw.events.html" "View source"
   events_base_ff --> fct_events_sql_inline_ff
+  src_raw_events --> events_base_ff
   events_base_ff --> fct_events_sql_yaml_ff
   events_base_ff --> fct_events_py_incremental
 </div>
@@ -239,6 +249,49 @@
       <h2>Macros</h2>
       
         <p>No macros found.</p>
+      
+    </section>
+
+    <section class="card">
+      <h2>Sources</h2>
+      
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Relation</th>
+              <th>Freshness</th>
+              <th>Consumers</th>
+            </tr>
+          </thead>
+          <tbody>
+            
+              <tr>
+                <td class="nowrap">
+                  <a href="source_raw.events.html">raw.events</a>
+                  
+                </td>
+                <td><code>seed_events</code></td>
+                <td class="muted">
+                  
+                  <div>
+                    
+                      <span class="pill" style="background:rgba(127,127,127,.08);color:var(--muted);">no warn</span>
+                    
+                    
+                      <span class="pill" style="background:rgba(127,127,127,.08);color:var(--muted);">no error</span>
+                    
+                  </div>
+                </td>
+                <td>
+                  
+                    1 model
+                  
+                </td>
+              </tr>
+            
+          </tbody>
+        </table>
       
     </section>
   </div>

@@ -2,8 +2,27 @@ version: 2
 
 sources:
   - name: crm
+    schema: dq_demo
     tables:
       - name: customers
-        identifier: seed_customers   # materialized via `fft seed`
+        identifier: seed_customers
+        description: "Seeded customers table"
+        freshness:
+          loaded_at_field: _ff_loaded_at
+          warn_after:
+            count: 60
+            period: minute    # or "hour"/"day"
+          error_after:
+            count: 240
+            period: minute
       - name: orders
-        identifier: seed_orders      # materialized via `fft seed`
+        identifier: seed_orders
+        description: "Seeded orders table"
+        freshness:
+          loaded_at_field: _ff_loaded_at
+          warn_after:
+            count: 60
+            period: minute
+          error_after:
+            count: 240
+            period: minute

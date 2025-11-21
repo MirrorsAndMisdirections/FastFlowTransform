@@ -91,56 +91,6 @@ def _validate_py_model_signature(func: Callable, deps: list[str], *, path: Path,
     )
 
 
-def _merge_source_configs(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
-    merged = dict(base)
-    for key, value in override.items():
-        if key == "options":
-            opts = dict(merged.get("options") or {})
-            opts.update(value or {})
-            merged["options"] = opts
-        else:
-            merged[key] = value
-    if "options" not in merged or merged["options"] is None:
-        merged["options"] = {}
-    return merged
-
-
-def resolve_source_entry(
-    entry: Mapping[str, Any], engine: str | None, *, default_identifier: str | None = None
-) -> dict[str, Any]:
-    base = entry.get("base") if isinstance(entry, Mapping) else None
-    if not isinstance(base, Mapping):
-        base = {}
-
-    cfg = dict(base)
-    cfg.setdefault("identifier", None)
-    cfg.setdefault("schema", None)
-    cfg.setdefault("database", None)
-    cfg.setdefault("catalog", None)
-    cfg.setdefault("project", None)
-    cfg.setdefault("dataset", None)
-    cfg.setdefault("location", None)
-    cfg.setdefault("format", None)
-    cfg.setdefault("options", {})
-
-    overrides = entry.get("overrides") if isinstance(entry, Mapping) else None
-    if isinstance(overrides, Mapping):
-        for wildcard_key in ("*", "default", "any"):
-            if wildcard_key in overrides:
-                cfg = _merge_source_configs(cfg, overrides[wildcard_key])
-        if engine and engine in overrides:
-            cfg = _merge_source_configs(cfg, overrides[engine])
-
-    ident = cfg.get("identifier")
-    if (ident is None or ident == "") and not cfg.get("location"):
-        if default_identifier:
-            cfg["identifier"] = default_identifier
-        else:
-            raise KeyError("Source configuration missing identifier or location")
-
-    return cfg
-
-
 @dataclass
 class Node:
     name: str

@@ -2,18 +2,18 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader, TemplateNotFound, select_autoescape
 from markupsafe import Markup
 from sqlalchemy import text
 
-from .core import REGISTRY, Node, relation_for
-from .dag import mermaid as dag_mermaid
-from .lineage import (
+from fastflowtransform.core import REGISTRY, Node, relation_for
+from fastflowtransform.dag import mermaid as dag_mermaid
+from fastflowtransform.lineage import (
     infer_py_lineage,
     infer_sql_lineage,
     merge_lineage,
@@ -31,6 +31,19 @@ class ModelDoc:
     materialized: str
     description_html: str | None = None
     description_short: str | None = None
+
+
+@dataclass
+class SourceDoc:
+    source_name: str
+    table_name: str
+    relation: str
+    description_html: str | None = None
+    loaded_at_field: str | None = None
+    warn_after_minutes: int | None = None
+    error_after_minutes: int | None = None
+    consumers: list[str] = field(default_factory=list)
+    doc_filename: str = ""
 
 
 def _safe_filename(name: str) -> str:
@@ -196,6 +209,126 @@ def _collect_models(nodes: dict[str, Node]) -> list[ModelDoc]:
     return models
 
 
+def _freshness_window_minutes(win: dict[str, Any] | None) -> int | None:
+    if not isinstance(win, dict):
+        return None
+    count = win.get("count")
+    period = win.get("period")
+    if count is None or period is None:
+        return None
+    try:
+        count_int = int(count)
+    except (TypeError, ValueError):
+        return None
+    period = str(period).lower()
+    if period == "minute":
+        factor = 1
+    elif period == "hour":
+        factor = 60
+    elif period == "day":
+        factor = 60 * 24
+    else:
+        return None
+    return count_int * factor
+
+
+def _collect_sources() -> list[SourceDoc]:
+    """Build SourceDoc objects from REGISTRY.sources (sources.yml)."""
+    srcs = getattr(REGISTRY, "sources", {}) or {}
+    out: list[SourceDoc] = []
+
+    for src_name, tables in srcs.items():
+        for tbl_name, entry in (tables or {}).items():
+            base = entry.get("base") or {}
+            descr = entry.get("description")
+            freshness_cfg = entry.get("freshness") or {}
+
+            desc_html = _render_minimarkdown(descr) if isinstance(descr, str) else None
+
+            loaded_at = freshness_cfg.get("loaded_at_field")
+            warn_after_minutes = _freshness_window_minutes(freshness_cfg.get("warn_after"))
+            err_after_minutes = _freshness_window_minutes(freshness_cfg.get("error_after"))
+
+            # Use the same relation logic as runtime (best-effort)
+            # Here we don't know engine; we keep it simple and just use identifier/schema.
+            ident = base.get("identifier") or tbl_name
+            schema = base.get("schema") or base.get("dataset")
+            database = base.get("database") or base.get("catalog") or base.get("project")
+
+            if database and schema:
+                relation = f"{database}.{schema}.{ident}"
+            elif schema:
+                relation = f"{schema}.{ident}"
+            elif database:
+                relation = f"{database}.{ident}"
+            else:
+                relation = str(ident)
+
+            display = f"{src_name}.{tbl_name}"
+            out.append(
+                SourceDoc(
+                    source_name=src_name,
+                    table_name=tbl_name,
+                    relation=relation,
+                    description_html=desc_html,
+                    loaded_at_field=loaded_at,
+                    warn_after_minutes=warn_after_minutes,
+                    error_after_minutes=err_after_minutes,
+                    doc_filename=f"source_{_safe_filename(display)}.html",
+                )
+            )
+
+    out.sort(key=lambda s: (s.source_name, s.table_name))
+    return out
+
+
+def _scan_source_refs(
+    nodes: dict[str, Node],
+) -> tuple[dict[tuple[str, str], list[str]], dict[str, list[tuple[str, str]]]]:
+    """Return mappings: (source, table) → [models] and model → [(source, table)]."""
+
+    pattern = re.compile(
+        r"source\s*\(\s*['\"](?P<source>[A-Za-z0-9_.\-]+)['\"]\s*,\s*['\"](?P<table>[A-Za-z0-9_.\-]+)['\"]\s*\)"
+    )
+
+    by_source: dict[tuple[str, str], list[str]] = {}
+    by_model: dict[str, list[tuple[str, str]]] = {}
+
+    for n in nodes.values():
+        if getattr(n, "kind", "sql") != "sql":
+            continue
+        try:
+            txt = Path(n.path).read_text(encoding="utf-8")
+        except Exception:
+            continue
+        hits: list[tuple[str, str]] = []
+        for match in pattern.finditer(txt):
+            key = (match.group("source"), match.group("table"))
+            by_source.setdefault(key, []).append(n.name)
+            hits.append(key)
+        if hits:
+            seen: set[tuple[str, str]] = set()
+            order: list[tuple[str, str]] = []
+            for key in hits:
+                if key in seen:
+                    continue
+                seen.add(key)
+                order.append(key)
+            by_model[n.name] = order
+
+    for names in by_source.values():
+        names.sort()
+
+    return by_source, by_model
+
+
+def _attach_consumers_to_sources(
+    sources: list[SourceDoc], source_consumers: dict[tuple[str, str], list[str]]
+) -> None:
+    for s in sources:
+        s.consumers = source_consumers.get((s.source_name, s.table_name), [])
+
+
 def _apply_descriptions_to_models(
     models: list[ModelDoc],
     docs_meta: dict[str, Any],
@@ -316,6 +449,8 @@ def _render_model_pages(
     cols_by_table: dict[str, list[ColumnInfo]],
     materialization_legend: dict[str, dict[str, str]],
     macros: list[dict[str, str]],
+    model_sources: dict[str, list[tuple[str, str]]],
+    sources_index: dict[tuple[str, str], SourceDoc],
 ) -> None:
     tmpl = env.get_template("model.html.j2")
     for m in models:
@@ -333,6 +468,10 @@ def _render_model_pages(
             "incremental": (str(m.materialized).lower() == "incremental"),
         }
 
+        source_refs = [
+            sources_index[key] for key in model_sources.get(m.name, []) if key in sources_index
+        ]
+
         html = tmpl.render(
             m=m,
             used_by=used_by.get(m.name, []),
@@ -340,8 +479,28 @@ def _render_model_pages(
             macros=macros,
             materialization_legend=materialization_legend,
             this=this_ctx,
+            sources_used=source_refs,
         )
         (out_dir / f"{_safe_filename(m.name)}.html").write_text(html, encoding="utf-8")
+
+
+def _render_source_pages(env: Environment, out_dir: Path, sources: list[SourceDoc]) -> None:
+    """
+    Render per-source HTML pages if the template 'source.html.j2' exists.
+    Safe no-op otherwise.
+    """
+    try:
+        tmpl = env.get_template("source.html.j2")
+    except TemplateNotFound:
+        return
+
+    for s in sources:
+        html = tmpl.render(source=s)
+        fname = s.doc_filename
+        if not fname:
+            safe = _safe_filename(f"{s.source_name}.{s.table_name}")
+            fname = f"source_{safe}.html"
+        (out_dir / fname).write_text(html, encoding="utf-8")
 
 
 def render_site(
@@ -353,7 +512,19 @@ def render_site(
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     env = _init_jinja()
-    mermaid_src = dag_mermaid(nodes)
+    source_consumers, model_source_refs = _scan_source_refs(nodes)
+
+    sources = _collect_sources()
+    _attach_consumers_to_sources(sources, source_consumers)
+    sources_by_key = {(s.source_name, s.table_name): s for s in sources}
+    source_link_meta = {
+        key: {"label": f"{doc.source_name}.{doc.table_name}", "file": doc.doc_filename}
+        for key, doc in sources_by_key.items()
+    }
+
+    mermaid_src = dag_mermaid(
+        nodes, source_links=source_link_meta, model_source_refs=model_source_refs
+    )
     proj_dir = _get_project_dir()
     docs_meta = read_docs_metadata(proj_dir) if proj_dir else {"models": {}, "columns": {}}
     models = _collect_models(nodes)
@@ -369,6 +540,7 @@ def render_site(
         out_dir,
         mermaid_src=Markup(mermaid_src),
         models=models,
+        sources=sources,
         materialization_legend=mat_legend,
         macros=macro_list,
     )
@@ -382,7 +554,11 @@ def render_site(
         cols_by_table=cols_by_table,
         materialization_legend=mat_legend,
         macros=macro_list,
+        model_sources=model_source_refs,
+        sources_index=sources_by_key,
     )
+
+    _render_source_pages(env, out_dir, sources)
 
 
 @dataclass

@@ -127,6 +127,94 @@ def _combine_engine_overrides(
     return combined
 
 
+FreshnessPeriod = Literal["minute", "hour", "day"]
+
+
+class FreshnessWindow(BaseModel):
+    """Time window: e.g. {count: 12, period: 'hour'}."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    count: int
+    period: FreshnessPeriod
+
+    @field_validator("count")
+    @classmethod
+    def _count_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("freshness.count must be > 0")
+        return v
+
+
+class SourceFreshnessConfig(BaseModel):
+    """
+    Freshness configuration for a source or table.
+
+      freshness:
+        loaded_at_field: my_ts_col
+        warn_after:  {count: 12, period: hour}
+        error_after: {count: 24, period: hour}
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    loaded_at_field: str | None = None
+    warn_after: FreshnessWindow | None = None
+    error_after: FreshnessWindow | None = None
+
+    def merged_with(self, other: SourceFreshnessConfig | None) -> SourceFreshnessConfig:
+        """
+        Return a new config where self overrides 'other'.
+        Useful for table-level override over source-level defaults.
+        """
+        if other is None:
+            return self
+        return SourceFreshnessConfig(
+            loaded_at_field=self.loaded_at_field or other.loaded_at_field,
+            warn_after=self.warn_after or other.warn_after,
+            error_after=self.error_after or other.error_after,
+        )
+
+
+def _period_to_minutes(period: FreshnessPeriod) -> int:
+    if period == "minute":
+        return 1
+    if period == "hour":
+        return 60
+    # period == "day"
+    return 60 * 24
+
+
+def _freshness_to_dict(cfg: SourceFreshnessConfig | None) -> dict[str, Any] | None:
+    """
+    Convert a SourceFreshnessConfig into a plain dict we can stash in the
+    normalized sources registry. Adds convenient *_minutes fields.
+    """
+    if cfg is None:
+        return None
+
+    out: dict[str, Any] = {}
+    if cfg.loaded_at_field:
+        out["loaded_at_field"] = cfg.loaded_at_field
+
+    def _window_dict(win: FreshnessWindow | None) -> dict[str, Any] | None:
+        if win is None:
+            return None
+        base = {"count": win.count, "period": win.period}
+        base["count_in_minutes"] = win.count * _period_to_minutes(win.period)
+        return base
+
+    warn_dict = _window_dict(cfg.warn_after)
+    err_dict = _window_dict(cfg.error_after)
+
+    if warn_dict:
+        out["warn_after"] = warn_dict
+    if err_dict:
+        out["error_after"] = err_dict
+
+    return out or None
+
+
 # ---------------------------------------------------------------------------
 # Pydantic models mirroring sources.yml structure
 # ---------------------------------------------------------------------------
@@ -157,10 +245,12 @@ class SourceTableConfig(BaseModel):
 
     overrides: dict[str, dict[str, Any]] | None = None
 
-    # dbt-compatible metadata (kept as-is)
+    # metadata
     description: str | None = None
     columns: Any | None = None
     meta: dict[str, Any] | None = None
+
+    freshness: SourceFreshnessConfig | None = None
 
     @field_validator("options", mode="before")
     @classmethod
@@ -192,6 +282,9 @@ class SourceGroupConfig(BaseModel):
     options: dict[str, Any] | None = None
 
     overrides: dict[str, dict[str, Any]] | None = None
+    description: str | None = None
+    meta: dict[str, Any] | None = None
+    freshness: SourceFreshnessConfig | None = None
 
     tables: list[SourceTableConfig]
 
@@ -262,6 +355,8 @@ def _normalize_sources(cfg: SourcesFileConfig) -> dict[str, dict[str, dict[str, 
             field_path=f"sources[{s_idx}].overrides",
         )
 
+        src_freshness = src.freshness  # SourceFreshnessConfig | None
+
         group: dict[str, dict[str, Any]] = {}
         for t_idx, tbl in enumerate(src.tables):
             if tbl.name in group:
@@ -287,10 +382,23 @@ def _normalize_sources(cfg: SourcesFileConfig) -> dict[str, dict[str, dict[str, 
             )
             overrides = _combine_engine_overrides(src_overrides, table_overrides)
 
+            # --- Merge freshness & meta/docs -------------------------
+            tbl_freshness = tbl.freshness
+            merged_freshness_cfg: SourceFreshnessConfig | None = None
+            if src_freshness and tbl_freshness:
+                merged_freshness_cfg = tbl_freshness.merged_with(src_freshness)
+            elif tbl_freshness:
+                merged_freshness_cfg = tbl_freshness
+            elif src_freshness:
+                merged_freshness_cfg = src_freshness
+
+            freshness_dict = _freshness_to_dict(merged_freshness_cfg)
+
             entry_meta = {
                 "description": tbl.description,
                 "columns": tbl.columns,
                 "meta": tbl.meta,
+                "freshness": freshness_dict,
             }
 
             group[tbl.name] = {
