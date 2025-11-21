@@ -342,6 +342,7 @@ class SnowflakeSnowparkExecutor(BaseExecutor[SNDF]):
                     raise ValueError(
                         "strategy='timestamp' snapshot requires a non-null updated_at column."
                     )
+
                 create_sql = f"""
 CREATE OR REPLACE TABLE {target} AS
 SELECT
@@ -361,6 +362,7 @@ FROM ({body}) AS s
                 upd_expr = (
                     f"s.{cfg.updated_at}" if cfg.updated_at is not None else "CURRENT_TIMESTAMP()"
                 )
+
                 create_sql = f"""
 CREATE OR REPLACE TABLE {target} AS
 SELECT

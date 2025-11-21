@@ -3,20 +3,7 @@ version: "0.1"
 
 vars: {}
 
-models:
-  storage:
-    users:
-      path: ".local/spark/users"
-      format: parquet
-    api_users_http:
-      path: ".local/spark/api_users_http"
-      format: parquet
-    api_users_requests:
-      path: ".local/spark/api_users_requests"
-      format: parquet
-    mart_users_join.ff:
-      path: ".local/spark/mart_users_join"
-      format: parquet
+models: {}
 
 seeds:
   storage:

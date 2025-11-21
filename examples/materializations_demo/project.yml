@@ -3,18 +3,7 @@ version: "0.1"
 
 vars: {}
 
-models:
-  storage:
-    # Optionally persist specific relations to predictable paths (Spark/Delta etc.)
-    dim_customers.ff:
-      path: ".local/spark/dim_customers"
-      format: parquet
-    fct_orders_inc.ff:
-      path: ".local/spark/fct_orders_inc"
-      format: parquet
-    mart_order_summary.ff:
-      path: ".local/spark/mart_order_summary"
-      format: parquet
+models: {}
 
 seeds:
   storage:

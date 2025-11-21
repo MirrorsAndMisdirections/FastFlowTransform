@@ -1,6 +1,7 @@
 # fastflowtransform/table_formats/spark_delta.py
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 from fastflowtransform.table_formats.base import SparkFormatHandler
@@ -59,22 +60,141 @@ class DeltaFormatHandler(SparkFormatHandler):
                 f"or is not registered as a Delta table: {exc}"
             ) from exc
 
+    @staticmethod
+    def _quote_identifier(name: str) -> str:
+        parts = [p for p in name.split(".") if p]
+        if not parts:
+            esc = name.replace("`", "``")
+            return f"`{esc}`"
+        return ".".join(f"`{part.replace('`', '``')}`" for part in parts)
+
+    @staticmethod
+    def _sql_literal(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    def _restore_table_metadata(
+        self,
+        table_ident: str,
+        *,
+        table_comment: str | None,
+        column_comments: dict[str, str],
+        table_properties: dict[str, Any],
+    ) -> None:
+        if table_comment:
+            with suppress(Exception):
+                self.spark.sql(
+                    f"COMMENT ON TABLE {table_ident} IS {self._sql_literal(table_comment)}"
+                )
+
+        if table_properties:
+            assignments = []
+            for key, value in table_properties.items():
+                if value is None:
+                    continue
+                key_str = str(key)
+                if key_str.lower() in {"transient_lastddltime"}:
+                    continue
+                assignments.append(f"{self._sql_literal(key_str)}={self._sql_literal(str(value))}")
+            if assignments:
+                props_sql = ", ".join(assignments)
+                with suppress(Exception):
+                    self.spark.sql(f"ALTER TABLE {table_ident} SET TBLPROPERTIES ({props_sql})")
+
+        for col, comment in column_comments.items():
+            if not comment:
+                continue
+            col_ident = f"{table_ident}.{self._quote_identifier(col)}"
+            with suppress(Exception):
+                self.spark.sql(f"COMMENT ON COLUMN {col_ident} IS {self._sql_literal(comment)}")
+
     # ---------- Required API ----------
     def save_df_as_table(self, table_name: str, df: SDF) -> None:
         """
         Save DataFrame as a managed Delta table.
 
-        Overwrites the table content:
-          - writer.format("delta")
-          - writer.mode("overwrite")
-          - options from self.table_options
+        For existing tables we bypass Hive's ALTER TABLE path by overwriting the
+        physical Delta location directly (with schema overwrite) and refreshing
+        the table metadata. New tables go through saveAsTable so they are
+        registered in the metastore.
         """
-        writer = df.write.format("delta").mode("overwrite")
 
-        if self.table_options:
-            writer = writer.options(**self.table_options)
+        def _writer() -> Any:
+            w = df.write.format("delta").mode("overwrite")
+            if self.table_options:
+                w = w.options(**self.table_options)
+            return w
 
-        writer.saveAsTable(table_name)
+        exists = False
+        try:
+            exists = self.spark.catalog.tableExists(table_name)
+        except Exception:
+            exists = False
+
+        if not exists:
+            _writer().saveAsTable(table_name)
+            return
+
+        table_comment: str | None = None
+        table_properties: dict[str, Any] = {}
+        column_comments: dict[str, str] = {}
+        table_ident = self._quote_identifier(table_name)
+
+        try:
+            info = self.spark.catalog.getTable(table_name)
+            table_comment = getattr(info, "description", None)
+            props = getattr(info, "properties", None)
+            if isinstance(props, dict):
+                table_properties = dict(props)
+        except Exception:
+            pass
+
+        try:
+            cols = self.spark.catalog.listColumns(table_name)
+            column_comments = {}
+            for col in cols:
+                comment = getattr(col, "comment", None)
+                if comment:
+                    column_comments[col.name] = comment
+        except Exception:
+            column_comments = {}
+
+        location: str | None = None
+        try:
+            detail = self._delta_table_for(table_name).detail().collect()
+            if detail:
+                location = detail[0].get("location") or detail[0].get("path")
+        except Exception:
+            location = None
+
+        if not location:
+            try:
+                info = self.spark.catalog.getTable(table_name)
+                location = getattr(info, "location", None)
+            except Exception:
+                location = None
+
+        if not location:
+            # Fallback: drop and recreate if we can't resolve the location.
+            with suppress(Exception):
+                self.spark.sql(f"DROP TABLE IF EXISTS {table_ident}")
+            _writer().saveAsTable(table_name)
+            self._restore_table_metadata(
+                table_ident,
+                table_comment=table_comment,
+                column_comments=column_comments,
+                table_properties=table_properties,
+            )
+            return
+
+        _writer().option("overwriteSchema", "true").save(location)
+        with suppress(Exception):
+            self.spark.catalog.refreshTable(table_name)
+        self._restore_table_metadata(
+            table_ident,
+            table_comment=table_comment,
+            column_comments=column_comments,
+            table_properties=table_properties,
+        )
 
     # ---------- Incremental API ----------
     # incremental_insert: base implementation is fine:

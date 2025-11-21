@@ -957,6 +957,13 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         if "__ff_new_hash" in snapshot_df.columns:
             snapshot_df = snapshot_df.drop("__ff_new_hash")
 
+        # Break lineage so Spark doesn't see this as "read from and overwrite the same table"
+        try:
+            snapshot_df = snapshot_df.localCheckpoint(eager=True)
+        except Exception:
+            snapshot_df = snapshot_df.cache()
+            snapshot_df.count()
+
         storage_meta = self._storage_meta(node, rel_name)
         self._save_df_as_table(rel_name, snapshot_df, storage=storage_meta)
 
@@ -1003,7 +1010,29 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
             return
 
         pruned = ranked.filter(F.col("__ff_rn") <= int(keep_last)).drop("__ff_rn")
-        self._save_df_as_table(relation, pruned)
+
+        # Materialize before overwrite to avoid Spark's
+        # [UNSUPPORTED_OVERWRITE.TABLE] "target that is also being read from".
+        materialized: list[SDF] = []
+
+        def _materialize(df: SDF) -> SDF:
+            try:
+                cp = df.localCheckpoint(eager=True)
+                materialized.append(cp)
+                return cp
+            except Exception:
+                cached = df.cache()
+                cached.count()
+                materialized.append(cached)
+                return cached
+
+        try:
+            out = _materialize(pruned)
+            self._save_df_as_table(relation, out)
+        finally:
+            for handle in materialized:
+                with suppress(Exception):
+                    handle.unpersist()
 
 
 # ────────────────────────── local helpers / shim ──────────────────────────

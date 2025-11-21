@@ -3,18 +3,7 @@ version: "0.1"
 
 vars: {}
 
-models:
-  storage:
-    stg_users.ff:
-      path: ".local/spark/stg_users"
-    stg_orders.ff:
-      path: ".local/spark/stg_orders"
-    mart_user_orders.ff:
-      path: ".local/spark/mart_user_orders"
-    py_constants:
-      path: ".local/spark/py_constants"
-    http_users:
-      path: ".local/spark/http_users"
+models: {}
 
 seeds:
   storage:

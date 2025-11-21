@@ -5,20 +5,7 @@ vars:
   # used by macros and examples
   default_country: "DE"
 
-models:
-  storage:
-    stg_users:
-      path: ".local/spark/stg_users"
-      format: parquet
-    stg_orders:
-      path: ".local/spark/stg_orders"
-      format: parquet
-    dim_users.ff:
-      path: ".local/spark/dim_users"
-      format: parquet
-    fct_user_sales.ff:
-      path: ".local/spark/fct_user_sales"
-      format: parquet
+models: {}
 
 seeds:
   storage:

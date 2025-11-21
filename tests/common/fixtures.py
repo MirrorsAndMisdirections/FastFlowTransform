@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from contextlib import suppress
+import types
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -12,8 +12,15 @@ import pandas as pd
 import pytest
 import sqlalchemy as sa
 from dotenv import load_dotenv
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import DictLoader, Environment, FileSystemLoader, select_autoescape
 from sqlalchemy import text
+
+import fastflowtransform.executors.bigquery.base as bq_base
+import fastflowtransform.executors.bigquery.pandas as bq_pandas
+import fastflowtransform.typing as fft_typing
+from fastflowtransform.executors.bigquery.pandas import BigQueryExecutor
+from tests.common.mock.bigquery import install_fake_bigquery
+from tests.common.mock.snowflake_snowpark import FakeSnowflakeSession
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import psycopg
@@ -39,12 +46,28 @@ except ModuleNotFoundError:  # pragma: no cover - import guard
 
 from fastflowtransform import utest
 from fastflowtransform.core import REGISTRY
-from tests.common.utils import ROOT, run
+from tests.common.utils import ROOT
 
 try:  # Optional: Spark deps may not be installed in core runs
     from fastflowtransform.executors.databricks_spark import DatabricksSparkExecutor
 except ModuleNotFoundError:  # pragma: no cover - import guard
     DatabricksSparkExecutor = None  # type: ignore
+
+
+try:  # Optional: Spark deps may not be installed in core runs
+    from fastflowtransform.executors.databricks_spark import DatabricksSparkExecutor
+except ModuleNotFoundError:  # pragma: no cover - import guard
+    DatabricksSparkExecutor = None  # type: ignore
+
+# --- Snowflake ----------------------------------------------------
+try:
+    from fastflowtransform.executors.snowflake_snowpark import (
+        SnowflakeSnowparkExecutor,
+        _SFCursorShim,
+    )
+except ModuleNotFoundError:  # pragma: no cover
+    SnowflakeSnowparkExecutor = None  # type: ignore[assignment]
+    _SFCursorShim = None  # type: ignore[assignment]
 
 
 # ---- Load Env Variables ----
@@ -104,23 +127,6 @@ def duckdb_env(duckdb_db_path):
     return {"FF_ENGINE": "duckdb", "FF_DUCKDB_PATH": str(duckdb_db_path)}
 
 
-@pytest.fixture(scope="function")
-def duckdb_seeded(duckdb_project, duckdb_env):
-    db_path = duckdb_env.get("FF_DUCKDB_PATH")
-    db_file = Path(db_path) if db_path else None
-    if db_file:
-        if db_file.exists():
-            db_file.unlink()
-        db_file.parent.mkdir(parents=True, exist_ok=True)
-    run(["fft", "seed", str(duckdb_project), "--env", "dev"], duckdb_env)
-    try:
-        yield
-    finally:
-        if db_file:
-            with suppress(Exception):
-                db_file.unlink()
-
-
 # ---- Postgres ----
 @pytest.fixture(scope="session")
 def pg_project():
@@ -132,21 +138,6 @@ def pg_env():
     dsn = os.environ.get("FF_PG_DSN", "postgresql+psycopg://postgres:postgres@localhost:5432/ffdb")
     schema = os.environ.get("FF_PG_SCHEMA", "public")
     return {"FF_ENGINE": "postgres", "FF_PG_DSN": dsn, "FF_PG_SCHEMA": schema}
-
-
-@pytest.fixture(scope="module")
-def pg_seeded(pg_project, pg_env):
-    dsn = pg_env.get("FF_PG_DSN")
-    schema = pg_env.get("FF_PG_SCHEMA") or "public"
-    if psycopg is None or sql is None:
-        pytest.skip("psycopg not installed; install fastflowtransform[postgres] to run PG fixtures")
-    if dsn and schema and ("psycopg://" in dsn or "+psycopg" in dsn):
-        with suppress(Exception), psycopg.connect(dsn) as conn:
-            conn.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
-            conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
-            conn.commit()
-    run(["fft", "seed", str(pg_project), "--env", "stg"], pg_env)
-    yield
 
 
 # ---- Spark ----
@@ -368,3 +359,142 @@ def bigquery_engine_env():
         env["GOOGLE_APPLICATION_CREDENTIALS"] = creds
 
     return env
+
+
+# ---- Snowflake Snowpark ----
+@pytest.fixture(scope="session")
+def snowflake_engine_env():
+    """
+    Basic env for Snowflake Snowpark examples / integration tests.
+
+    Skips if required env vars are missing, so the test suite works without
+    a Snowflake account configured.
+    """
+    account = os.environ.get("FF_SF_ACCOUNT")
+    user = os.environ.get("FF_SF_USER")
+    password = os.environ.get("FF_SF_PASSWORD")
+    warehouse = os.environ.get("FF_SF_WAREHOUSE")
+    database = os.environ.get("FF_SF_DATABASE")
+    schema = os.environ.get("FF_SF_SCHEMA")
+    role = os.environ.get("FF_SF_ROLE")
+    allow_create_schema = os.environ.get("FF_SF_ALLOW_CREATE_SCHEMA", "1")
+
+    # If any core bits are missing, skip Snowflake tests entirely
+    required = [account, user, password, warehouse, database, schema]
+    if not all(required):
+        pytest.skip(
+            "Snowflake env not configured for tests "
+            "(need FF_SF_ACCOUNT, FF_SF_USER, FF_SF_PASSWORD, "
+            "FF_SF_WAREHOUSE, FF_SF_DATABASE, FF_SF_SCHEMA)."
+        )
+
+    env = {
+        "FF_ENGINE": "snowflake_snowpark",
+        "FF_SF_ACCOUNT": account,
+        "FF_SF_USER": user,
+        "FF_SF_PASSWORD": password,
+        "FF_SF_WAREHOUSE": warehouse,
+        "FF_SF_DATABASE": database,
+        "FF_SF_SCHEMA": schema,
+        "FF_SF_ALLOW_CREATE_SCHEMA": allow_create_schema,
+    }
+    if role:
+        env["FF_SF_ROLE"] = role
+    return env
+
+
+@pytest.fixture(scope="session")
+def snowflake_cfg(snowflake_engine_env):
+    """
+    Canonical config dict for SnowflakeSnowparkExecutor, derived from env.
+    """
+    return {
+        "account": snowflake_engine_env["FF_SF_ACCOUNT"],
+        "user": snowflake_engine_env["FF_SF_USER"],
+        "password": snowflake_engine_env["FF_SF_PASSWORD"],
+        "warehouse": snowflake_engine_env["FF_SF_WAREHOUSE"],
+        "database": snowflake_engine_env["FF_SF_DATABASE"],
+        "schema": snowflake_engine_env["FF_SF_SCHEMA"],
+        "role": snowflake_engine_env.get("FF_SF_ROLE"),
+        "allow_create_schema": bool(
+            int(snowflake_engine_env.get("FF_SF_ALLOW_CREATE_SCHEMA", "1"))
+        ),
+    }
+
+
+@pytest.fixture
+def snowflake_executor_fake() -> Any:
+    """
+    Fake SnowflakeSnowparkExecutor using an in-memory FakeSnowflakeSession.
+    This does NOT talk to a real Snowflake account and does not need env vars.
+    It is intended for SQL-shape tests, similar to the BigQuery fake.
+    """
+    if SnowflakeSnowparkExecutor is None:
+        pytest.skip("SnowflakeSnowparkExecutor not importable")
+
+    # Build instance without running its __init__ (which would try to connect).
+    ex: Any = SnowflakeSnowparkExecutor.__new__(SnowflakeSnowparkExecutor)
+
+    # Minimal attributes that the executor expects.
+    ex.database = "FF_TEST_DB"
+    ex.schema = "FF_TEST_SCHEMA"
+    ex.allow_create_schema = False
+
+    # Fake Snowflake session and cursor shim.
+    session = FakeSnowflakeSession()
+    ex.session = session
+    if _SFCursorShim is not None:
+        ex.con = _SFCursorShim(session)
+    else:
+        # Cheap fallback if for some reason the shim isn't available
+        ex.con = types.SimpleNamespace(execute=lambda sql, params=None: None)
+
+    return ex
+
+
+@pytest.fixture(scope="session")
+def jinja_env_bigquery() -> Environment:
+    """
+    Very small Jinja environment for BigQuery unit tests.
+    (You can also reuse your global jinja_env from tests/common/fixtures.py
+     and just import that instead.)
+    """
+    env = Environment(
+        loader=DictLoader({}),
+        autoescape=select_autoescape([]),
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+    # same globals your main jinja_env normally has
+    env.globals.setdefault("is_incremental", lambda: False)
+    env.globals.setdefault("this", None)
+    return env
+
+
+@pytest.fixture
+def bq_executor_fake(monkeypatch) -> BigQueryExecutor:
+    """
+    BigQueryExecutor wired against the FakeClient from tests/common/mock/bigquery.py.
+    No real BigQuery project / dataset / credentials required.
+    """
+    # Make sure all FFT modules that cache a `bigquery` symbol
+    # see the fake module.
+    fake_bq = install_fake_bigquery(
+        monkeypatch,
+        target_modules=[fft_typing, bq_base, bq_pandas],
+    )
+
+    # Instantiate FakeClient via the fake module so the types line up
+    client = fake_bq.Client(project="ff_test_project", location="EU")  # type: ignore[attr-defined]
+
+    # Optionally pretend the dataset exists (for _ensure_dataset tests)
+    client.add_dataset("ff_test_project.ff_snapshots")  # type: ignore[attr-defined]
+
+    ex = BigQueryExecutor(
+        project="ff_test_project",
+        dataset="ff_snapshots",
+        location="EU",
+        client=client,
+        allow_create_dataset=True,
+    )
+    return ex

@@ -3,17 +3,7 @@ version: "0.1"
 
 vars: {}
 
-models:
-  storage:
-    customers.ff:
-      path: ".local/spark/customers"
-      format: parquet
-    orders.ff:
-      path: ".local/spark/orders"
-      format: parquet
-    mart_orders_agg.ff:
-      path: ".local/spark/mart_orders_agg"
-      format: parquet
+models: {}
 
 seeds:
   storage:
