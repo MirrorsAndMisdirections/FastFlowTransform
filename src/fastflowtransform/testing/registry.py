@@ -261,6 +261,30 @@ where t.k is null
 """.strip()
 
 
+def _example_relationship_sql(
+    child_table: str,
+    child_field: str,
+    parent_table: str | None,
+    parent_field: str,
+    child_where: str | None,
+    parent_where: str | None,
+) -> str:
+    """Render an example SQL snippet for relationships (foreign key) checks."""
+    ct = child_table or "<child_table>"
+    cf = child_field or "<child_field>"
+    pt = parent_table or "<parent_table>"
+    pf = parent_field or "<parent_field>"
+    cw = f" where {child_where}" if child_where else ""
+    pw = f" where {parent_where}" if parent_where else ""
+    return f"""
+with child as (select {cf} as k from {ct}{cw}),
+     parent as (select {pf} as k from {pt}{pw})
+select count(*) from child c
+left join parent p on c.k = p.k
+where p.k is null
+""".strip()
+
+
 # ---------------------------------------------------------------------------
 # Reconcile tests
 # ---------------------------------------------------------------------------
@@ -384,6 +408,40 @@ def run_reconcile_coverage(
         return False, str(e), example
 
 
+def run_relationships(
+    con: Any, table: str, column: str | None, params: dict[str, Any]
+) -> tuple[bool, str | None, str | None]:
+    """Runner for testing.relationships (FK-style anti join)."""
+    field = params.get("field") or column
+    to_table = params.get("_to_relation") or params.get("to")
+    to_field = params.get("to_field") or "id"
+    where = params.get("where")
+    to_where = params.get("to_where")
+
+    example = _example_relationship_sql(
+        table, field or "<field>", to_table, to_field, where, to_where
+    )
+
+    if not field:
+        return False, "missing required parameter: field (or column)", example
+    if not to_table:
+        return False, "missing required parameter: to", example
+
+    try:
+        testing.relationships(
+            con,
+            table=table,
+            field=field,
+            to_table=to_table,
+            to_field=to_field,
+            where=where,
+            to_where=to_where,
+        )
+        return True, None, example
+    except testing.TestFailure as e:
+        return False, str(e), example
+
+
 # ---------------------------------------------------------------------------
 # Optional param-schema registry for custom tests
 # ---------------------------------------------------------------------------
@@ -407,6 +465,7 @@ TESTS: dict[str, Runner] = {
     "non_negative_sum": run_non_negative_sum,
     "row_count_between": run_row_count_between,
     "freshness": run_freshness,
+    "relationships": run_relationships,
     # Reconcile tests
     "reconcile_equal": run_reconcile_equal,
     "reconcile_ratio_within": run_reconcile_ratio_within,

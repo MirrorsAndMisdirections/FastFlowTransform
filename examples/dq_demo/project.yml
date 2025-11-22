@@ -51,6 +51,13 @@ tests:
     max_rows: 100
     tags: [example:dq_demo, batch]
 
+  - type: relationships
+    table: orders
+    column: customer_id
+    to: "ref('customers.ff')"
+    to_field: customer_id
+    tags: [example:dq_demo, fk]
+
   # Large max_delay_minutes so the example typically passes;
   # adjust down in real projects to enforce freshness SLAs.
   - type: freshness

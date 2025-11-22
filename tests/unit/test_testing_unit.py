@@ -20,6 +20,7 @@ from fastflowtransform.testing.base import (
     reconcile_diff_within,
     reconcile_equal,
     reconcile_ratio_within,
+    relationships,
     row_count_between,
     sql_list,
     unique,
@@ -585,6 +586,54 @@ def test_reconcile_coverage_fails():
             source={"table": "src", "key": "id"},
             target={"table": "tgt", "key": "id"},
         )
+
+
+@pytest.mark.unit
+def test_relationships_ok():
+    class FakeCon:
+        def execute(self, sql):
+            return _FakeResult([(0,)])
+
+    relationships(
+        FakeCon(),
+        table="fact_events",
+        field="user_id",
+        to_table="dim_users",
+        to_field="id",
+    )
+
+
+@pytest.mark.unit
+def test_relationships_fails_on_orphans():
+    class FakeCon:
+        def execute(self, sql):
+            return _FakeResult([(5,)])
+
+    with pytest.raises(TestFailure):
+        relationships(
+            FakeCon(),
+            table="fact_events",
+            field="user_id",
+            to_table="dim_users",
+            to_field="id",
+        )
+
+
+@pytest.mark.unit
+def test_relationships_wraps_db_errors():
+    class FakeCon:
+        def execute(self, sql):
+            raise RuntimeError("no such column")
+
+    with pytest.raises(TestFailure) as exc:
+        relationships(
+            FakeCon(),
+            table="fact_events",
+            field="user_id",
+            to_table="dim_users",
+            to_field="id",
+        )
+    assert "[relationships]" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

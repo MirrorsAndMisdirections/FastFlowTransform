@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -47,6 +48,21 @@ class DQResult:
     severity: Severity = "error"
     param_str: str = ""
     example_sql: str | None = None
+
+
+_REF_CALL_RE = re.compile(r"^ref\(\s*(['\"])([^'\"]+)\1\s*\)$")
+
+
+def _registry_env() -> Any | None:
+    env = getattr(REGISTRY, "env", None)
+    if env is not None:
+        return env
+    if hasattr(REGISTRY, "get_env"):
+        try:
+            return REGISTRY.get_env()
+        except Exception:
+            return None
+    return None
 
 
 def _is_snapshot_model(node: Any) -> bool:
@@ -172,6 +188,55 @@ def _fmt_reconcile_side(side: Any, executor: Any) -> Any:
     return side_fmt
 
 
+def _resolve_relationship_target_table(value: Any, executor: Any) -> tuple[str | None, str | None]:
+    """Return (display_value, table_for_exec) for relationships.to."""
+    if value is None:
+        return None, None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return "", ""
+        m = _REF_CALL_RE.match(stripped)
+        if m:
+            env = _registry_env()
+            if env is None:
+                raise typer.BadParameter(
+                    "ref('...') requires a loaded project/environment (registry env missing)."
+                )
+            if not hasattr(executor, "_resolve_ref"):
+                raise typer.BadParameter("Current executor cannot resolve ref('...') in tests.")
+            ref_target = m.group(2)
+            try:
+                resolved = executor._resolve_ref(ref_target, env)
+            except Exception as exc:
+                raise typer.BadParameter(f"Failed to resolve ref('{ref_target}'): {exc}") from exc
+            return stripped, resolved
+        return stripped, _fmt_table(stripped, executor)
+    literal = str(value)
+    return literal, _fmt_table(literal, executor)
+
+
+def _prepare_relationship_params(
+    params: dict[str, Any], executor: Any
+) -> tuple[dict[str, Any], str | None]:
+    """Normalize params for relationships tests; returns new params + formatted parent label."""
+    normalized = dict(params or {})
+    target_display: str | None = None
+    if "to" in normalized:
+        display, resolved = _resolve_relationship_target_table(normalized.get("to"), executor)
+        if resolved:
+            normalized["_to_relation"] = resolved
+        if display or resolved:
+            target_display = display or resolved
+            normalized["_to_display"] = target_display
+    return normalized, target_display
+
+
+def _relationships_display(child: str, parent: str | None) -> str:
+    parent_label = parent or "<target>"
+    return f"{child} ⇒ {parent_label}"
+
+
 def _prepare_test_from_spec(
     t: TestSpec, executor: Any
 ) -> tuple[str, Any, Severity, dict[str, Any], Any, Any]:
@@ -181,10 +246,12 @@ def _prepare_test_from_spec(
     kind = t.type
     col = t.column
     severity: Severity = t.severity
-    params: dict[str, Any] = t.params or {}
+    params: dict[str, Any] = dict(t.params or {})
 
-    display_table = t.table
     table_for_exec = _fmt_table(t.table, executor)
+    if not isinstance(table_for_exec, str) or not table_for_exec:
+        raise typer.BadParameter("Missing or invalid 'table' in test config")
+    display_table = table_for_exec
 
     if kind.startswith("reconcile_"):
         params = dict(params)  # copy so we don't mutate original
@@ -192,6 +259,9 @@ def _prepare_test_from_spec(
             side = params.get(key)
             if isinstance(side, dict):
                 params[key] = _fmt_reconcile_side(side, executor)
+    elif kind == "relationships":
+        params, parent_display = _prepare_relationship_params(params, executor)
+        display_table = _relationships_display(table_for_exec, parent_display)
 
     return kind, col, severity, params, display_table, table_for_exec
 
@@ -236,6 +306,12 @@ def _prepare_test_from_mapping(
             side = params.get(key)
             if isinstance(side, dict):
                 params[key] = _fmt_reconcile_side(side, executor)
+    elif kind == "relationships":
+        table_for_exec = _fmt_table(t.get("table"), executor)
+        if not isinstance(table_for_exec, str) or not table_for_exec:
+            raise typer.BadParameter("Missing or invalid 'table' in test config")
+        params, parent_display = _prepare_relationship_params(params, executor)
+        display_table = _relationships_display(table_for_exec, parent_display)
     else:
         table_for_exec = _fmt_table(t.get("table"), executor)
         if not isinstance(table_for_exec, str) or not table_for_exec:
@@ -357,17 +433,22 @@ def _format_params_for_summary(kind: str, params: dict[str, Any]) -> str:
     """Format a short, readable parameter snippet for the summary line."""
     if not params:
         return ""
+    hidden_keys = {"type", "table", "severity", "tags", "name"}
+
+    def _skip(key: str) -> bool:
+        return key in hidden_keys or key.startswith("_")
+
     # Common keys first for stable display
     keys = []
-    if "column" in params:
+    if "column" in params and not _skip("column"):
         keys.append("column")
-    if "values" in params:
+    if "values" in params and not _skip("values"):
         keys.append("values")
-    if "where" in params:
+    if "where" in params and not _skip("where"):
         keys.append("where")
     # Add remaining keys deterministically
     for k in sorted(params.keys()):
-        if k not in keys and k not in ("type", "table", "severity", "tags"):
+        if k not in keys and not _skip(k):
             keys.append(k)
     parts: list[str] = []
     for k in keys:

@@ -306,23 +306,20 @@ def _compute_delay_minutes(
 
     # Spark / Databricks: unix_timestamp over timestamps
     sql_spark = (
-        "select "
-        f"(unix_timestamp(current_timestamp()) - unix_timestamp(max({ts_col}))) / 60.0 "
+        f"select (unix_timestamp(current_timestamp()) - unix_timestamp(max({ts_col}))) / 60.0 "
         f"as delay_min from {table}"
     )
 
     # BigQuery: TIMESTAMP_DIFF returns integer minutes; keep float compatibility
     sql_bigquery = (
-        "select cast("
-        f"TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), max({ts_col}), MINUTE) as float64"
-        ") as delay_min "
-        f"from {table}"
+        f"select cast(TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), max({ts_col}), MINUTE) as float64) "
+        f"as delay_min from {table}"
     )
 
     # Snowflake: DATEDIFF on minutes; cast to float to align with other engines
     sql_snowflake = (
-        "select DATEDIFF('minute', max({ts_col}), CURRENT_TIMESTAMP())::float "
-        f"as delay_min from {table}"
+        f"select DATEDIFF('minute', max({ts_col}), "
+        f"CURRENT_TIMESTAMP())::float as delay_min from {table}"
     )
 
     delay: float | None = None
@@ -528,3 +525,38 @@ def reconcile_coverage(
     dprint("reconcile_coverage:", sql, "=>", missing)
     if missing and missing != 0:
         raise TestFailure(f"Coverage failed: {missing} source keys missing in target")
+
+
+def relationships(
+    con: Any,
+    table: str,
+    field: str,
+    to_table: str,
+    to_field: str,
+    *,
+    where: str | None = None,
+    to_where: str | None = None,
+) -> None:
+    """
+    Assert that every value from child `table.field` exists in parent `to_table.to_field`.
+    Implemented as an anti-join count; failures report the number of missing keys.
+    """
+    child_where = f" where {where}" if where else ""
+    parent_where = f" where {to_where}" if to_where else ""
+    sql = f"""
+      with child as (select {field} as k from {table}{child_where}),
+           parent as (select {to_field} as k from {to_table}{parent_where})
+      select count(*) from child c
+      left join parent p on c.k = p.k
+      where p.k is null
+    """
+    try:
+        missing = _scalar(con, sql)
+    except Exception as e:
+        raise _wrap_db_error("relationships", table, field, sql, e) from e
+    dprint("relationships:", sql, "=>", missing)
+    if missing and missing != 0:
+        raise TestFailure(
+            f"[relationships] {table}.{field} has {missing} orphan key(s) "
+            f"missing in {to_table}.{to_field}"
+        )
