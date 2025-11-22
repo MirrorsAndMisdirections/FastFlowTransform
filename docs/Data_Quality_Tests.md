@@ -13,6 +13,7 @@ The following values are currently supported for `type`:
 - `non_negative_sum`
 - `row_count_between`
 - `freshness`
+- `relationships`
 - `reconcile_equal`
 - `reconcile_ratio_within`
 - `reconcile_diff_within`
@@ -178,6 +179,31 @@ These checks operate on a single table (optionally filtered with `where:`). Unle
   ```
 
   This is straightforward for DuckDB/Postgres; other engines may need adaptations.
+
+---
+
+### `relationships`
+
+* **Purpose:** Validate referential integrity between a child table and a parent lookup table (foreign-key style).
+* **Parameters:**
+
+  * `column` *(str, optional)* — child key column; defaults to the schema-YAML column where the test is defined.
+  * `field` *(str, optional)* — explicit override for the child key column (same as `column` when omitted).
+  * `to` *(str, required)* — parent relation. Accepts plain table names or `ref('model_name')` (the same syntax as SQL models).
+  * `to_field` *(str, default `id`)* — parent column to match against.
+  * `where` *(str, optional)* — filter applied to the child table before validating.
+  * `to_where` *(str, optional)* — filter applied to the parent table.
+* **Failure:** Reports how many orphaned keys exist and prints the anti-join SQL:
+
+  ```sql
+  with child as (select user_id as k from fact_orders),
+       parent as (select id as k from dim_users)
+  select count(*) from child c
+  left join parent p on c.k = p.k
+  where p.k is null
+  ```
+
+  Using `ref('dim_users')` inside `to:` automatically resolves to the physical relation (and handles schema/database prefixes for you).
 
 ## Cross-Table Reconciliations
 

@@ -25,3 +25,13 @@ From this directory:
 Artifacts:
 - Target metadata: `.fastflowtransform/target/{manifest.json,run_results.json,catalog.xml}`
 - DAG HTML: `site/dag/index.html`
+
+## Featured checks
+
+- Single-table tests (`not_null`, `unique`, `row_count_between`, `freshness`, …) live in `project.yml` and give quick feedback on staging tables.
+- Cross-table reconciliations (`reconcile_*`) compare `orders`, `customers`, and the mart to keep aggregates in sync.
+- `relationships` (tagged `fk`) enforces referential integrity between `orders.customer_id` and `customers.customer_id`. Run it in isolation with:
+
+  ```sh
+  fft test . --env dev --select tag:fk
+  ```

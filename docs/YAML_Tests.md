@@ -21,6 +21,12 @@ models:
           - accepted_values:
               values: ["a@example.com","b@example.com","c@gmail.com"]
               severity: warn
+      - name: user_id
+        tests:
+          - relationships:
+              to: ref('dim_users')
+              field: user_id
+              to_field: id
 ````
 
 ### Severities
@@ -52,3 +58,7 @@ Totals
 ✗ failed: 1
 ! warnings: 1
 ```
+
+### Relationships (Foreign Keys)
+
+Use the `relationships` test to assert that every value in a child column exists in a parent table. When declared under a column, the column name becomes the default `field`. The `to` parameter may point to another model via `ref('model_name')`, giving you fully-qualified database identifiers that match the current target profile. Optional filters (`where`, `to_where`) let you scope the child or parent sides independently.
