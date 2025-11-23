@@ -40,9 +40,6 @@ test:
 demo: seed run dag demo-open test
 	@echo "\n✓ Demo done."
 
-clean:
-	rm -rf .local "$(FF_PROJECT)/docs" dist build *.egg-info
-
 # --- Cache demos ---
 
 cache_rw_first:

@@ -34,6 +34,7 @@ Use this page as the front door into the docs: start with the orientation sectio
 - **Profiles & environments:** [Profiles & Environments](Profiles.md) covers executor profiles, environment overrides, credential handling, and engine-specific flags.
 - **Runtimes & observability flags:** [Logging & Verbosity](Logging.md) explains log levels, JSON logs, progress indicators, and metrics toggles during `fft run`.
 - **Local runtimes & engines:** [Local Engine Setup](examples/Local_Engine_Setup.md) walks through DuckDB, Postgres, Spark/Delta, BigQuery, and Snowflake Snowpark bootstrapping for the demos.
+- **CI-friendly workflows:** [CI Checks & Change-Aware Runs](CI_Check.md) introduces `fft ci-check` and `fft run --changed-since` for structural validation and diff-aware pipelines.
 
 ---
 
