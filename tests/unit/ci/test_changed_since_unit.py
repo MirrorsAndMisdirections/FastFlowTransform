@@ -61,7 +61,7 @@ def test_get_changed_models_filters_and_maps(monkeypatch, tmp_path):
         "util.ff": Node(name="util.ff", kind="python", path=Path("models/py/util.ff.py"), deps=[]),
     }
 
-    def fake_run(cmd, cwd, stdout, stderr, text, check):
+    def fake_run(cmd, cwd, capture_output=False, text=False, check=False, **kwargs):
         # Sanity-check the git invocation
         assert "git" in cmd[0]
         assert "diff" in cmd[1]
