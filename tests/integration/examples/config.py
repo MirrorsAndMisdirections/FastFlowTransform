@@ -48,6 +48,16 @@ EXAMPLES: list[ExampleConfig] = [
         },
     ),
     ExampleConfig(
+        name="ci_demo",
+        path=ROOT / "examples" / "ci_demo",
+        make_target="demo",
+        env_by_engine={
+            "duckdb": "dev_duckdb",
+            "postgres": "dev_postgres",
+            "databricks_spark": "dev_databricks",
+        },
+    ),
+    ExampleConfig(
         name="dq_demo",
         path=ROOT / "examples" / "dq_demo",
         make_target="demo",

@@ -193,11 +193,23 @@ SkipBuildOpt = Annotated[
     ),
 ]
 
+ChangedSinceOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--changed-since",
+        help=(
+            "Limit the run to models affected by files changed since the given "
+            "git ref (e.g. origin/main)."
+        ),
+    ),
+]
+
 
 __all__ = [
     "CacheMode",
     "CacheOpt",
     "CaseOpt",
+    "ChangedSinceOpt",
     "EngineOpt",
     "EnvOpt",
     "ExcludeOpt",

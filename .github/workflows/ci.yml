@@ -124,6 +124,10 @@ jobs:
             env_file: examples/cache_demo/.env.dev_duckdb
           - engine: duckdb
             extra: ""
+            example: ci_demo
+            env_file: examples/ci_demo/.env.dev_duckdb
+          - engine: duckdb
+            extra: ""
             example: dq_demo
             env_file: examples/dq_demo/.env.dev_duckdb
           - engine: duckdb
@@ -147,6 +151,10 @@ jobs:
             extra: "postgres"
             example: basic_demo
             env_file: examples/basic_demo/.env.dev_postgres
+          - engine: postgres
+            extra: "postgres"
+            example: ci_demo
+            env_file: examples/ci_demo/.env.dev_postgres
           - engine: postgres
             extra: "postgres"
             example: cache_demo
@@ -183,6 +191,11 @@ jobs:
             example: cache_demo
             java: true
             env_file: examples/cache_demo/.env.dev_databricks
+          - engine: databricks_spark
+            extra: "spark"
+            example: ci_demo
+            java: true
+            env_file: examples/ci_demo/.env.dev_databricks
           - engine: databricks_spark
             extra: "spark"
             example: dq_demo

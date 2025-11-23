@@ -9,6 +9,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -20,10 +21,15 @@ from fastflowtransform.artifacts import (
     write_run_results,
 )
 from fastflowtransform.cache import FingerprintCache, can_skip_node
+from fastflowtransform.ci.changed_since import (
+    compute_affected_models,
+    get_changed_models,
+)
 from fastflowtransform.cli.bootstrap import CLIContext, _prepare_context
 from fastflowtransform.cli.options import (
     CacheMode,
     CacheOpt,
+    ChangedSinceOpt,
     EngineOpt,
     EnvOpt,
     ExcludeOpt,
@@ -38,6 +44,12 @@ from fastflowtransform.cli.options import (
     SelectOpt,
     VarsOpt,
 )
+from fastflowtransform.cli.selectors import (
+    _compile_selector,
+    _parse_select,
+    _selected_subgraph_names,
+    augment_with_state_modified,
+)
 from fastflowtransform.core import REGISTRY, relation_for
 from fastflowtransform.dag import levels as dag_levels
 from fastflowtransform.fingerprint import (
@@ -51,13 +63,6 @@ from fastflowtransform.log_queue import LogQueue
 from fastflowtransform.logging import bind_context, bound_context, clear_context, echo, warn
 from fastflowtransform.meta import ensure_meta_table
 from fastflowtransform.run_executor import ScheduleResult, schedule
-
-from .selectors import (
-    _compile_selector,
-    _parse_select,
-    _selected_subgraph_names,
-    augment_with_state_modified,
-)
 
 
 @dataclass
@@ -415,6 +420,48 @@ def _wanted_names(
     )
 
 
+def _apply_changed_since_filter(
+    ctx: CLIContext,
+    wanted: set[str],
+    select: SelectOpt,
+    exclude: ExcludeOpt,
+    changed_since: str | None,
+) -> set[str]:
+    """
+    If --changed-since is provided, restrict the selection to models whose
+    files changed since the given git ref PLUS their upstream/downstream
+    neighbors.
+
+    Semantics:
+      - Without --select/--exclude:
+          wanted = affected_models
+      - With --select or --exclude:
+          wanted = wanted ∩ affected_models
+
+      (So you can combine tag/namespace selectors with --changed-since.)
+    """
+    if not changed_since:
+        return wanted
+
+    project_dir = ctx.project
+    if not isinstance(project_dir, Path):
+        project_dir = Path(project_dir)
+
+    changed = get_changed_models(project_dir, changed_since)
+    affected = compute_affected_models(changed, REGISTRY.nodes)
+
+    if not affected:
+        # Nothing affected by changes → nothing to run
+        return set()
+
+    # If user also provided selectors/excludes, intersect with those.
+    if (select and len(select) > 0) or (exclude and len(exclude) > 0):
+        return wanted & affected
+
+    # No further selectors → affected models define the universe
+    return affected
+
+
 def _explicit_targets(
     rebuild_only: RebuildOnlyOpt, rebuild: bool, select: SelectOpt, raw_selected: list[str]
 ) -> list[str]:
@@ -542,6 +589,7 @@ def run(
     rebuild_only: RebuildOnlyOpt = None,
     offline: OfflineOpt = False,
     http_cache: HttpCacheOpt = None,
+    changed_since: ChangedSinceOpt = None,
 ) -> None:
     # _ensure_logging()
     # HTTP/API-Flags → ENV, damit fastflowtransform.api.http sie liest
@@ -557,6 +605,14 @@ def run(
 
     select_tokens, _, raw_selected = _select_predicate_and_raw(engine_, ctx, select)
     wanted = _wanted_names(select_tokens=select_tokens, exclude=exclude, raw_selected=raw_selected)
+
+    wanted = _apply_changed_since_filter(
+        ctx=ctx,
+        wanted=wanted,
+        select=select,
+        exclude=exclude,
+        changed_since=changed_since,
+    )
 
     explicit_targets = _explicit_targets(rebuild_only, rebuild, select, raw_selected)
     _maybe_exit_if_empty(wanted, explicit_targets)

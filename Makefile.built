@@ -30,6 +30,3 @@ upload-test: build check
 
 upload: build check
 	uvx twine upload dist/*
-
-clean:
-	rm -rf build dist *.egg-info

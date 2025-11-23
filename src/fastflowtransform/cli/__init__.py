@@ -16,6 +16,7 @@ from fastflowtransform.cli.bootstrap import (
     _resolve_profile,
     _resolve_project_path,
 )
+from fastflowtransform.cli.ci_cmd import register as _register_ci
 from fastflowtransform.cli.dag_cmd import dag, register as _register_dag
 from fastflowtransform.cli.docgen_cmd import docgen, register as _register_docgen
 from fastflowtransform.cli.docs_utils import (
@@ -132,6 +133,7 @@ _register_sync_db_comments(app)
 _register_init(app)
 _register_snapshot(app)
 _register_source(app)
+_register_ci(app)
 
 
 __all__ = [
