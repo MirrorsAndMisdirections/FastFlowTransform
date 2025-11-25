@@ -5,12 +5,7 @@ vars: {}
 
 models: {}
 
-seeds:
-  storage:
-    seed_users:
-      path: ".local/spark/seed_users"
-    seed_orders:
-      path: ".local/spark/seed_orders"
+seeds: {}
 
 tests:
   - type: row_count_between

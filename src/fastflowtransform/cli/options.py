@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
+import click
 import typer
 
 from fastflowtransform.settings import EngineType
@@ -52,13 +53,38 @@ HtmlOpt = Annotated[
     typer.Option("--html", help="Generate HTML DAG and mini documentation"),
 ]
 
+type Jobs = int | Literal["auto"]
+
+
+def _jobs_callback(
+    ctx: click.Context,
+    param: click.Parameter,
+    value: str | None,
+) -> Jobs | None:
+    if value is None:
+        return None
+
+    if value == "auto":
+        return "auto"
+
+    try:
+        n = int(value)
+    except ValueError as e:
+        raise typer.BadParameter("`--jobs` must be an integer ≥1 or 'auto'.") from e
+
+    if n < 1:
+        raise typer.BadParameter("`--jobs` must be ≥1 or 'auto'.")
+
+    return n
+
+
 JobsOpt = Annotated[
-    int,
+    str,
     typer.Option(
         "--jobs",
-        help="Max parallel executions per level (≥1).",
-        min=1,
+        help="Max parallel executions per level (≥1) or 'auto'.",
         show_default=True,
+        callback=_jobs_callback,
     ),
 ]
 

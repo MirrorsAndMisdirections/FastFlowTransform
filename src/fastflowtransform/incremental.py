@@ -73,7 +73,13 @@ def _is_merge_not_supported_error(exc: Exception) -> bool:
 
 def _exec_sql(exe: Any, sql: str) -> None:
     """Best-effort SQL execution across engines (DuckDB/PG/Snowflake/BQ shims)."""
-    if hasattr(exe, "con") and hasattr(exe.con, "execute"):  # DuckDB
+    # Prefer an engine-provided '_execute_sql' hook if available.
+    hook = getattr(exe, "_execute_sql", None)
+    if callable(hook):
+        hook(sql)
+        return
+
+    if hasattr(exe, "con") and hasattr(exe.con, "execute"):  # DuckDB / BQ shim etc.
         exe.con.execute(sql)
         return
     if hasattr(exe, "engine"):  # SQLAlchemy Engine

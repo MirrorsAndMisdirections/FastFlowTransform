@@ -5,7 +5,8 @@ from collections.abc import Callable, Iterable
 from contextlib import suppress
 from functools import reduce
 from pathlib import Path
-from typing import Any
+from time import perf_counter
+from typing import Any, cast
 from urllib.parse import unquote, urlparse
 
 from jinja2 import Environment
@@ -18,12 +19,18 @@ from fastflowtransform.executors._spark_imports import (
     get_spark_window,
 )
 from fastflowtransform.executors.base import BaseExecutor
+from fastflowtransform.executors.budget import BudgetGuard
+from fastflowtransform.executors.query_stats import QueryStats
 from fastflowtransform.logging import echo, echo_debug
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
 from fastflowtransform.snapshots import resolve_snapshot_config
 from fastflowtransform.table_formats import get_spark_format_handler
 from fastflowtransform.table_formats.base import SparkFormatHandler
 from fastflowtransform.typing import SDF, DataType, SparkSession
+
+# ---------------------------------------------------------------------------
+# Delta integration
+# ---------------------------------------------------------------------------
 
 # Enable Delta Lake via delta-spark when available
 configure_spark_with_delta_pip: Callable[..., Any] | None
@@ -36,7 +43,34 @@ except Exception:  # pragma: no cover
 
 _DELTA_EXTENSION = "io.delta.sql.DeltaSparkSessionExtension"
 _DELTA_CATALOG = "org.apache.spark.sql.delta.catalog.DeltaCatalog"
-# _SPARK_DEFAULT_CATALOG = "org.apache.spark.sql.internal.CatalogImpl"  # Spark's built-in
+
+
+def _csv_tokens(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [part.strip() for part in value.split(",") if part and part.strip()]
+
+
+def _ensure_csv_token(value: str | None, token: str) -> tuple[str | None, bool]:
+    tokens = _csv_tokens(value)
+    if token in tokens:
+        return value, False
+    tokens.append(token)
+    return ",".join(tokens), True
+
+
+def _as_nonempty_str(value: Any | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _safe_conf(spark: SparkSession, key: str, default: str = "<unset>") -> str:
+    try:
+        return str(spark.conf.get(key, default))
+    except Exception as exc:
+        return f"<error: {exc}>"
 
 
 def _has_delta(spark: SparkSession) -> bool:
@@ -109,34 +143,6 @@ def _has_delta(spark: SparkSession) -> bool:
     return any(_try_for_name(handle) for handle in _handles())
 
 
-def _csv_tokens(value: str | None) -> list[str]:
-    if not value:
-        return []
-    return [part.strip() for part in value.split(",") if part and part.strip()]
-
-
-def _ensure_csv_token(value: str | None, token: str) -> tuple[str | None, bool]:
-    tokens = _csv_tokens(value)
-    if token in tokens:
-        return value, False
-    tokens.append(token)
-    return ",".join(tokens), True
-
-
-def _as_nonempty_str(value: Any | None) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _safe_conf(spark: SparkSession, key: str, default: str = "<unset>") -> str:
-    try:
-        return str(spark.conf.get(key, default))
-    except Exception as exc:
-        return f"<error: {exc}>"
-
-
 def _log_delta_capabilities(
     spark: SparkSession,
     *,
@@ -174,8 +180,15 @@ def _log_delta_capabilities(
 
 
 class DatabricksSparkExecutor(BaseExecutor[SDF]):
-    ENGINE_NAME = "databricks_spark"
     """Spark/Databricks executor without pandas: Python models operate on Spark DataFrames."""
+
+    ENGINE_NAME = "databricks_spark"
+    _BUDGET_GUARD = BudgetGuard(
+        env_var="FF_SPK_MAX_BYTES",
+        estimator_attr="_estimate_query_bytes",
+        engine_label="Databricks/Spark",
+        what="query",
+    )
 
     def __init__(
         self,
@@ -193,10 +206,12 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
     ):
         extra_conf = dict(extra_conf or {})
         self._user_spark = spark
+
         builder = SparkSession.builder.master(master).appName(app_name)
         catalog_key = "spark.sql.catalog.spark_catalog"
         ext_key = "spark.sql.extensions"
 
+        # Warehouse directory
         warehouse_path: Path | None = None
         if warehouse_dir:
             warehouse_path = Path(warehouse_dir).expanduser()
@@ -209,6 +224,7 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         if catalog_value:
             builder = builder.config(catalog_key, catalog_value)
 
+        # Extra config
         if extra_conf:
             for key, value in extra_conf.items():
                 if value is not None:
@@ -221,6 +237,7 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         fmt_requested = (table_format or "").strip().lower()
         wants_delta = fmt_requested == "delta"
 
+        # Apply Delta configuration last, after all Spark configs are set.
         if not wants_delta and self._user_spark is None:
             catalog_overridden = bool(catalog_value)
             if not catalog_overridden:
@@ -259,12 +276,13 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         self.schema = database
 
         if database:
-            self.spark.sql(f"CREATE DATABASE IF NOT EXISTS `{database}`")
+            self._execute_sql(f"CREATE DATABASE IF NOT EXISTS `{database}`")
             with suppress(Exception):
                 self.spark.catalog.setCurrentDatabase(database)
 
         self.spark_table_format: str | None = fmt_requested or None
         self.spark_table_options = {str(k): str(v) for k, v in (table_options or {}).items()}
+
         # ---- Delta availability check ----
         self._delta_ok = _has_delta(self.spark)
 
@@ -289,7 +307,154 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
             self.spark_table_format,
             self.spark,
             table_options=self.spark_table_options,
+            sql_runner=self._execute_sql,
         )
+
+        self._spark_default_size = self._detect_default_size()
+
+    # ---------- Cost estimation & central execution ----------
+
+    def _detect_default_size(self) -> int:
+        """
+        Detect Spark's defaultSizeInBytes sentinel.
+
+        - Prefer spark.sql.defaultSizeInBytes if available.
+        - Fall back to Long.MaxValue (2^63 - 1) otherwise.
+        """
+        try:
+            conf_val = self.spark.conf.get("spark.sql.defaultSizeInBytes")
+            if conf_val is not None:
+                return int(conf_val)
+        except Exception:
+            # config not set / older Spark / weird environment
+            pass
+
+        # Fallback: Spark uses Long.MaxValue by default
+        return 2**63 - 1  # 9223372036854775807
+
+    def _parse_spark_stats_size(self, size_val: Any) -> int | None:
+        if size_val is None:
+            return None
+        try:
+            size_int = int(str(size_val))
+        except Exception:
+            return None
+        return size_int if size_int > 0 else None
+
+    def _jplan_uses_default_size(self, jplan: Any) -> bool:
+        """
+        Recursively walk a JVM LogicalPlan and return True if any node's
+        stats.sizeInBytes equals spark.sql.defaultSizeInBytes.
+        """
+        if self._spark_default_size is None:
+            return False
+
+        try:
+            stats = jplan.stats()
+            size_val = stats.sizeInBytes()
+            size_int = int(str(size_val))
+            if size_int == self._spark_default_size:
+                return True
+        except Exception:
+            # ignore stats errors and keep walking
+            pass
+
+        # children() is a Scala Seq[LogicalPlan]; iterate via .size() / .apply(i)
+        try:
+            children = jplan.children()
+            n = children.size()
+            for idx in range(n):
+                child = children.apply(idx)
+                if self._jplan_uses_default_size(child):
+                    return True
+        except Exception:
+            # if we can't inspect children, stop here
+            pass
+
+        return False
+
+    def _spark_plan_bytes(self, sql: str) -> int | None:
+        """
+        Inspect the optimized logical plan via the JVM and return sizeInBytes
+        as an integer, or None if not available.
+
+        This does *not* execute the query; it only goes through analysis/planning.
+        """
+        try:
+            normalized = self._selectable_body(sql).rstrip(";\n\t ")
+            if not normalized:
+                normalized = sql
+        except Exception:
+            normalized = sql
+
+        stmt = normalized.lstrip().lower()
+        if not stmt.startswith(("select", "with")):
+            # DDL/DML statements (ALTER/INSERT/etc.) should not be executed twice.
+            return None
+
+        try:
+            df = self.spark.sql(normalized)
+
+            jdf = cast(Any, getattr(df, "_jdf", None))
+            if jdf is None:
+                return None
+
+            qe = jdf.queryExecution()
+            jplan = qe.optimizedPlan()
+
+            # If any node relies on defaultSizeInBytes, we don't trust the stats
+            if self._jplan_uses_default_size(jplan):
+                return None
+
+            stats = jplan.stats()
+
+            size_attr = getattr(stats, "sizeInBytes", None)
+            size_val = size_attr() if callable(size_attr) else size_attr
+
+            return self._parse_spark_stats_size(size_val)
+        except Exception:
+            return None
+
+    def _estimate_query_bytes(self, sql: str) -> int | None:
+        """
+        Best-effort logical-plan size estimate using Spark's stats.
+
+        It inspects the optimized plan's sizeInBytes via the JVM API without
+        executing the query. If unavailable or unsupported, returns None and
+        the guard is effectively disabled.
+        """
+        return self._spark_plan_bytes(sql)
+
+    def _execute_sql(self, sql: str) -> SDF:
+        """
+        Central Spark SQL runner.
+
+        - Guarded by FF_SPK_MAX_BYTES via the cost guard.
+        - Returns a Spark DataFrame (same as spark.sql).
+        - Records best-effort query stats for run_results.json.
+        """
+        estimated_bytes = self._apply_budget_guard(self._BUDGET_GUARD, sql)
+        if estimated_bytes is None and not self._is_budget_guard_active():
+            with suppress(Exception):
+                estimated_bytes = self._spark_plan_bytes(sql)
+        t0 = perf_counter()
+        df = self.spark.sql(sql)
+        dt_ms = int((perf_counter() - t0) * 1000)
+
+        # Best-effort logical estimate
+        bytes_processed = (
+            estimated_bytes if estimated_bytes is not None else self._spark_plan_bytes(sql)
+        )
+
+        # For Spark we don't attempt row counts without executing the job
+        self._record_query_stats(
+            QueryStats(
+                bytes_processed=bytes_processed,
+                rows=None,
+                duration_ms=dt_ms,
+            )
+        )
+        return df
 
     # ---------- Frame hooks (required) ----------
     def _read_relation(self, relation: str, node: Node, deps: Iterable[str]) -> SDF:
@@ -303,12 +468,16 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         storage_meta = self._storage_meta(node, relation)
         # Delegate managed/unmanaged handling to _save_df_as_table so Iceberg
         # (or other handlers) can consistently enforce managed tables.
+        start = perf_counter()
         self._save_df_as_table(relation, df, storage=storage_meta)
+        duration_ms = int((perf_counter() - start) * 1000)
+        self._record_spark_dataframe_stats(df, duration_ms)
 
     def _create_view_over_table(self, view_name: str, backing_table: str, node: Node) -> None:
+        """Compatibility hook: create a simple SELECT * view over an existing table."""
         view_sql = self._sql_identifier(view_name)
         backing_sql = self._sql_identifier(backing_table)
-        self.spark.sql(f"CREATE OR REPLACE VIEW {view_sql} AS SELECT * FROM {backing_sql}")
+        self._execute_sql(f"CREATE OR REPLACE VIEW {view_sql} AS SELECT * FROM {backing_sql}")
 
     def _validate_required(
         self, node_name: str, inputs: Any, requires: dict[str, set[str]]
@@ -365,6 +534,8 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         Retrieve configured storage overrides for the logical node backing `relation`.
         """
         rel_clean = self._strip_quotes(relation)
+
+        # 1) Direct node meta / storage config
         if node is not None:
             meta = dict((node.meta or {}).get("storage") or {})
             if meta:
@@ -372,6 +543,8 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
             lookup = storage.get_model_storage(node.name)
             if lookup:
                 return lookup
+
+        # 2) Search REGISTRY nodes by relation_for(name)
         for cand in getattr(REGISTRY, "nodes", {}).values():
             try:
                 if self._strip_quotes(relation_for(cand.name)) == rel_clean:
@@ -383,6 +556,8 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
                         return lookup
             except Exception:
                 continue
+
+        # 3) Direct storage override by relation name
         return storage.get_model_storage(rel_clean)
 
     def _write_to_storage_path(self, relation: str, df: SDF, storage_meta: dict[str, Any]) -> None:
@@ -402,6 +577,35 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         if path:
             with suppress(Exception):
                 self.spark.catalog.refreshByPath(path)
+
+    def _record_spark_dataframe_stats(self, df: SDF, duration_ms: int) -> None:
+        bytes_est = self._spark_dataframe_bytes(df)
+        self._record_query_stats(
+            QueryStats(
+                bytes_processed=bytes_est,
+                rows=None,
+                duration_ms=duration_ms,
+            )
+        )
+
+    def _spark_dataframe_bytes(self, df: SDF) -> int | None:
+        try:
+            jdf = cast(Any, getattr(df, "_jdf", None))
+            if jdf is None:
+                return None
+
+            qe = jdf.queryExecution()
+            jplan = qe.optimizedPlan()
+
+            if self._jplan_uses_default_size(jplan):
+                return None
+
+            stats = jplan.stats()
+            size_attr = getattr(stats, "sizeInBytes", None)
+            size_val = size_attr() if callable(size_attr) else size_attr
+            return self._parse_spark_stats_size(size_val)
+        except Exception:
+            return None
 
     # ---- SQL hooks ----
     def _format_relation_for_ref(self, name: str) -> str:
@@ -567,13 +771,18 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         # Managed tables: delegate to the format handler (Delta, Parquet, Iceberg, ...)
         self._format_handler.save_df_as_table(table_name, df)
 
+        with suppress(Exception):
+            self._execute_sql(
+                f"ANALYZE TABLE {self._sql_identifier(table_name)} COMPUTE STATISTICS"
+            )
+
     def _create_or_replace_view(self, target_sql: str, select_body: str, node: Node) -> None:
-        self.spark.sql(f"CREATE OR REPLACE VIEW {target_sql} AS {select_body}")
+        self._execute_sql(f"CREATE OR REPLACE VIEW {target_sql} AS {select_body}")
 
     def _create_or_replace_table(self, target_sql: str, select_body: str, node: Node) -> None:
         preview = f"-- target={target_sql}\n{select_body}"
         try:
-            df = self.spark.sql(select_body)
+            df = self._execute_sql(select_body)
             storage_meta = self._storage_meta(node, target_sql)
             self._save_df_as_table(target_sql, df, storage=storage_meta)
         except Exception as exc:
@@ -584,7 +793,7 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
     ) -> None:
         view_sql = self._sql_identifier(view_name)
         backing_sql = self._sql_identifier(backing_table)
-        self.spark.sql(f"CREATE OR REPLACE VIEW {view_sql} AS SELECT * FROM {backing_sql}")
+        self._execute_sql(f"CREATE OR REPLACE VIEW {view_sql} AS SELECT * FROM {backing_sql}")
 
     # ---- Meta hook ----
     def on_node_built(self, node: Node, relation: str, fingerprint: str) -> None:
@@ -600,7 +809,7 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
     def create_table_as(self, relation: str, select_sql: str) -> None:
         """CREATE TABLE AS with cleaned SELECT body."""
         body = self._selectable_body(select_sql).strip().rstrip(";\n\t ")
-        df = self.spark.sql(body)
+        df = self._execute_sql(body)
         self._save_df_as_table(relation, df)
 
     def full_refresh_table(self, relation: str, select_sql: str) -> None:
@@ -610,7 +819,7 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         """
         body = self._selectable_body(select_sql).strip().rstrip(";\n\t ")
         # Delegate to format handler via _save_df_as_table for managed, or storage for unmanaged
-        df = self.spark.sql(body)
+        df = self._execute_sql(body)
         self._save_df_as_table(relation, df)
 
     def incremental_insert(self, relation: str, select_sql: str) -> None:
@@ -702,14 +911,13 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         existing = {f.name for f in target_df.schema.fields}
         # Output schema from the SELECT
         body = self._first_select_body(select_sql).strip().rstrip(";\n\t ")
-        probe = self.spark.sql(f"SELECT * FROM ({body}) q LIMIT 0")
+        probe = self._execute_sql(f"SELECT * FROM ({body}) q LIMIT 0")
         to_add = [f for f in probe.schema.fields if f.name not in existing]
         if not to_add:
             return
 
-        # Map types best-effort (Spark SQL types); default STRING
         def _spark_sql_type(dt: DataType) -> str:
-            # Use simple, portable mapping for documentation UIs & broad compatibility
+            """Simple, portable mapping for Spark SQL types."""
             return (
                 getattr(dt, "simpleString", lambda: "string")().upper()
                 if hasattr(dt, "simpleString")
@@ -718,7 +926,7 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
 
         cols_sql = ", ".join([f"`{f.name}` {_spark_sql_type(f.dataType)}" for f in to_add])
         table_sql = self._sql_identifier(relation)
-        self.spark.sql(f"ALTER TABLE {table_sql} ADD COLUMNS ({cols_sql})")
+        self._execute_sql(f"ALTER TABLE {table_sql} ADD COLUMNS ({cols_sql})")
 
     # ── Snapshot API ─────────────────────────────────────────────────────
 
@@ -824,7 +1032,7 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         hash_col: str,
         upd_meta: str,
     ) -> None:
-        src_df = self.spark.sql(body)
+        src_df = self._execute_sql(body)
 
         echo_debug(f"[snapshot] first run for {rel_name} (strategy={strategy})")
 
@@ -877,7 +1085,7 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         echo_debug(f"[snapshot] incremental run for {rel_name} (strategy={strategy})")
 
         existing = self.spark.table(physical)
-        src_df = self.spark.sql(body)
+        src_df = self._execute_sql(body)
 
         missing_keys_src = [k for k in unique_key if k not in src_df.columns]
         missing_keys_snap = [k for k in unique_key if k not in existing.columns]
@@ -1066,7 +1274,10 @@ class _SparkConnShim:  # pragma: no cover
 
 
 def _split_db_table(qualified: str) -> tuple[str | None, str]:
-    """Split 'db.table' → (db, table); backticks allowed. Returns (None, name) if unqualified."""
+    """
+    Split "db.table" → (db, table); backticks allowed.
+    Returns (None, name) if unqualified.
+    """
     s = qualified.strip("`")
     parts = s.split(".")
     part_len = 2

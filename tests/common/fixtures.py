@@ -1,8 +1,6 @@
-# tests/common/fixtures.py
 from __future__ import annotations
 
 import os
-import types
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -11,55 +9,41 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 import sqlalchemy as sa
-from dotenv import load_dotenv
 from jinja2 import DictLoader, Environment, FileSystemLoader, select_autoescape
 from sqlalchemy import text
 
 import fastflowtransform.executors.bigquery.base as bq_base
 import fastflowtransform.executors.bigquery.pandas as bq_pandas
 import fastflowtransform.typing as fft_typing
+from fastflowtransform import utest
+from fastflowtransform.core import REGISTRY
 from fastflowtransform.executors.bigquery.pandas import BigQueryExecutor
 from tests.common.mock.bigquery import install_fake_bigquery
 from tests.common.mock.snowflake_snowpark import FakeSnowflakeSession
+from tests.common.utils import ROOT
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    import psycopg
-    from psycopg import sql
-
     from fastflowtransform.executors.databricks_spark import (
         DatabricksSparkExecutor as DatabricksSparkExecutorType,
     )
 else:
-    try:
-        import psycopg  # type: ignore
-        from psycopg import sql  # type: ignore
-    except ModuleNotFoundError:
-        psycopg = None  # type: ignore
-        sql = None  # type: ignore
-
     DatabricksSparkExecutorType = Any
 
+# ---- Optional executors ------------------------------------------------------
+
+# Postgres
+try:
+    from fastflowtransform.executors.postgres import PostgresExecutor
+except ModuleNotFoundError:  # pragma: no cover - optional dep
+    PostgresExecutor = None  # type: ignore[assignment]
+
+# Spark (Databricks)
 try:  # Optional: Spark deps may not be installed in core runs
     from fastflowtransform.executors.databricks_spark import DatabricksSparkExecutor
 except ModuleNotFoundError:  # pragma: no cover - import guard
-    DatabricksSparkExecutor = None  # type: ignore
+    DatabricksSparkExecutor = None  # type: ignore[assignment]
 
-from fastflowtransform import utest
-from fastflowtransform.core import REGISTRY
-from tests.common.utils import ROOT
-
-try:  # Optional: Spark deps may not be installed in core runs
-    from fastflowtransform.executors.databricks_spark import DatabricksSparkExecutor
-except ModuleNotFoundError:  # pragma: no cover - import guard
-    DatabricksSparkExecutor = None  # type: ignore
-
-
-try:  # Optional: Spark deps may not be installed in core runs
-    from fastflowtransform.executors.databricks_spark import DatabricksSparkExecutor
-except ModuleNotFoundError:  # pragma: no cover - import guard
-    DatabricksSparkExecutor = None  # type: ignore
-
-# --- Snowflake ----------------------------------------------------
+# Snowflake
 try:
     from fastflowtransform.executors.snowflake_snowpark import (
         SnowflakeSnowparkExecutor,
@@ -70,26 +54,13 @@ except ModuleNotFoundError:  # pragma: no cover
     _SFCursorShim = None  # type: ignore[assignment]
 
 
-# ---- Load Env Variables ----
-@pytest.fixture(scope="session", autouse=True)
-def load_test_env():
-    candidates = [
-        ROOT / "tests" / ".env",
-        ROOT / "tests" / ".env.dev_databricks",
-        ROOT / "tests" / ".env.dev_duckdb",
-        ROOT / "tests" / ".env.dev_postgres",
-    ]
-
-    for env_file in candidates:
-        if env_file.is_file():
-            load_dotenv(env_file, override=False)
+# ---- Jinja env ----------------------------------------------------------------
 
 
-# ---- Jinja Env ----
 @pytest.fixture(scope="session")
-def jinja_env():
+def jinja_env() -> Environment:
     """
-    Minimal Jinja2 rnvironment for rendering-tests.
+    Minimal Jinja2 environment for rendering tests.
     """
     env = Environment(
         loader=FileSystemLoader(["."]),
@@ -109,38 +80,53 @@ def jinja_env():
     return env
 
 
-# ---- DuckDB ----
+# ---- DuckDB -------------------------------------------------------------------
+
+
 @pytest.fixture(scope="session")
-def duckdb_project():
+def duckdb_project() -> Path:
     return ROOT / "examples" / "simple_duckdb"
 
 
 @pytest.fixture(scope="session")
-def duckdb_db_path(duckdb_project):
+def duckdb_db_path(duckdb_project: Path) -> Path:
     p = duckdb_project / ".local" / "demo.duckdb"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
 
 @pytest.fixture(scope="session")
-def duckdb_env(duckdb_db_path):
+def duckdb_env(duckdb_db_path: Path) -> dict[str, str]:
     return {"FF_ENGINE": "duckdb", "FF_DUCKDB_PATH": str(duckdb_db_path)}
 
 
-# ---- Postgres ----
+# ---- Postgres -----------------------------------------------------------------
+
+
 @pytest.fixture(scope="session")
-def pg_project():
+def pg_project() -> Path:
     return ROOT / "examples" / "postgres"
 
 
 @pytest.fixture(scope="session")
-def pg_env():
+def pg_env() -> dict[str, str]:
     dsn = os.environ.get("FF_PG_DSN", "postgresql+psycopg://postgres:postgres@localhost:5432/ffdb")
     schema = os.environ.get("FF_PG_SCHEMA", "public")
     return {"FF_ENGINE": "postgres", "FF_PG_DSN": dsn, "FF_PG_SCHEMA": schema}
 
 
-# ---- Spark ----
+@pytest.fixture(scope="session")
+def postgres_exec():
+    dsn = os.environ.get("FF_PG_DSN", "postgresql+psycopg://postgres:postgres@localhost:5432/ffdb")
+    schema = os.environ.get("FF_PG_SCHEMA", "public")
+    if PostgresExecutor is None:
+        pytest.skip("FF_PG_DSN not set; skipping Postgres snapshot tests")
+    return PostgresExecutor(dsn=dsn, schema=schema)
+
+
+# ---- Spark --------------------------------------------------------------------
+
+
 @pytest.fixture
 def exec_minimal(monkeypatch):
     if DatabricksSparkExecutor is None:
@@ -151,6 +137,9 @@ def exec_minimal(monkeypatch):
         fake_spark = MagicMock()
         SP.builder.master.return_value.appName.return_value.getOrCreate.return_value = fake_spark
         ex = DatabricksSparkExecutor()
+    # JVM plan inspection loops forever on MagicMocks; skip in unit tests.
+    monkeypatch.setattr(ex, "_spark_plan_bytes", lambda *_, **__: None)
+    monkeypatch.setattr(ex, "_spark_dataframe_bytes", lambda *_, **__: None)
     # accept mocks as frames in unit tests
     monkeypatch.setattr(ex, "_is_frame", lambda obj: True)
     return ex
@@ -161,6 +150,7 @@ def exec_factory():
     """
     Build a DatabricksSparkExecutor with arbitrary __init__ kwargs,
     but always with mocked SparkSession (no real JVM).
+
     Returns (executor, fake_builder, fake_spark).
     """
 
@@ -181,6 +171,8 @@ def exec_factory():
             fake_builder.getOrCreate.return_value = fake_spark
 
             ex = DatabricksSparkExecutor(**kwargs)
+            ex._spark_plan_bytes = lambda *_, **__: None
+            ex._spark_dataframe_bytes = lambda *_, **__: None
         return ex, fake_builder, fake_spark
 
     return _make
@@ -206,7 +198,7 @@ def spark_exec(spark_tmpdir: Path) -> DatabricksSparkExecutorType:
 
 
 @pytest.fixture(scope="session")
-def spark_exec_delta(spark_tmpdir):
+def spark_exec_delta(spark_tmpdir: Path) -> DatabricksSparkExecutorType:
     if DatabricksSparkExecutor is None:
         pytest.skip(
             "pyspark/delta not installed; install fastflowtransform[spark] to run Spark tests"
@@ -227,9 +219,11 @@ def spark_exec_delta(spark_tmpdir):
     )
 
 
-# ---- utest ----
+# ---- utest helpers ------------------------------------------------------------
+
+
 @pytest.fixture
-def fake_registry(tmp_path, monkeypatch):
+def fake_registry(tmp_path: Path, monkeypatch) -> SimpleNamespace:
     node = SimpleNamespace(name="model_a", kind="sql", deps=["src1"])
     reg = SimpleNamespace(
         nodes={"model_a": node},
@@ -282,9 +276,11 @@ def postgresutor():
     return PgEx(engine)
 
 
-# ---- Examples ----
+# ---- Example engine envs ------------------------------------------------------
+
+
 @pytest.fixture(scope="session")
-def duckdb_engine_env(tmp_path_factory):
+def duckdb_engine_env(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]:
     """Basic env for DuckDB examples."""
     db_dir = tmp_path_factory.mktemp("duckdb")
     db_path = db_dir / "examples.duckdb"
@@ -295,7 +291,7 @@ def duckdb_engine_env(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
-def postgres_engine_env():
+def postgres_engine_env() -> dict[str, str]:
     """Basic env for Postgres. Skipped if DSN is missing or DB not reachable."""
     dsn = os.environ.get(
         "FF_PG_DSN",
@@ -303,12 +299,12 @@ def postgres_engine_env():
     )
     schema = os.environ.get("FF_PG_SCHEMA", "public")
 
-    # Optional: Connectivity-Check
+    # Optional: connectivity check
     try:
         engine = sa.create_engine(dsn)
         with engine.connect() as conn:
             conn.execute(text("select 1"))
-    except Exception as exc:
+    except Exception as exc:  # pragma: no cover - integration guard
         pytest.skip(f"Postgres not reachable at DSN={dsn!r}: {exc}")
 
     return {
@@ -319,7 +315,7 @@ def postgres_engine_env():
 
 
 @pytest.fixture(scope="session")
-def spark_engine_env(tmp_path_factory):
+def spark_engine_env(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]:
     """Basic env for Databricks-Spark-Executor. Skipped if JAVA_HOME is missing."""
     if not os.environ.get("JAVA_HOME"):
         pytest.skip("JAVA_HOME not set for Spark tests")
@@ -334,36 +330,11 @@ def spark_engine_env(tmp_path_factory):
     }
 
 
+# ---- Snowflake Snowpark -------------------------------------------------------
+
+
 @pytest.fixture(scope="session")
-def bigquery_engine_env():
-    """
-    Basic env for BigQuery examples. Skips if required env vars are missing.
-    """
-    project = os.environ.get("FF_BQ_PROJECT")
-    dataset = os.environ.get("FF_BQ_DATASET")
-    location = os.environ.get("FF_BQ_LOCATION")
-
-    if not (project and dataset and location):
-        pytest.skip("FF_BQ_PROJECT/FF_BQ_DATASET/FF_BQ_LOCATION not set for BigQuery tests")
-
-    env = {
-        "FF_ENGINE": "bigquery",
-        "FF_ENGINE_VARIANT": os.environ.get("FF_ENGINE_VARIANT", "bigframes"),
-        "FF_BQ_PROJECT": project,
-        "FF_BQ_DATASET": dataset,
-        "FF_BQ_LOCATION": location,
-    }
-
-    creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    if creds:
-        env["GOOGLE_APPLICATION_CREDENTIALS"] = creds
-
-    return env
-
-
-# ---- Snowflake Snowpark ----
-@pytest.fixture(scope="session")
-def snowflake_engine_env():
+def snowflake_engine_env() -> dict[str, str]:
     """
     Basic env for Snowflake Snowpark examples / integration tests.
 
@@ -388,14 +359,14 @@ def snowflake_engine_env():
             "FF_SF_WAREHOUSE, FF_SF_DATABASE, FF_SF_SCHEMA)."
         )
 
-    env = {
+    env: dict[str, str] = {
         "FF_ENGINE": "snowflake_snowpark",
-        "FF_SF_ACCOUNT": account,
-        "FF_SF_USER": user,
-        "FF_SF_PASSWORD": password,
-        "FF_SF_WAREHOUSE": warehouse,
-        "FF_SF_DATABASE": database,
-        "FF_SF_SCHEMA": schema,
+        "FF_SF_ACCOUNT": account or "",
+        "FF_SF_USER": user or "",
+        "FF_SF_PASSWORD": password or "",
+        "FF_SF_WAREHOUSE": warehouse or "",
+        "FF_SF_DATABASE": database or "",
+        "FF_SF_SCHEMA": schema or "",
         "FF_SF_ALLOW_CREATE_SCHEMA": allow_create_schema,
     }
     if role:
@@ -404,7 +375,7 @@ def snowflake_engine_env():
 
 
 @pytest.fixture(scope="session")
-def snowflake_cfg(snowflake_engine_env):
+def snowflake_cfg(snowflake_engine_env: dict[str, str]) -> dict[str, Any]:
     """
     Canonical config dict for SnowflakeSnowparkExecutor, derived from env.
     """
@@ -426,6 +397,7 @@ def snowflake_cfg(snowflake_engine_env):
 def snowflake_executor_fake() -> Any:
     """
     Fake SnowflakeSnowparkExecutor using an in-memory FakeSnowflakeSession.
+
     This does NOT talk to a real Snowflake account and does not need env vars.
     It is intended for SQL-shape tests, similar to the BigQuery fake.
     """
@@ -447,17 +419,19 @@ def snowflake_executor_fake() -> Any:
         ex.con = _SFCursorShim(session)  # type: ignore[arg-type]
     else:
         # Cheap fallback if for some reason the shim isn't available
-        ex.con = types.SimpleNamespace(execute=lambda sql, params=None: None)
+        ex.con = SimpleNamespace(execute=lambda sql, params=None: None)
 
     return ex
+
+
+# ---- BigQuery -----------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
 def jinja_env_bigquery() -> Environment:
     """
     Very small Jinja environment for BigQuery unit tests.
-    (You can also reuse your global jinja_env from tests/common/fixtures.py
-     and just import that instead.)
+    (You can also reuse your global jinja_env from this module and import it.)
     """
     env = Environment(
         loader=DictLoader({}),
@@ -475,6 +449,7 @@ def jinja_env_bigquery() -> Environment:
 def bq_executor_fake(monkeypatch) -> BigQueryExecutor:
     """
     BigQueryExecutor wired against the FakeClient from tests/common/mock/bigquery.py.
+
     No real BigQuery project / dataset / credentials required.
     """
     # Make sure all FFT modules that cache a `bigquery` symbol

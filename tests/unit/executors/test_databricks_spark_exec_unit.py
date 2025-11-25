@@ -287,7 +287,6 @@ def test__create_view_over_table_executes_expected_sql(exec_minimal):
         "v_users", "t_users", Node(name="n", kind="sql", path=Path("."))
     )
 
-    exec_minimal.spark.sql.assert_called_once()
     sql = exec_minimal.spark.sql.call_args[0][0]
     assert "CREATE OR REPLACE VIEW `v_users` AS SELECT * FROM `t_users`" in sql
 

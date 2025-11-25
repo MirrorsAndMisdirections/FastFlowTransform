@@ -13,6 +13,7 @@ import yaml
 from dotenv import dotenv_values
 from jinja2 import Environment
 
+from fastflowtransform.config.budgets import BudgetsConfig, load_budgets_config
 from fastflowtransform.core import REGISTRY
 from fastflowtransform.errors import DependencyNotFoundError
 from fastflowtransform.executors._shims import BigQueryConnShim, SAConnShim
@@ -32,9 +33,23 @@ class CLIContext:
     jinja_env: Environment
     env_settings: EnvSettings
     profile: Profile
+    budgets_cfg: BudgetsConfig | None = None
 
     def make_executor(self) -> tuple[Any, Callable, Callable]:
-        return _make_executor(self.profile, self.jinja_env)
+        executor, run_sql, run_py = _make_executor(self.profile, self.jinja_env)
+        self._configure_budget_limit(executor)
+        return executor, run_sql, run_py
+
+    def _configure_budget_limit(self, executor: Any) -> None:
+        if executor is None or not hasattr(executor, "configure_query_budget_limit"):
+            return
+        limit = None
+        engine_name = (self.profile.engine or "").lower()
+        if self.budgets_cfg and engine_name:
+            entry = self.budgets_cfg.query_limits.get(engine_name)
+            if entry:
+                limit = entry.max_bytes
+        executor.configure_query_budget_limit(limit)
 
 
 def _resolve_project_path(project_arg: str) -> Path:
@@ -245,7 +260,19 @@ def _prepare_context(
     proj = Path(proj_raw)
 
     REGISTRY.set_cli_vars(_parse_cli_vars(vars_opt or []))
-    return CLIContext(project=proj, jinja_env=jenv, env_settings=env_settings, profile=prof)
+
+    try:
+        budgets_cfg = load_budgets_config(proj)
+    except Exception as exc:
+        raise typer.BadParameter(f"Failed to parse budgets.yml: {exc}") from exc
+
+    return CLIContext(
+        project=proj,
+        jinja_env=jenv,
+        env_settings=env_settings,
+        profile=prof,
+        budgets_cfg=budgets_cfg,
+    )
 
 
 def _parse_cli_vars(pairs: list[str]) -> dict[str, object]:

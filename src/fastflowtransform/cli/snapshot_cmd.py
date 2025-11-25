@@ -17,6 +17,7 @@ from fastflowtransform.cli.run import (
     CacheMode,
     _attempt_catalog,
     _emit_logs_and_errors,
+    _evaluate_budgets,
     _levels_for_run,
     _run_schedule,
     _RunEngine,
@@ -84,7 +85,7 @@ def snapshot_run(
     vars: VarsOpt = None,
     select: SelectOpt = None,
     exclude: ExcludeOpt = None,
-    jobs: JobsOpt = 1,
+    jobs: JobsOpt = "1",
     keep_going: KeepOpt = False,
     prune: bool = typer.Option(
         False,
@@ -150,11 +151,14 @@ def snapshot_run(
 
     result, logq, started_at, finished_at = _run_schedule(engine_, lvls, jobs, keep_going, ctx)
 
-    _write_artifacts(ctx, result, started_at, finished_at, engine_)
+    # Evaluate budgets.yml based on collected query stats
+    budget_error, budgets_summary = _evaluate_budgets(ctx.project, engine_)
+
+    _write_artifacts(ctx, result, started_at, finished_at, engine_, budgets_summary)
     _attempt_catalog(ctx)
     _emit_logs_and_errors(logq, result, engine_)
 
-    if result.failed:
+    if result.failed or budget_error:
         clear_context()
         raise typer.Exit(1)
 

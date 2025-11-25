@@ -1,8 +1,6 @@
 # tests/unit/test_snapshots_postgres.py
 from __future__ import annotations
 
-import os
-
 import pandas as pd
 import pytest
 from sqlalchemy import text
@@ -58,14 +56,6 @@ def _reset_snapshot_table(executor: PostgresExecutor, node_name: str) -> None:
         conn.execute(text(f"DROP TABLE IF EXISTS {qrel} CASCADE"))
 
 
-def _make_pg_executor() -> PostgresExecutor:
-    dsn = os.environ.get("FF_PG_DSN")
-    schema = os.environ.get("FF_PG_SCHEMA", "public")
-    if not dsn:
-        pytest.skip("FF_PG_DSN not set; skipping Postgres snapshot tests")
-    return PostgresExecutor(dsn=dsn, schema=schema)
-
-
 def _read_pg(ex: PostgresExecutor, relation: str) -> pd.DataFrame:
     qualified = ex._qualified(relation)
     with ex.engine.begin() as conn:
@@ -75,13 +65,12 @@ def _read_pg(ex: PostgresExecutor, relation: str) -> pd.DataFrame:
 
 @pytest.mark.postgres
 @pytest.mark.integration
-def test_postgres_snapshot_timestamp_first_and_second_run(jinja_env):
-    ex = _make_pg_executor()
+def test_postgres_snapshot_timestamp_first_and_second_run(jinja_env, postgres_exec):
     node = make_timestamp_snapshot_node()
-    _reset_snapshot_table(executor=ex, node_name=node.name)
+    _reset_snapshot_table(executor=postgres_exec, node_name=node.name)
 
     scenario_timestamp_first_and_second_run(
-        executor=ex,
+        executor=postgres_exec,
         node=node,
         jinja_env=jinja_env,
         read_fn=_read_pg,
@@ -92,13 +81,12 @@ def test_postgres_snapshot_timestamp_first_and_second_run(jinja_env):
 
 @pytest.mark.postgres
 @pytest.mark.integration
-def test_postgres_snapshot_prune_keep_last(jinja_env):
-    ex = _make_pg_executor()
+def test_postgres_snapshot_prune_keep_last(jinja_env, postgres_exec):
     node = make_timestamp_snapshot_node()
-    _reset_snapshot_table(executor=ex, node_name=node.name)
+    _reset_snapshot_table(executor=postgres_exec, node_name=node.name)
 
     scenario_snapshot_prune_keep_last(
-        executor=ex,
+        executor=postgres_exec,
         node=node,
         jinja_env=jinja_env,
         read_fn=_read_pg,
@@ -110,13 +98,12 @@ def test_postgres_snapshot_prune_keep_last(jinja_env):
 
 @pytest.mark.postgres
 @pytest.mark.integration
-def test_postgres_snapshot_check_strategy(jinja_env):
-    ex = _make_pg_executor()
+def test_postgres_snapshot_check_strategy(jinja_env, postgres_exec):
     node = make_check_snapshot_node()
-    _reset_snapshot_table(executor=ex, node_name=node.name)
+    _reset_snapshot_table(executor=postgres_exec, node_name=node.name)
 
     scenario_check_strategy_detects_changes(
-        executor=ex,
+        executor=postgres_exec,
         node=node,
         jinja_env=jinja_env,
         read_fn=_read_pg,

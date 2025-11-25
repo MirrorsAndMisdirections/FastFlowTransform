@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import suppress
 from typing import Any
 
@@ -24,11 +25,17 @@ class IcebergFormatHandler(SparkFormatHandler):
         spark: SparkSession,
         *,
         table_options: dict[str, Any] | None = None,
+        sql_runner: Callable[[str], Any] | None = None,
     ) -> None:
         options = dict(table_options or {})
         catalog = options.pop("catalog_name", None) or options.pop("__catalog_name__", None)
         self.catalog_name = str(catalog) if catalog else "iceberg"
-        super().__init__(spark, table_format="iceberg", table_options=options)
+        super().__init__(
+            spark,
+            table_format="iceberg",
+            table_options=options,
+            sql_runner=sql_runner,
+        )
 
     # ---------- Core helpers ----------
     def _qualify_table_name(self, table_name: str, database: str | None = None) -> str:
@@ -90,7 +97,7 @@ class IcebergFormatHandler(SparkFormatHandler):
     ) -> None:
         if table_comment:
             with suppress(Exception):
-                self.spark.sql(
+                self.run_sql(
                     f"COMMENT ON TABLE {table_ident} IS {self._sql_literal(table_comment)}"
                 )
 
@@ -106,14 +113,14 @@ class IcebergFormatHandler(SparkFormatHandler):
             if assignments:
                 props = ", ".join(assignments)
                 with suppress(Exception):
-                    self.spark.sql(f"ALTER TABLE {table_ident} SET TBLPROPERTIES ({props})")
+                    self.run_sql(f"ALTER TABLE {table_ident} SET TBLPROPERTIES ({props})")
 
         for name, comment in column_comments.items():
             if not comment:
                 continue
             col_ident = f"{table_ident}.{self._quote_part(name)}"
             with suppress(Exception):
-                self.spark.sql(f"COMMENT ON COLUMN {col_ident} IS {self._sql_literal(comment)}")
+                self.run_sql(f"COMMENT ON COLUMN {col_ident} IS {self._sql_literal(comment)}")
 
     # ---------- Required API ----------
     def save_df_as_table(self, table_name: str, df: SDF) -> None:
@@ -177,7 +184,7 @@ class IcebergFormatHandler(SparkFormatHandler):
             raise ValueError(f"incremental_insert expects SELECT body, got: {body[:40]!r}")
 
         full_name = self._sql_identifier(table_name)
-        self.spark.sql(f"INSERT INTO {full_name} {body}")
+        self.run_sql(f"INSERT INTO {full_name} {body}")
 
     def incremental_merge(
         self,
@@ -202,7 +209,7 @@ class IcebergFormatHandler(SparkFormatHandler):
         full_name = self._sql_identifier(table_name)
         pred = " AND ".join([f"t.`{k}` = s.`{k}`" for k in unique_key])
 
-        self.spark.sql(
+        self.run_sql(
             f"""
             MERGE INTO {full_name} AS t
             USING ({body}) AS s

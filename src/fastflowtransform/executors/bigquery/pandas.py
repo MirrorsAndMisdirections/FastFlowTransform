@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from time import perf_counter
 
 import pandas as pd
 
 from fastflowtransform.core import Node
 from fastflowtransform.executors.bigquery.base import BigQueryBaseExecutor
+from fastflowtransform.executors.query_stats import QueryStats
 from fastflowtransform.typing import BadRequest, Client, LoadJobConfig, NotFound, bigquery
 
 
@@ -57,6 +59,7 @@ class BigQueryExecutor(BigQueryBaseExecutor[pd.DataFrame]):
         table_id = f"{self.project}.{self.dataset}.{relation}"
         job_config = LoadJobConfig(write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE)
         # Optionally extend dtype mapping here (NUMERIC/STRING etc.)
+        start = perf_counter()
         try:
             job = self.client.load_table_from_dataframe(
                 df,
@@ -67,6 +70,9 @@ class BigQueryExecutor(BigQueryBaseExecutor[pd.DataFrame]):
             job.result()
         except BadRequest as e:
             raise RuntimeError(f"BigQuery write failed: {table_id}\n{e}") from e
+        else:
+            duration_ms = int((perf_counter() - start) * 1000)
+            self._record_dataframe_stats(df, duration_ms)
 
     def _create_view_over_table(self, view_name: str, backing_table: str, node: Node) -> None:
         """
@@ -77,3 +83,14 @@ class BigQueryExecutor(BigQueryBaseExecutor[pd.DataFrame]):
 
     def _frame_name(self) -> str:
         return "pandas"
+
+    def _record_dataframe_stats(self, df: pd.DataFrame, duration_ms: int) -> None:
+        rows = len(df)
+        bytes_val = int(df.memory_usage(deep=True).sum()) if rows > 0 else 0
+        self._record_query_stats(
+            QueryStats(
+                bytes_processed=bytes_val if bytes_val > 0 else None,
+                rows=rows if rows > 0 else None,
+                duration_ms=duration_ms,
+            )
+        )

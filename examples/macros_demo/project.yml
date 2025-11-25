@@ -7,14 +7,7 @@ vars:
 
 models: {}
 
-seeds:
-  storage:
-    seed_users:
-      path: ".local/spark/seed_users"
-      format: parquet
-    seed_orders:
-      path: ".local/spark/seed_orders"
-      format: parquet
+seeds: {}
 
 tests:
   - type: not_null

@@ -7,6 +7,8 @@ from fastflowtransform.core import Node, relation_for
 from fastflowtransform.executors._shims import BigQueryConnShim
 from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.executors.bigquery._bigquery_mixin import BigQueryIdentifierMixin
+from fastflowtransform.executors.budget import BudgetGuard
+from fastflowtransform.executors.query_stats import _TrackedQueryJob
 from fastflowtransform.logging import echo
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
 from fastflowtransform.snapshots import resolve_snapshot_config
@@ -29,6 +31,12 @@ class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
 
     # Subclasses override ENGINE_NAME ("bigquery", "bigquery_batch", ...)
     ENGINE_NAME = "bigquery_base"
+    _BUDGET_GUARD = BudgetGuard(
+        env_var="FF_BQ_MAX_BYTES",
+        estimator_attr="_estimate_query_bytes",
+        engine_label="BigQuery",
+        what="query",
+    )
 
     def __init__(
         self,
@@ -53,6 +61,38 @@ class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
             project=self.project,
             dataset=self.dataset,
         )
+
+    def _execute_sql(self, sql: str) -> _TrackedQueryJob:
+        """
+        Central BigQuery query runner.
+
+        - All 'real' SQL statements in this executor should go through here.
+        - Returns the QueryJob so callers can call .result().
+        """
+        self._apply_budget_guard(self._BUDGET_GUARD, sql)
+        job = self.client.query(sql, location=self.location)
+        return _TrackedQueryJob(job, on_complete=self._record_query_job_stats)
+
+    # --- Cost estimation for the shared BudgetGuard -----------------
+
+    def _estimate_query_bytes(self, sql: str) -> int | None:
+        """
+        Estimate bytes for a BigQuery SQL statement using a dry-run.
+
+        Returns the estimated bytes, or None if estimation is not possible.
+        """
+        cfg = bigquery.QueryJobConfig(
+            dry_run=True,
+            use_query_cache=False,
+        )
+        job = self.client.query(
+            sql,
+            job_config=cfg,
+            location=self.location,
+        )
+        # Dry-run is free; we just need the job metadata
+        job.result()
+        return int(getattr(job, "total_bytes_processed", 0) or 0)
 
     # ---- DQ test table formatting (fft test) ----
     def _format_test_table(self, table: str | None) -> str | None:
@@ -109,16 +149,10 @@ class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
             ) from e
 
     def _create_or_replace_view(self, target_sql: str, select_body: str, node: Node) -> None:
-        self.client.query(
-            f"CREATE OR REPLACE VIEW {target_sql} AS {select_body}",
-            location=self.location,
-        ).result()
+        self._execute_sql(f"CREATE OR REPLACE VIEW {target_sql} AS {select_body}").result()
 
     def _create_or_replace_table(self, target_sql: str, select_body: str, node: Node) -> None:
-        self.client.query(
-            f"CREATE OR REPLACE TABLE {target_sql} AS {select_body}",
-            location=self.location,
-        ).result()
+        self._execute_sql(f"CREATE OR REPLACE TABLE {target_sql} AS {select_body}").result()
 
     def _create_or_replace_view_from_table(
         self,
@@ -129,10 +163,7 @@ class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
         view_id = self._qualified_identifier(view_name)
         back_id = self._qualified_identifier(backing_table)
         self._ensure_dataset()
-        self.client.query(
-            f"CREATE OR REPLACE VIEW {view_id} AS SELECT * FROM {back_id}",
-            location=self.location,
-        ).result()
+        self._execute_sql(f"CREATE OR REPLACE VIEW {view_id} AS SELECT * FROM {back_id}").result()
 
     # ---- Meta hook ----
     def on_node_built(self, node: Node, relation: str, fingerprint: str) -> None:
@@ -181,10 +212,7 @@ class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
             project=self.project,
             dataset=self.dataset,
         )
-        self.client.query(
-            f"CREATE TABLE {target} AS {body}",
-            location=self.location,
-        ).result()
+        self._execute_sql(f"CREATE TABLE {target} AS {body}").result()
 
     def incremental_insert(self, relation: str, select_sql: str) -> None:
         """
@@ -197,10 +225,7 @@ class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
             project=self.project,
             dataset=self.dataset,
         )
-        self.client.query(
-            f"INSERT INTO {target} {body}",
-            location=self.location,
-        ).result()
+        self._execute_sql(f"INSERT INTO {target} {body}").result()
 
     def incremental_merge(self, relation: str, select_sql: str, unique_key: list[str]) -> None:
         """
@@ -221,10 +246,10 @@ class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
         DELETE FROM {target} t
         WHERE EXISTS (SELECT 1 FROM ({body}) s WHERE {pred})
         """
-        self.client.query(delete_sql, location=self.location).result()
+        self._execute_sql(delete_sql).result()
 
         insert_sql = f"INSERT INTO {target} SELECT * FROM ({body})"
-        self.client.query(insert_sql, location=self.location).result()
+        self._execute_sql(insert_sql).result()
 
     def alter_table_sync_schema(
         self,
@@ -273,10 +298,7 @@ class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
         for col in to_add:
             f = out_fields[col]
             typ = str(f.field_type) if hasattr(f, "field_type") else "STRING"
-            self.client.query(
-                f"ALTER TABLE {target} ADD COLUMN {col} {typ}",
-                location=self.location,
-            ).result()
+            self._execute_sql(f"ALTER TABLE {target} ADD COLUMN {col} {typ}").result()
 
     # ── Snapshots API (shared for pandas + BigFrames) ─────────────────────
     def run_snapshot_sql(self, node: Node, env: Any) -> None:
@@ -367,7 +389,7 @@ SELECT
   {hash_expr} AS {hash_col}
 FROM ({body}) AS s
 """
-            self.client.query(create_sql, location=self.location).result()
+            self._execute_sql(create_sql).result()
             return
 
         # ---- Incremental snapshot update ----
@@ -403,7 +425,7 @@ WHERE
   AND t.{is_cur} = TRUE
   AND {change_condition}
 """
-        self.client.query(close_sql, location=self.location).result()
+        self._execute_sql(close_sql).result()
 
         # 2) Insert new current versions (new keys or changed rows)
         first_key = unique_key[0]
@@ -424,7 +446,7 @@ WHERE
   t.{first_key} IS NULL
   OR {change_condition}
 """
-        self.client.query(insert_sql, location=self.location).result()
+        self._execute_sql(insert_sql).result()
 
     def snapshot_prune(
         self,
@@ -499,4 +521,4 @@ WHERE EXISTS (
     AND t.{vf} = r.{vf}
 )
 """
-        self.client.query(delete_sql, location=self.location).result()
+        self._execute_sql(delete_sql).result()

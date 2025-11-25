@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import Any
 
 from fastflowtransform.typing import SDF, SparkSession
@@ -28,6 +29,7 @@ class SparkFormatHandler(ABC):
         *,
         table_format: str | None = None,
         table_options: dict[str, Any] | None = None,
+        sql_runner: Callable[[str], Any] | None = None,
     ) -> None:
         self.spark = spark
         self.table_format: str | None = (table_format or "").lower() or None
@@ -35,6 +37,14 @@ class SparkFormatHandler(ABC):
         self.table_options: dict[str, str] = {
             str(k): str(v) for k, v in (table_options or {}).items()
         }
+
+        # central hook for executing SQL (can be engine-guarded)
+        self._sql_runner: Callable[[str], Any] = sql_runner or spark.sql
+
+    # ---- SQL helper ----
+    def run_sql(self, sql: str) -> Any:
+        """Execute SQL via the injected runner (guardable in the executor)."""
+        return self._sql_runner(sql)
 
     # ---- Identifier helpers ----
     def qualify_identifier(self, table_name: str, *, database: str | None = None) -> str:
@@ -95,7 +105,7 @@ class SparkFormatHandler(ABC):
         if not body.lower().startswith("select"):
             # This is a guard; DatabricksSparkExecutor uses _selectable_body already.
             raise ValueError(f"incremental_insert expects SELECT body, got: {body[:40]!r}")
-        self.spark.sql(f"INSERT INTO {table_name} {body}")
+        self.run_sql(f"INSERT INTO {table_name} {body}")
 
     def incremental_merge(
         self,

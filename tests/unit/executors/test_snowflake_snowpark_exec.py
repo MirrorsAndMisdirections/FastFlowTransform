@@ -502,9 +502,15 @@ def test_incremental_merge_builds_two_statements(sf_exec):
 
     sf_exec.incremental_merge("DST", "SELECT 1 AS id", ["id"])
 
-    # We now emit two separate statements: DELETE ... and INSERT ...
-    assert len(sf_exec.session.sql_calls) == 2
-    delete_sql, insert_sql = sf_exec.session.sql_calls
+    # Each statement incurs an EXPLAIN + actual execution → 4 SQL calls total.
+    assert len(sf_exec.session.sql_calls) == 4
+    dml_calls = [
+        sql
+        for sql in sf_exec.session.sql_calls
+        if sql.strip().upper().startswith("DELETE") or sql.strip().upper().startswith("INSERT")
+    ]
+    assert len(dml_calls) == 2
+    delete_sql, insert_sql = dml_calls
 
     # First: DELETE FROM ... USING (<body>) AS s WHERE ...
     assert "DELETE FROM" in delete_sql

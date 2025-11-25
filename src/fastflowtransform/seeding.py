@@ -511,6 +511,10 @@ def _handle_sqlalchemy(table: str, df: pd.DataFrame, executor: Any, schema: str 
     df.to_sql(table, eng, if_exists="replace", index=False, schema=schema, method="multi")
     dt_ms = int((perf_counter() - t0) * 1000)
 
+    if dialect_name.lower() == "postgresql":
+        with eng.begin() as conn:
+            conn.exec_driver_sql(f"ANALYZE {full_name}")
+
     dialect = dialect_name or getattr(getattr(eng, "dialect", None), "name", "sqlalchemy")
     _echo_seed_line(
         full_name=full_name,

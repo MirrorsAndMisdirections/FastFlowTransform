@@ -6,6 +6,7 @@ This demo shows:
 - Environment-driven invalidation (only `FF_*`)
 - Parallelism within levels (`--jobs`)
 - HTTP response cache + offline mode
+- Bytes-based cost monitoring (per-query guards + run-level budgets)
 
 ## Quickstart
 
@@ -37,8 +38,91 @@ site/dag/index.html
 
 .fastflowtransform/target/run_results.json (HTTP stats, results)
 
-markdown
-Code kopieren
+## Cost & budgets (bytes-based)
+
+This example also showcases the **bytes-based cost features**:
+
+1. **Per-query cost guard** (`budgets.yml → query_limits`, overridable with env vars)
+2. **Per-run budgets** (via `budgets.yml`)
+3. **Per-model stats** in `run_results.json`
+
+### 1. Per-query guard demo
+
+Each engine now reads its default per-query limit from `budgets.yml` (`query_limits.<engine>.max_bytes`),
+but you can override it ad-hoc via the legacy env vars:
+
+| Engine              | Env var              |
+|---------------------|----------------------|
+| DuckDB              | `FF_DUCKDB_MAX_BYTES`|
+| Postgres            | `FF_PG_MAX_BYTES`    |
+| Databricks / Spark  | `FF_SPK_MAX_BYTES`   |
+| BigQuery            | `FF_BQ_MAX_BYTES`    |
+| Snowflake Snowpark  | `FF_SF_MAX_BYTES`    |
+
+The Makefile wraps a tiny demo that intentionally sets the env-var override so low that the query is blocked:
+
+```bash
+# Pick an engine (defaults to duckdb)
+make cost_guard_example ENGINE=duckdb
+# or:
+make cost_guard_example ENGINE=postgres
+make cost_guard_example ENGINE=bigquery BQ_FRAME=bigframes
+```
+
+Under the hood this runs:
+
+- `FF_*_MAX_BYTES=1` → the executor estimates bytes before running SQL
+- If the estimate is > 1 byte, the query is **aborted** with a clear RuntimeError
+- The `make` target uses `|| true` so you can still see the error without the overall demo failing
+
+Unset the env var (or set it to a large value) to disable the guard again.
+
+### 2. Run-level budgets (`budgets.yml`)
+
+`examples/cache_demo/budgets.yml` defines the **project-level budgets** and the per-query limits:
+
+- `query_limits.<engine>.max_bytes` – aborts a single query before execution
+- `total.bytes_scanned` – aggregate over all models (driven by run stats)
+- `total.query_duration_ms` – aggregate query time
+- `models.mart_user_orders.ff.bytes_scanned` – per-model example
+
+By default all budgets are using `on_exceed: "warn"`, so they **never break** the main demo. If a run exceeds any threshold, FFT will print a warning after the run finishes (based on `run_results.json`).
+
+If you want to see a *failing* run:
+
+```yaml
+# In budgets.yml, temporarily tighten one budget, e.g.:
+per_model:
+  mart_user_orders.ff:
+    bytes_scanned:
+      warn_after: "1KB"
+      error_after: "2KB"   # will likely fail even this tiny demo
+```
+
+Then run:
+
+```bash
+make run ENGINE=duckdb
+```
+
+and the CLI will exit with code `1` once the budget is exceeded.
+
+### 3. Inspecting bytes & timing stats
+
+After any run, `run_results.json` includes per-model stats (best effort per engine):
+
+- `bytes_scanned`
+- `rows`
+- `query_duration_ms`
+
+Example inspection:
+
+```bash
+jq '.results[] | {name, status, bytes_scanned, query_duration_ms}' \
+  .fastflowtransform/target/run_results.json
+```
+
+You can use this to build your own cost dashboards or to tune `budgets.yml` for your real project.
 
 ---
 

@@ -14,6 +14,7 @@ class ExampleConfig:
     make_target: str
     env_by_engine: dict[str, str]
     spark_table_formats: list[str] | None = None
+    bigquery_env_by_backend: dict[str, str] | None = None
 
 
 EXAMPLES: list[ExampleConfig] = [
@@ -25,6 +26,12 @@ EXAMPLES: list[ExampleConfig] = [
             "duckdb": "dev_duckdb",
             "postgres": "dev_postgres",
             "databricks_spark": "dev_databricks",
+            "bigquery": "dev_bigquery_pandas",
+            "snowflake_snowpark": "dev_snowflake",
+        },
+        bigquery_env_by_backend={
+            "pandas": "dev_bigquery_pandas",
+            "bigframes": "dev_bigquery_bigframes",
         },
     ),
     ExampleConfig(
@@ -35,6 +42,12 @@ EXAMPLES: list[ExampleConfig] = [
             "duckdb": "dev_duckdb",
             "postgres": "dev_postgres",
             "databricks_spark": "dev_databricks",
+            "bigquery": "dev_bigquery_pandas",
+            "snowflake_snowpark": "dev_snowflake",
+        },
+        bigquery_env_by_backend={
+            "pandas": "dev_bigquery_pandas",
+            "bigframes": "dev_bigquery_bigframes",
         },
     ),
     ExampleConfig(
@@ -45,6 +58,13 @@ EXAMPLES: list[ExampleConfig] = [
             "duckdb": "dev_duckdb",
             "postgres": "dev_postgres",
             "databricks_spark": "dev_databricks",
+            "bigquery": "dev_bigquery_pandas",
+            "snowflake_snowpark": "dev_snowflake",
+        },
+        bigquery_env_by_backend={
+            "pandas": "dev_bigquery_pandas",
+            "bigframes": "dev_bigquery_bigframes",
+            "bigquery": "dev_bigquery_pandas",
         },
     ),
     ExampleConfig(
@@ -55,6 +75,12 @@ EXAMPLES: list[ExampleConfig] = [
             "duckdb": "dev_duckdb",
             "postgres": "dev_postgres",
             "databricks_spark": "dev_databricks",
+            "bigquery": "dev_bigquery_pandas",
+            "snowflake_snowpark": "dev_snowflake",
+        },
+        bigquery_env_by_backend={
+            "pandas": "dev_bigquery_pandas",
+            "bigframes": "dev_bigquery_bigframes",
         },
     ),
     ExampleConfig(
@@ -65,6 +91,12 @@ EXAMPLES: list[ExampleConfig] = [
             "duckdb": "dev_duckdb",
             "postgres": "dev_postgres",
             "databricks_spark": "dev_databricks",
+            "bigquery": "dev_bigquery_pandas",
+            "snowflake_snowpark": "dev_snowflake",
+        },
+        bigquery_env_by_backend={
+            "pandas": "dev_bigquery_pandas",
+            "bigframes": "dev_bigquery_bigframes",
         },
     ),
     ExampleConfig(
@@ -75,8 +107,14 @@ EXAMPLES: list[ExampleConfig] = [
             "duckdb": "dev_duckdb",
             "postgres": "dev_postgres",
             "databricks_spark": "dev_databricks_parquet",
+            "bigquery": "dev_bigquery_pandas",
+            "snowflake_snowpark": "dev_snowflake",
         },
         spark_table_formats=["parquet", "delta", "iceberg"],
+        bigquery_env_by_backend={
+            "pandas": "dev_bigquery_pandas",
+            "bigframes": "dev_bigquery_bigframes",
+        },
     ),
     ExampleConfig(
         name="macros_demo",
@@ -86,6 +124,12 @@ EXAMPLES: list[ExampleConfig] = [
             "duckdb": "dev_duckdb",
             "postgres": "dev_postgres",
             "databricks_spark": "dev_databricks",
+            "bigquery": "dev_bigquery_pandas",
+            "snowflake_snowpark": "dev_snowflake",
+        },
+        bigquery_env_by_backend={
+            "pandas": "dev_bigquery_pandas",
+            "bigframes": "dev_bigquery_bigframes",
         },
     ),
     ExampleConfig(
@@ -96,6 +140,12 @@ EXAMPLES: list[ExampleConfig] = [
             "duckdb": "dev_duckdb",
             "postgres": "dev_postgres",
             "databricks_spark": "dev_databricks",
+            "bigquery": "dev_bigquery_pandas",
+            "snowflake_snowpark": "dev_snowflake",
+        },
+        bigquery_env_by_backend={
+            "pandas": "dev_bigquery_pandas",
+            "bigframes": "dev_bigquery_bigframes",
         },
     ),
     ExampleConfig(
@@ -106,7 +156,13 @@ EXAMPLES: list[ExampleConfig] = [
             "duckdb": "dev_duckdb",
             "postgres": "dev_postgres",
             "databricks_spark": "dev_databricks_parquet",
+            "bigquery": "dev_bigquery_pandas",
+            "snowflake_snowpark": "dev_snowflake",
         },
         spark_table_formats=["parquet", "delta", "iceberg"],
+        bigquery_env_by_backend={
+            "pandas": "dev_bigquery_pandas",
+            "bigframes": "dev_bigquery_bigframes",
+        },
     ),
 ]

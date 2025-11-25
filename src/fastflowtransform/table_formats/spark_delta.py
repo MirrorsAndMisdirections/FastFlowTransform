@@ -1,6 +1,7 @@
 # fastflowtransform/table_formats/spark_delta.py
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
@@ -41,8 +42,14 @@ class DeltaFormatHandler(SparkFormatHandler):
         spark: SparkSession,
         *,
         table_options: dict[str, Any] | None = None,
+        sql_runner: Callable[[str], Any] | None = None,
     ) -> None:
-        super().__init__(spark, table_format="delta", table_options=table_options or {})
+        super().__init__(
+            spark,
+            table_format="delta",
+            table_options=table_options or {},
+            sql_runner=sql_runner,
+        )
 
     # ---------- Core helpers ----------
     def _delta_table_for(self, table_name: str) -> DeltaTable:
@@ -82,7 +89,7 @@ class DeltaFormatHandler(SparkFormatHandler):
     ) -> None:
         if table_comment:
             with suppress(Exception):
-                self.spark.sql(
+                self.run_sql(
                     f"COMMENT ON TABLE {table_ident} IS {self._sql_literal(table_comment)}"
                 )
 
@@ -98,14 +105,14 @@ class DeltaFormatHandler(SparkFormatHandler):
             if assignments:
                 props_sql = ", ".join(assignments)
                 with suppress(Exception):
-                    self.spark.sql(f"ALTER TABLE {table_ident} SET TBLPROPERTIES ({props_sql})")
+                    self.run_sql(f"ALTER TABLE {table_ident} SET TBLPROPERTIES ({props_sql})")
 
         for col, comment in column_comments.items():
             if not comment:
                 continue
             col_ident = f"{table_ident}.{self._quote_identifier(col)}"
             with suppress(Exception):
-                self.spark.sql(f"COMMENT ON COLUMN {col_ident} IS {self._sql_literal(comment)}")
+                self.run_sql(f"COMMENT ON COLUMN {col_ident} IS {self._sql_literal(comment)}")
 
     # ---------- Required API ----------
     def save_df_as_table(self, table_name: str, df: SDF) -> None:
@@ -176,7 +183,7 @@ class DeltaFormatHandler(SparkFormatHandler):
         if not location:
             # Fallback: drop and recreate if we can't resolve the location.
             with suppress(Exception):
-                self.spark.sql(f"DROP TABLE IF EXISTS {table_ident}")
+                self.run_sql(f"DROP TABLE IF EXISTS {table_ident}")
             _writer().saveAsTable(table_name)
             self._restore_table_metadata(
                 table_ident,
@@ -228,7 +235,7 @@ class DeltaFormatHandler(SparkFormatHandler):
             return
 
         # Materialize the source DataFrame for the merge
-        source_df = self.spark.sql(body)
+        source_df = self.run_sql(body)
 
         # Build the join predicate: t.k = s.k AND ...
         condition = " AND ".join([f"t.`{k}` = s.`{k}`" for k in unique_key])

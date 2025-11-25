@@ -5,14 +5,7 @@ vars: {}
 
 models: {}
 
-seeds:
-  storage:
-    seed_customers:
-      path: ".local/spark/seed_customers"
-      format: parquet
-    seed_orders:
-      path: ".local/spark/seed_orders"
-      format: parquet
+seeds: {}
 
 tests:
   # Simple sanity tests; add more if you like

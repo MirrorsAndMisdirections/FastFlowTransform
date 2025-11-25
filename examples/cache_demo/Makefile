@@ -1,7 +1,7 @@
 .PHONY: seed run run_parallel cache_first cache_second \
         change_sql change_seed change_env change_py \
         http_first http_offline http_cache_clear artifacts dag clean \
-		demo
+		demo cost_guard_example
 
 ENGINE ?= duckdb          # duckdb | postgres | databricks_spark | bigquery | snowflake_snowpark
 # BigQuery frame selector (pandas | bigframes)
@@ -73,7 +73,7 @@ run:
 run_parallel:
 	env $(RUN_ENV) $(UV) run fft run "$(PROJECT)" --env $(PROFILE_ENV) $(SELECT_ALL) --cache=rw --jobs 4
 
-cache_first: seed run
+cache_first: run
 cache_second: run
 
 change_sql:
@@ -124,6 +124,7 @@ clean:
 demo: clean
 	@echo "== 🚀 Cache Demo ($(ENGINE)) =="
 	@echo "== 1) First full build (writes cache) =="
+	+$(MAKE) seed
 	+$(MAKE) cache_first
 	@echo
 	@echo "== 2) No-op run (should skip everything) =="
