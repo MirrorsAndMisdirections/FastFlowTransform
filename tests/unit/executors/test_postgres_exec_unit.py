@@ -528,14 +528,13 @@ def test_create_or_replace_view_from_table_happy(fake_engine_and_conn):
         or "CREATE OR REPLACE VIEW" in str(stmt)
     ]
 
-    # now we should have exactly the 3 we expect
-    expected_statement_len = 3
+    expected_statement_len = 5
     assert len(stmts) == expected_statement_len
 
     assert 'SET LOCAL search_path = "public"' in stmts[0][0]
     assert 'DROP VIEW IF EXISTS "public"."v_out" CASCADE' in stmts[1][0]
     assert (
-        'CREATE OR REPLACE VIEW "public"."v_out" AS SELECT * FROM "public"."src_tbl"' in stmts[2][0]
+        'CREATE OR REPLACE VIEW "public"."v_out" AS SELECT * FROM "public"."src_tbl"' in stmts[4][0]
     )
 
 

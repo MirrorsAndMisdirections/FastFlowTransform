@@ -79,6 +79,7 @@ def _stub_schedule(monkeypatch: pytest.MonkeyPatch):
         engine_abbr="",
         name_width=28,
         name_formatter=None,
+        durations_s=None,
     ):
         start = time.perf_counter()
         per: dict[str, float] = {}

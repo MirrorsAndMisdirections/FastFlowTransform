@@ -33,6 +33,8 @@ ENGINE_MARKS = {
     "duckdb": pytest.mark.duckdb,
     "postgres": pytest.mark.postgres,
     "databricks_spark": pytest.mark.databricks_spark,
+    "bigquery": pytest.mark.bigquery,
+    "snowflake_snowpark": pytest.mark.snowflake_snowpark,
 }
 
 # build only the actually-supported (example, engine) combinations
@@ -41,17 +43,14 @@ EXAMPLE_ENGINE_PARAMS = [
         example,
         engine,
         id=f"{example.name}[{engine}]",
-        marks=ENGINE_MARKS[engine],
+        marks=[
+            ENGINE_MARKS[engine],
+            *([pytest.mark.remote_engine] if engine in {"bigquery", "snowflake_snowpark"} else []),
+        ],
     )
     for example in EXAMPLES
     for engine in example.env_by_engine
 ]
-
-ENGINE_ENV_FIXTURE = {
-    "duckdb": "duckdb_engine_env",
-    "postgres": "postgres_engine_env",
-    "databricks_spark": "spark_engine_env",
-}
 
 
 @pytest.mark.integration
@@ -59,26 +58,43 @@ ENGINE_ENV_FIXTURE = {
 @pytest.mark.flaky(reruns=2, reruns_delay=2)
 @pytest.mark.parametrize("example,engine", EXAMPLE_ENGINE_PARAMS)
 def test_examples_with_all_engines(example, engine, request):
-    fixture_name = ENGINE_ENV_FIXTURE[engine]
-    engine_env: dict[str, str] = request.getfixturevalue(fixture_name)
+    # fixture_name = ENGINE_ENV_FIXTURE[engine]
+    # engine_env: dict[str, str] = request.getfixturevalue(fixture_name)
 
-    env = dict(engine_env)
-    env["FFT_ACTIVE_ENV"] = example.env_by_engine[engine]
+    # env = dict(engine_env)
+    # env["FFT_ACTIVE_ENV"] = example.env_by_engine[engine]
 
     cmd = ["make", example.make_target, f"ENGINE={engine}"]
+    base_env: dict[str, str] = {}
 
     if engine == "databricks_spark":
+        base_env["FFT_ACTIVE_ENV"] = example.env_by_engine[engine]
         formats = example.spark_table_formats or ["parquet"]
         for fmt in formats:
-            env_fmt = dict(env)
+            env_fmt = dict(base_env)
             env_fmt["DBR_TABLE_FORMAT"] = fmt
             _run_cmd(
                 [*cmd, f"DBR_TABLE_FORMAT={fmt}"],
                 cwd=example.path,
                 extra_env=env_fmt,
             )
+
+    elif engine == "bigquery":
+        # Loop over backends: pandas / bigframes
+        backends = example.bigquery_env_by_backend
+        for backend, env_name in backends.items():
+            env_backend = dict(base_env)
+            env_backend["FFT_ACTIVE_ENV"] = env_name
+            env_backend["BQ_FRAME"] = backend
+            _run_cmd(
+                [*cmd, f"BQ_FRAME={backend}"],
+                cwd=example.path,
+                extra_env=env_backend,
+            )
+
     else:
-        _run_cmd(cmd, cwd=example.path, extra_env=env)
+        base_env["FFT_ACTIVE_ENV"] = example.env_by_engine[engine]
+        _run_cmd(cmd, cwd=example.path, extra_env=base_env)
 
     target_dir = example.path / ".fastflowtransform" / "target"
     manifest = target_dir / "manifest.json"

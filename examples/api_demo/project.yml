@@ -5,11 +5,7 @@ vars: {}
 
 models: {}
 
-seeds:
-  storage:
-    seed_users:
-      path: ".local/spark/seed_users"
-      format: parquet
+seeds: {}
 
 tests:
   - type: not_null

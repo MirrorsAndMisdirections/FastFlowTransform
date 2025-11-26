@@ -1,15 +1,15 @@
 # fastflowtransform/table_formats/__init__.py
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
+from fastflowtransform.table_formats.base import SparkFormatHandler
+from fastflowtransform.table_formats.spark_default import DefaultSparkFormatHandler
+from fastflowtransform.table_formats.spark_delta import DeltaFormatHandler
+from fastflowtransform.table_formats.spark_hudi import HudiFormatHandler
+from fastflowtransform.table_formats.spark_iceberg import IcebergFormatHandler
 from fastflowtransform.typing import SparkSession
-
-from .base import SparkFormatHandler
-from .spark_default import DefaultSparkFormatHandler
-from .spark_delta import DeltaFormatHandler
-from .spark_hudi import HudiFormatHandler
-from .spark_iceberg import IcebergFormatHandler
 
 # Mapping: normalized format name -> handler class
 _SPARK_FORMAT_REGISTRY: dict[str, type[SparkFormatHandler]] = {
@@ -37,6 +37,7 @@ def get_spark_format_handler(
     spark: SparkSession,
     *,
     table_options: dict[str, Any] | None = None,
+    sql_runner: Callable[[str], Any] | None = None,
 ) -> SparkFormatHandler:
     """
     Factory for SparkFormatHandler based on a logical format name.
@@ -56,4 +57,5 @@ def get_spark_format_handler(
         spark,
         table_format=fmt or None,
         table_options=table_options or {},
+        sql_runner=sql_runner,
     )

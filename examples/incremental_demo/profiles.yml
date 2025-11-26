@@ -21,7 +21,9 @@ dev_databricks_parquet: &incremental_databricks_parquet
       spark.hadoop.datanucleus.rdbms.datastoreAdapterClassName: "org.datanucleus.store.rdbms.adapter.DerbyAdapter"
       spark.hadoop.datanucleus.schema.autoCreateAll: "true"
       spark.hadoop.javax.jdo.option.ConnectionDriverName: "org.apache.derby.jdbc.EmbeddedDriver"
-      spark.driver.extraJavaOptions: "-Dderby.stream.error.file={{ project_dir() }}/.local/derby.log"
+      spark.driver.extraJavaOptions: >
+        -Dderby.stream.error.file={{ project_dir() }}/.local/derby.log
+        -Dderby.system.home={{ project_dir() }}/.local/derby_home
 
 dev_databricks_delta:
   engine: databricks_spark

@@ -1,0 +1,14 @@
+# My Local Playground
+dev_duckdb:
+  engine: duckdb
+  duckdb:
+    path: ".local/dev.duckdb"
+
+# My Production Environment
+prod_bigquery:
+  engine: bigquery
+  bigquery:
+    project: "{{ env('FF_BQ_PROJECT') }}"
+    dataset: "production_marts"
+    # FFT handles the client (BigFrames or Pandas) automatically
+    use_bigframes: true

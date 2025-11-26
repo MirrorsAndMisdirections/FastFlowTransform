@@ -1,5 +1,8 @@
 # fastflowtransform/executors/postgres.py
+import json
 from collections.abc import Iterable
+from contextlib import suppress
+from time import perf_counter
 from typing import Any
 
 import pandas as pd
@@ -12,6 +15,8 @@ from fastflowtransform.core import Node, relation_for
 from fastflowtransform.errors import ModelExecutionError, ProfileConfigError
 from fastflowtransform.executors._shims import SAConnShim
 from fastflowtransform.executors.base import BaseExecutor
+from fastflowtransform.executors.budget import BudgetGuard
+from fastflowtransform.executors.query_stats import QueryStats
 from fastflowtransform.logging import echo
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
 from fastflowtransform.snapshots import resolve_snapshot_config
@@ -19,6 +24,13 @@ from fastflowtransform.snapshots import resolve_snapshot_config
 
 class PostgresExecutor(BaseExecutor[pd.DataFrame]):
     ENGINE_NAME = "postgres"
+    _DEFAULT_PG_ROW_WIDTH = 128
+    _BUDGET_GUARD = BudgetGuard(
+        env_var="FF_PG_MAX_BYTES",
+        estimator_attr="_estimate_query_bytes",
+        engine_label="Postgres",
+        what="query",
+    )
 
     def __init__(self, dsn: str, schema: str | None = None):
         """
@@ -45,6 +57,181 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
 
         # ⇣ fastflowtransform.testing expects executor.con.execute("SQL")
         self.con = SAConnShim(self.engine, schema=self.schema)
+
+    def _execute_sql(
+        self,
+        sql: str,
+        *args: Any,
+        conn: Connection | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Central Postgres SQL runner.
+
+        All model-driven SQL in this executor should go through here.
+
+        If `conn` is provided, reuse that connection (important for temp tables /
+        snapshots). Otherwise, open a fresh transaction via engine.begin().
+
+        Also records simple per-query stats for run_results.json.
+        """
+        estimated_bytes = self._apply_budget_guard(self._BUDGET_GUARD, sql)
+        if estimated_bytes is None and not self._is_budget_guard_active():
+            with suppress(Exception):
+                estimated_bytes = self._estimate_query_bytes(sql)
+        t0 = perf_counter()
+
+        if conn is None:
+            # Standalone use: open our own transaction
+            with self.engine.begin() as local_conn:
+                self._set_search_path(local_conn)
+                result = local_conn.execute(text(sql), *args, **kwargs)
+        else:
+            # Reuse existing connection / transaction (e.g. in run_snapshot_sql)
+            self._set_search_path(conn)
+            result = conn.execute(text(sql), *args, **kwargs)
+
+        dt_ms = int((perf_counter() - t0) * 1000)
+
+        # rows: best-effort from Result.rowcount (DML only; SELECT is often -1)
+        rows: int | None = None
+        try:
+            rc = getattr(result, "rowcount", None)
+            if isinstance(rc, int) and rc >= 0:
+                rows = rc
+        except Exception:
+            rows = None
+
+        self._record_query_stats(
+            QueryStats(
+                bytes_processed=estimated_bytes,
+                rows=rows,
+                duration_ms=dt_ms,
+            )
+        )
+        return result
+
+    def _analyze_relations(
+        self,
+        relations: Iterable[str],
+        conn: Connection | None = None,
+    ) -> None:
+        """
+        Run ANALYZE on the given relations.
+
+        - Never goes through _execute_sql (avoids the budget guard recursion).
+        - Uses passed-in conn if given, otherwise opens its own transaction.
+        - Best-effort: logs and continues on failure.
+        """
+        owns_conn = False
+        if conn is None:
+            conn_ctx = self.engine.begin()
+            conn = conn_ctx.__enter__()
+            owns_conn = True
+        try:
+            self._set_search_path(conn)
+            for rel in relations:
+                try:
+                    # If it already looks qualified, leave it; otherwise qualify.
+                    qrel = self._qualified(rel) if "." not in rel else rel
+                    conn.execute(text(f"ANALYZE {qrel}"))
+                except Exception:
+                    pass
+        finally:
+            if owns_conn:
+                conn_ctx.__exit__(None, None, None)
+
+    # --- Cost estimation for the shared BudgetGuard -----------------
+
+    def _estimate_query_bytes(self, sql: str) -> int | None:
+        """
+        Best-effort bytes estimate for a SELECT-ish query using
+        EXPLAIN (FORMAT JSON).
+
+        Approximation: estimated_rows * avg_row_width (in bytes).
+        Returns None if:
+          - the query is not SELECT/CTE
+          - EXPLAIN fails
+          - the JSON structure is not what we expect
+        """
+        body = self._extract_select_like(sql)
+        lower = body.lstrip().lower()
+        if not lower.startswith(("select", "with")):
+            # Only try to estimate for read-like queries
+            return None
+
+        explain_sql = f"EXPLAIN (FORMAT JSON) {body}"
+
+        try:
+            with self.engine.begin() as conn:
+                self._set_search_path(conn)
+                raw = conn.execute(text(explain_sql)).scalar()
+        except Exception:
+            return None
+
+        if raw is None:
+            return None
+
+        try:
+            data = json.loads(raw)
+        except Exception:
+            data = raw
+
+        # Postgres JSON format: list with a single object
+        if isinstance(data, list) and data:
+            root = data[0]
+        elif isinstance(data, dict):
+            root = data
+        else:
+            return None
+
+        plan = root.get("Plan")
+        if not isinstance(plan, dict):
+            if isinstance(root, dict) and "Node Type" in root:
+                plan = root
+            else:
+                return None
+
+        return self._estimate_bytes_from_plan(plan)
+
+    def _estimate_bytes_from_plan(self, plan: dict[str, Any]) -> int | None:
+        """
+        Estimate bytes for the *model output* from the root plan node.
+
+        Approximation: root.Plan Rows * root.Plan Width (or DEFAULT_PG_ROW_WIDTH
+        if width is missing).
+        """
+
+        def _to_int(node: dict[str, Any], keys: tuple[str, ...]) -> int | None:
+            for key in keys:
+                val = node.get(key)
+                if val is None:
+                    continue
+                try:
+                    return int(val)
+                except (TypeError, ValueError):
+                    continue
+            return None
+
+        rows = _to_int(plan, ("Plan Rows", "Plan_Rows", "Rows"))
+        width = _to_int(plan, ("Plan Width", "Plan_Width", "Width"))
+
+        if rows is None and width is None:
+            return None
+
+        candidate: int | None
+
+        if rows is not None and width is not None:
+            candidate = rows * width
+        elif rows is not None:
+            candidate = rows * self._DEFAULT_PG_ROW_WIDTH
+        else:
+            candidate = width
+
+        if candidate is None or candidate <= 0:
+            return None
+
+        return int(candidate)
 
     # --- Helpers ---------------------------------------------------------
     def _q_ident(self, ident: str) -> str:
@@ -88,6 +275,10 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
             raise e
 
     def _materialize_relation(self, relation: str, df: pd.DataFrame, node: Node) -> None:
+        self._write_dataframe_with_stats(relation, df, node)
+
+    def _write_dataframe_with_stats(self, relation: str, df: pd.DataFrame, node: Node) -> None:
+        start = perf_counter()
         try:
             df.to_sql(
                 relation,
@@ -101,6 +292,21 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
             raise ModelExecutionError(
                 node_name=node.name, relation=self._qualified(relation), message=str(e)
             ) from e
+        else:
+            self._analyze_relations([relation])
+            self._record_dataframe_stats(df, int((perf_counter() - start) * 1000))
+
+    def _record_dataframe_stats(self, df: pd.DataFrame, duration_ms: int) -> None:
+        rows = len(df)
+        bytes_estimate = int(df.memory_usage(deep=True).sum()) if rows > 0 else 0
+        bytes_val = bytes_estimate if bytes_estimate > 0 else None
+        self._record_query_stats(
+            QueryStats(
+                bytes_processed=bytes_val,
+                rows=rows if rows > 0 else None,
+                duration_ms=duration_ms,
+            )
+        )
 
     # ---------- Python view helper ----------
     def _create_or_replace_view_from_table(
@@ -109,10 +315,12 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
         q_view = self._qualified(view_name)
         q_back = self._qualified(backing_table)
         try:
-            with self.engine.begin() as c:
-                self._set_search_path(c)
-                c.execute(text(f"DROP VIEW IF EXISTS {q_view} CASCADE"))
-                c.execute(text(f"CREATE OR REPLACE VIEW {q_view} AS SELECT * FROM {q_back}"))
+            with self.engine.begin() as conn:
+                self._execute_sql(f"DROP VIEW IF EXISTS {q_view} CASCADE", conn=conn)
+                self._execute_sql(
+                    f"CREATE OR REPLACE VIEW {q_view} AS SELECT * FROM {q_back}", conn=conn
+                )
+
         except Exception as e:
             raise ModelExecutionError(node.name, q_view, str(e)) from e
 
@@ -141,10 +349,8 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
 
     def _create_or_replace_view(self, target_sql: str, select_body: str, node: Node) -> None:
         try:
-            with self.engine.begin() as conn:
-                self._set_search_path(conn)
-                conn.execute(text(f"DROP VIEW IF EXISTS {target_sql} CASCADE"))
-                conn.execute(text(f"CREATE OR REPLACE VIEW {target_sql} AS {select_body}"))
+            self._execute_sql(f"DROP VIEW IF EXISTS {target_sql} CASCADE")
+            self._execute_sql(f"CREATE OR REPLACE VIEW {target_sql} AS {select_body}")
         except Exception as e:
             preview = f"-- target={target_sql}\n{select_body}"
             raise ModelExecutionError(node.name, target_sql, str(e), sql_snippet=preview) from e
@@ -155,10 +361,9 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
         Use DROP TABLE IF EXISTS + CREATE TABLE AS, and accept CTE bodies.
         """
         try:
-            with self.engine.begin() as conn:
-                self._set_search_path(conn)
-                conn.execute(text(f"DROP TABLE IF EXISTS {target_sql} CASCADE"))
-                conn.execute(text(f"CREATE TABLE {target_sql} AS {select_body}"))
+            self._execute_sql(f"DROP TABLE IF EXISTS {target_sql} CASCADE")
+            self._execute_sql(f"CREATE TABLE {target_sql} AS {select_body}")
+            self._analyze_relations([target_sql])
         except Exception as e:
             preview = f"-- target={target_sql}\n{select_body}"
             raise ModelExecutionError(node.name, target_sql, str(e), sql_snippet=preview) from e
@@ -176,8 +381,7 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
         """
         Return True if a table OR view exists for 'relation' in current schema.
         """
-        sql = text(
-            """
+        sql = """
             select 1
             from information_schema.tables
             where table_schema = current_schema()
@@ -189,17 +393,14 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
               and lower(table_name) = lower(:t)
             limit 1
             """
-        )
-        with self.engine.begin() as con:
-            self._set_search_path(con)
-            return bool(con.execute(sql, {"t": relation}).fetchone())
+
+        return bool(self._execute_sql(sql, {"t": relation}).fetchone())
 
     def create_table_as(self, relation: str, select_sql: str) -> None:
         body = self._extract_select_like(select_sql)
         qrel = self._qualified(relation)
-        with self.engine.begin() as con:
-            self._set_search_path(con)
-            con.execute(text(f"create table {qrel} as {body}"))
+        self._execute_sql(f"create table {qrel} as {body}")
+        self._analyze_relations([relation])
 
     def full_refresh_table(self, relation: str, select_sql: str) -> None:
         """
@@ -208,17 +409,15 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
         """
         body = self._selectable_body(select_sql).strip().rstrip(";\n\t ")
         qrel = self._qualified(relation)
-        with self.engine.begin() as conn:
-            self._set_search_path(conn)
-            conn.execute(text(f"drop table if exists {qrel}"))
-            conn.execute(text(f"create table {qrel} as {body}"))
+        self._execute_sql(f"drop table if exists {qrel}")
+        self._execute_sql(f"create table {qrel} as {body}")
+        self._analyze_relations([relation])
 
     def incremental_insert(self, relation: str, select_sql: str) -> None:
         body = self._extract_select_like(select_sql)
         qrel = self._qualified(relation)
-        with self.engine.begin() as con:
-            self._set_search_path(con)
-            con.execute(text(f"insert into {qrel} {body}"))
+        self._execute_sql(f"insert into {qrel} {body}")
+        self._analyze_relations([relation])
 
     def incremental_merge(self, relation: str, select_sql: str, unique_key: list[str]) -> None:
         """
@@ -227,14 +426,13 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
         body = self._extract_select_like(select_sql)
         qrel = self._qualified(relation)
         pred = " AND ".join([f"t.{k}=s.{k}" for k in unique_key])
-        with self.engine.begin() as con:
-            self._set_search_path(con)
-            con.execute(text(f"create temporary table ff_stg as {body}"))
-            try:
-                con.execute(text(f"delete from {qrel} t using ff_stg s where {pred}"))
-                con.execute(text(f"insert into {qrel} select * from ff_stg"))
-            finally:
-                con.execute(text("drop table if exists ff_stg"))
+        self._execute_sql(f"create temporary table ff_stg as {body}")
+        try:
+            self._execute_sql(f"delete from {qrel} t using ff_stg s where {pred}")
+            self._execute_sql(f"insert into {qrel} select * from ff_stg")
+            self._analyze_relations([relation])
+        finally:
+            self._execute_sql("drop table if exists ff_stg")
 
     def alter_table_sync_schema(
         self, relation: str, select_sql: str, *, mode: str = "append_new_columns"
@@ -244,22 +442,28 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
         """
         body = self._extract_select_like(select_sql)
         qrel = self._qualified(relation)
-        with self.engine.begin() as con:
-            self._set_search_path(con)
-            cols = [r[0] for r in con.execute(text(f"select * from ({body}) q limit 0"))]
+
+        with self.engine.begin() as conn:
+            # Probe output columns
+            cols = [r[0] for r in self._execute_sql(f"select * from ({body}) q limit 0")]
+
+            # Existing columns in target table
             existing = {
                 r[0]
-                for r in con.execute(
-                    text(
-                        "select column_name from information_schema.columns "
-                        "where table_schema = current_schema() and lower(table_name)=lower(:t)"
-                    ),
+                for r in self._execute_sql(
+                    """
+                    select column_name
+                    from information_schema.columns
+                    where table_schema = current_schema()
+                    and lower(table_name)=lower(:t)
+                    """,
                     {"t": relation},
                 ).fetchall()
             }
+
             add = [c for c in cols if c not in existing]
             for c in add:
-                con.execute(text(f'alter table {qrel} add column "{c}" text'))
+                self._execute_sql(f'alter table {qrel} add column "{c}" text', conn=conn)
 
     # ── Snapshot API ──────────────────────────────────────────────────────
 
@@ -346,9 +550,7 @@ select
     {hash_expr} as {hash_col}
 from ({body}) as s
 """
-            with self.engine.begin() as conn:
-                self._set_search_path(conn)
-                conn.execute(text(create_sql))
+            self._execute_sql(create_sql)
             return
 
         # ---- Incremental snapshot update ----
@@ -358,11 +560,9 @@ from ({body}) as s
         src_q = self._q_ident(src_name)
 
         with self.engine.begin() as conn:
-            self._set_search_path(conn)
-
             # (Re-)create temp staging table
-            conn.execute(text(f"drop table if exists {src_q}"))
-            conn.execute(text(f"create temporary table {src_q} as {body}"))
+            self._execute_sql(f"drop table if exists {src_q}", conn=conn)
+            self._execute_sql(f"create temporary table {src_q} as {body}", conn=conn)
 
             # Join predicate on unique keys
             keys_pred = " AND ".join([f"t.{k} = s.{k}" for k in unique_key])
@@ -397,7 +597,7 @@ where
     and t.{is_cur} = true
     and {change_condition};
 """
-            conn.execute(text(close_sql))
+            self._execute_sql(close_sql, conn=conn)
 
             # 2) Insert new current versions (new keys or changed rows)
             first_key = unique_key[0]
@@ -418,11 +618,12 @@ where
     t.{first_key} is null
     or {change_condition};
 """
-            conn.execute(text(insert_sql))
+            self._execute_sql(insert_sql, conn=conn)
 
             # Temp table will be dropped automatically at end of session; dropping
             # explicitly here is harmless and keeps the connection clean for tests.
-            conn.execute(text(f"drop table if exists {src_q}"))
+            self._execute_sql(f"drop table if exists {src_q}", conn=conn)
+            self._analyze_relations([target], conn=conn)
 
     def snapshot_prune(
         self,
@@ -468,10 +669,8 @@ select count(*) as rows_to_delete
 from ranked
 where rn > {int(keep_last)}
 """
-            with self.engine.begin() as conn:
-                self._set_search_path(conn)
-                res = conn.execute(text(sql)).fetchone()
-                rows = int(res[0]) if res else 0
+            res = self._execute_sql(sql).fetchone()
+            rows = int(res[0]) if res else 0
             echo(
                 f"[DRY-RUN] snapshot_prune({relation}): would delete {rows} row(s) "
                 f"(keep_last={keep_last})"
@@ -488,6 +687,5 @@ where
   and {" AND ".join([f"t.{k} = r.{k}" for k in keys])}
   and t.{vf} = r.{vf};
 """
-        with self.engine.begin() as conn:
-            self._set_search_path(conn)
-            conn.execute(text(delete_sql))
+        self._execute_sql(delete_sql)
+        self._analyze_relations([relation])

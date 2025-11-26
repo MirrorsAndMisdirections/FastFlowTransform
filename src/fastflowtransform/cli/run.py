@@ -10,12 +10,13 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import typer
 
 from fastflowtransform.artifacts import (
     RunNodeResult,
+    load_last_run_durations,
     write_catalog,
     write_manifest,
     write_run_results,
@@ -50,8 +51,14 @@ from fastflowtransform.cli.selectors import (
     _selected_subgraph_names,
     augment_with_state_modified,
 )
+from fastflowtransform.config.budgets import (
+    BudgetLimit,
+    BudgetsConfig,
+    load_budgets_config,
+)
 from fastflowtransform.core import REGISTRY, relation_for
 from fastflowtransform.dag import levels as dag_levels
+from fastflowtransform.executors.budget import format_bytes
 from fastflowtransform.fingerprint import (
     EnvCtx,
     build_env_ctx,
@@ -60,9 +67,10 @@ from fastflowtransform.fingerprint import (
     get_function_source,
 )
 from fastflowtransform.log_queue import LogQueue
-from fastflowtransform.logging import bind_context, bound_context, clear_context, echo, warn
+from fastflowtransform.logging import bind_context, bound_context, clear_context, echo, error, warn
 from fastflowtransform.meta import ensure_meta_table
 from fastflowtransform.run_executor import ScheduleResult, schedule
+from fastflowtransform.utils.timefmt import _format_duration_ms
 
 
 @dataclass
@@ -79,10 +87,16 @@ class _RunEngine:
     computed_fps: dict[str, str] = field(default_factory=dict, init=False)
     fps_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     http_snaps: dict[str, dict] = field(default_factory=dict, init=False)
+    budgets_cfg: BudgetsConfig | None = None
+
+    # per-node query stats (aggregated across all queries in that node)
+    query_stats: dict[str, dict[str, int]] = field(default_factory=dict, init=False)
+    stats_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     def __post_init__(self) -> None:
         echo(f"Profile: {self.env_name} | Engine: {self.ctx.profile.engine}")
         self.shared = self.ctx.make_executor()
+        self._configure_budget_limit(self.shared[0])
         with suppress(Exception):
             ensure_meta_table(self.shared[0])
         relevant_env = [k for k in os.environ if k.startswith("FF_")]
@@ -107,9 +121,14 @@ class _RunEngine:
                     clone_needed = not (isinstance(db_path, str) and db_path.strip() == ":memory:")
                     if clone_needed:
                         ex = ex.clone()
-                    run_py_wrapped = ex.run_python
+
+                        def run_sql_wrapped(node, _env=self.ctx.jinja_env, _ex=ex):
+                            return _ex.run_sql(node, _env)
+
+                        run_py_wrapped = ex.run_python
                 except Exception:
                     pass
+            self._configure_budget_limit(ex)
             self.tls.runner = (ex, run_sql_wrapped, run_py_wrapped)
         return self.tls.runner
 
@@ -173,6 +192,17 @@ class _RunEngine:
             return None
         return f"{namespace}.{rel}"
 
+    def _configure_budget_limit(self, executor: Any) -> None:
+        if executor is None or not hasattr(executor, "configure_query_budget_limit"):
+            return
+        engine_name = (self.ctx.profile.engine or "").lower()
+        limit = None
+        if self.budgets_cfg and engine_name:
+            entry = self.budgets_cfg.query_limits.get(engine_name)
+            if entry:
+                limit = entry.max_bytes
+        executor.configure_query_budget_limit(limit)
+
     def format_run_label(self, name: str) -> str:
         """
         Build the human-facing label for run logs, e.g.:
@@ -230,6 +260,12 @@ class _RunEngine:
         node = REGISTRY.nodes[name]
         ex, run_sql_fn, run_py_fn = self._get_runner()
 
+        # Reset per-node stats if the executor supports it
+        with suppress(Exception):
+            reset = getattr(ex, "reset_node_stats", None)
+            if callable(reset):
+                reset()
+
         if name in self.force_rebuild:
             (run_sql_fn if node.kind == "sql" else run_py_fn)(node)
             cand_fp = self._maybe_fingerprint(node, ex)
@@ -243,6 +279,17 @@ class _RunEngine:
                 snap = (getattr(node, "meta", {}) or {}).get("_http_snapshot")
                 if snap:
                     self.http_snaps[name] = snap
+
+            # capture per-node stats after successful run
+            with suppress(Exception):
+                raw_getter = getattr(ex, "get_node_stats", None)
+                if callable(raw_getter):
+                    getter = cast(Callable[[], dict[str, int] | None], raw_getter)
+                    stats = getter()
+                    if stats:
+                        with self.stats_lock:
+                            self.query_stats[name] = stats
+
             return
 
         cand_fp = self._maybe_fingerprint(node, ex)
@@ -258,6 +305,14 @@ class _RunEngine:
             ):
                 with self.fps_lock:
                     self.computed_fps[name] = cand_fp
+                # Even when skipped, we treat stats as zero → nothing to do
+                with self.stats_lock:
+                    self.query_stats[name] = {
+                        "bytes_scanned": 0,
+                        "rows": 0,
+                        "query_duration_ms": 0,
+                        "cached": True,
+                    }
                 return
 
         (run_sql_fn if node.kind == "sql" else run_py_fn)(node)
@@ -272,6 +327,16 @@ class _RunEngine:
             snap = (getattr(node, "meta", {}) or {}).get("_http_snapshot")
             if snap:
                 self.http_snaps[name] = snap
+
+        # capture per-node stats after successful run
+        with suppress(Exception):
+            raw_getter = getattr(ex, "get_node_stats", None)
+            if callable(raw_getter):
+                getter = cast(Callable[[], dict[str, int] | None], raw_getter)
+                stats = getter()
+                if stats:
+                    with self.stats_lock:
+                        self.query_stats[name] = stats
 
     @staticmethod
     def before(_name: str, lvl_idx: int | None = None) -> None:
@@ -370,6 +435,301 @@ def _is_snapshot_model(node: Any) -> bool:
     return mat == "snapshot"
 
 
+def _check_metric_limits(
+    *,
+    scope: str,
+    metric_name: str,
+    value: int,
+    limits: BudgetLimit,
+) -> tuple[bool, bool]:
+    """
+    Check a single metric against warn/error thresholds.
+
+    Returns (warn_triggered, error_triggered).
+    """
+    if value <= 0:
+        return False, False
+
+    # Decide how to render the metric & thresholds
+    if metric_name == "bytes_scanned":
+        value_str = format_bytes(value)
+        warn_str = format_bytes(limits.warn) if limits.warn else None
+        err_str = format_bytes(limits.error) if limits.error else None
+        unit_label = "bytes_scanned"
+    elif metric_name == "rows":
+        value_str = f"{value:,} rows"
+        warn_str = f"{limits.warn:,} rows" if limits.warn else None
+        err_str = f"{limits.error:,} rows" if limits.error else None
+        unit_label = "rows"
+    else:  # "query_duration_ms"
+        value_str = _format_duration_ms(value)
+        warn_str = _format_duration_ms(limits.warn) if limits.warn else None
+        err_str = _format_duration_ms(limits.error) if limits.error else None
+        unit_label = "query_duration_ms"
+
+    # Prefer error over warn (avoid double-logging)
+    if limits.error and value > limits.error:
+        error(
+            f"[BUDGET] {scope}: {unit_label} {value_str} exceeds "
+            f"error limit {err_str} (budgets.yml)."
+        )
+        return False, True
+
+    if limits.warn and value > limits.warn:
+        warn(
+            f"[BUDGET] {scope}: {unit_label} {value_str} exceeds "
+            f"warn limit {warn_str} (budgets.yml)."
+        )
+        return True, False
+
+    return False, False
+
+
+def _value_and_limits_str(
+    metric_name: str,
+    value: int,
+    limits: BudgetLimit,
+) -> tuple[str, str | None, str | None]:
+    if metric_name == "bytes_scanned":
+        v_str = format_bytes(value)
+        w_str = format_bytes(limits.warn) if limits.warn else None
+        e_str = format_bytes(limits.error) if limits.error else None
+    elif metric_name == "rows":
+        v_str = f"{value:,} rows"
+        w_str = f"{limits.warn:,} rows" if limits.warn else None
+        e_str = f"{limits.error:,} rows" if limits.error else None
+    else:  # query_duration_ms
+        v_str = _format_duration_ms(value)
+        w_str = _format_duration_ms(limits.warn) if limits.warn else None
+        e_str = _format_duration_ms(limits.error) if limits.error else None
+    return v_str, w_str, e_str
+
+
+def _eval_metric(scope: str, metric_name: str, value: int, limits: BudgetLimit) -> str:
+    """
+    Evaluate {warn,error} thresholds for a single metric.
+
+    Returns status: "ok" | "warn" | "error".
+    Emits log lines for warn/error.
+    """
+    if value <= 0:
+        return "ok"
+    if not limits.warn and not limits.error:
+        return "ok"
+
+    v_str, w_str, e_str = _value_and_limits_str(metric_name, value, limits)
+    unit_label = metric_name
+
+    # Prefer error over warn
+    if limits.error and value > limits.error:
+        error(f"[BUDGET] {scope}: {unit_label} {v_str} exceeds error limit {e_str} (budgets.yml).")
+        return "error"
+
+    if limits.warn and value > limits.warn:
+        warn(f"[BUDGET] {scope}: {unit_label} {v_str} exceeds warn limit {w_str} (budgets.yml).")
+        return "warn"
+
+    return "ok"
+
+
+def _aggregate_totals(stats_by_model: dict[str, dict[str, Any]]) -> dict[str, int]:
+    totals = {"bytes_scanned": 0, "rows": 0, "query_duration_ms": 0}
+    for s in stats_by_model.values():
+        totals["bytes_scanned"] += int(s.get("bytes_scanned", 0) or 0)
+        totals["rows"] += int(s.get("rows", 0) or 0)
+        totals["query_duration_ms"] += int(s.get("query_duration_ms", 0) or 0)
+    return totals
+
+
+def _evaluate_total_budgets(
+    cfg: Any,
+    totals: dict[str, int],
+    budgets_summary: dict[str, Any],
+) -> bool:
+    had_error = False
+    if not cfg.total:
+        return had_error
+
+    for metric_name in ("bytes_scanned", "rows", "query_duration_ms"):
+        limits: BudgetLimit | None = getattr(cfg.total, metric_name)
+        if not limits:
+            continue
+        value = totals.get(metric_name, 0)
+        status = _eval_metric("total (all models)", metric_name, value, limits)
+        if status != "ok" or (limits.warn or limits.error):
+            budgets_summary["total"][metric_name] = {
+                "value": value,
+                "warn": limits.warn,
+                "error": limits.error,
+                "status": status,
+            }
+        if status == "error":
+            had_error = True
+
+    return had_error
+
+
+def _evaluate_model_budgets(
+    cfg: Any,
+    stats_by_model: dict[str, dict[str, Any]],
+    budgets_summary: dict[str, Any],
+) -> bool:
+    had_error = False
+
+    for model_name, metrics in (cfg.models or {}).items():
+        s = stats_by_model.get(model_name)
+        if not s:
+            continue
+
+        model_summary: dict[str, Any] = {}
+        for metric_name in ("bytes_scanned", "rows", "query_duration_ms"):
+            limits: BudgetLimit | None = getattr(metrics, metric_name)
+            if not limits:
+                continue
+            value = int(s.get(metric_name, 0) or 0)
+            status = _eval_metric(f"model '{model_name}'", metric_name, value, limits)
+            if status != "ok" or (limits.warn or limits.error):
+                model_summary[metric_name] = {
+                    "value": value,
+                    "warn": limits.warn,
+                    "error": limits.error,
+                    "status": status,
+                }
+            if status == "error":
+                had_error = True
+
+        if model_summary:
+            budgets_summary["models"][model_name] = model_summary
+
+    return had_error
+
+
+def _aggregate_tag_totals(
+    cfg: Any,
+    stats_by_model: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, int]]:
+    tag_totals: dict[str, dict[str, int]] = {
+        tag: {"bytes_scanned": 0, "rows": 0, "query_duration_ms": 0} for tag in (cfg.tags or {})
+    }
+
+    for model_name, s in stats_by_model.items():
+        try:
+            node = REGISTRY.get_node(model_name)
+        except KeyError:
+            continue
+
+        meta = getattr(node, "meta", {}) or {}
+        tags = meta.get("tags") or []
+        tags_str = [str(t) for t in tags]
+
+        for tag in tags_str:
+            if tag not in tag_totals:
+                continue
+            aggr = tag_totals[tag]
+            aggr["bytes_scanned"] += int(s.get("bytes_scanned", 0) or 0)
+            aggr["rows"] += int(s.get("rows", 0) or 0)
+            aggr["query_duration_ms"] += int(s.get("query_duration_ms", 0) or 0)
+
+    return tag_totals
+
+
+def _evaluate_tag_budgets(
+    cfg: Any,
+    tag_totals: dict[str, dict[str, int]],
+    budgets_summary: dict[str, Any],
+) -> bool:
+    had_error = False
+    if not cfg.tags:
+        return had_error
+
+    for tag, metrics in (cfg.tags or {}).items():
+        aggr = tag_totals.get(tag) or {}
+        tag_summary: dict[str, Any] = {}
+        for metric_name in ("bytes_scanned", "rows", "query_duration_ms"):
+            limits: BudgetLimit | None = getattr(metrics, metric_name)
+            if not limits:
+                continue
+            value = int(aggr.get(metric_name, 0) or 0)
+            status = _eval_metric(
+                f"tag '{tag}' (all models with this tag)", metric_name, value, limits
+            )
+            if status != "ok" or (limits.warn or limits.error):
+                tag_summary[metric_name] = {
+                    "value": value,
+                    "warn": limits.warn,
+                    "error": limits.error,
+                    "status": status,
+                }
+            if status == "error":
+                had_error = True
+
+        if tag_summary:
+            budgets_summary["tags"][tag] = tag_summary
+
+    return had_error
+
+
+def _resolve_budgets_cfg(project_dir: Path, engine_: _RunEngine) -> Any | None:
+    cfg = engine_.budgets_cfg
+    if cfg is not None:
+        return cfg
+
+    try:
+        cfg = load_budgets_config(project_dir)
+    except Exception as exc:  # pragma: no cover - CLI error path
+        # Parsing error is considered fatal: surface a clear message and fail the run.
+        error(f"Failed to parse budgets.yml: {exc}")
+        raise typer.Exit(1) from exc
+
+    engine_.budgets_cfg = cfg
+    return cfg
+
+
+def _evaluate_budgets(
+    project_dir: Path,
+    engine_: _RunEngine,
+) -> tuple[bool, dict[str, Any] | None]:
+    """
+    Enforce budgets.yml against collected query_stats.
+
+    Returns:
+      (had_error_budget: bool, budgets_summary: dict | None)
+    """
+    cfg = _resolve_budgets_cfg(project_dir, engine_)
+
+    if cfg is None:
+        # No budgets.yml → nothing to enforce
+        return False, None
+
+    stats_by_model: dict[str, dict[str, Any]] = getattr(engine_, "query_stats", {}) or {}
+    if not stats_by_model:
+        # No stats collected (e.g. purely Python models) → nothing to enforce
+        return False, None
+
+    totals = _aggregate_totals(stats_by_model)
+
+    # Summary structure for run_results.json
+    budgets_summary: dict[str, Any] = {
+        "total": {},
+        "models": {},
+        "tags": {},
+    }
+
+    had_error = False
+    had_error |= _evaluate_total_budgets(cfg, totals, budgets_summary)
+    had_error |= _evaluate_model_budgets(cfg, stats_by_model, budgets_summary)
+
+    if cfg.tags:
+        tag_totals = _aggregate_tag_totals(cfg, stats_by_model)
+        had_error |= _evaluate_tag_budgets(cfg, tag_totals, budgets_summary)
+
+    # If budgets_summary is entirely empty, return None for clarity
+    if not any(budgets_summary[section] for section in ("total", "models", "tags")):
+        return had_error, None
+
+    return had_error, budgets_summary
+
+
 # ----------------- helpers (run function) -----------------
 
 
@@ -377,7 +737,12 @@ def _build_engine_ctx(project, env_name, engine, vars, cache, no_cache):
     ctx = _prepare_context(project, env_name, engine, vars)
     cache_mode = CacheMode.OFF if no_cache else cache
     engine_ = _RunEngine(
-        ctx=ctx, pred=None, env_name=env_name, cache_mode=cache_mode, force_rebuild=set()
+        ctx=ctx,
+        pred=None,
+        env_name=env_name,
+        cache_mode=cache_mode,
+        force_rebuild=set(),
+        budgets_cfg=ctx.budgets_cfg,
     )
     return ctx, engine_
 
@@ -504,6 +869,12 @@ def _run_schedule(engine_, lvls, jobs, keep_going, ctx):
 
     bind_context(run_id=started_at)
 
+    # Best-effort: use previous run timings to batch small models per worker.
+    try:
+        prev_durations_s = load_last_run_durations(ctx.project)
+    except Exception:
+        prev_durations_s = {}
+
     def _run_node_with_ctx(name: str) -> None:
         with bound_context(node=name):
             engine_.run_node(name)
@@ -519,6 +890,7 @@ def _run_schedule(engine_, lvls, jobs, keep_going, ctx):
         engine_abbr=_abbr(ctx.profile.engine),
         name_width=100,
         name_formatter=engine_.format_run_label,
+        durations_s=prev_durations_s,
     )
 
     finished_at = datetime.now(UTC).isoformat(timespec="seconds")
@@ -526,7 +898,12 @@ def _run_schedule(engine_, lvls, jobs, keep_going, ctx):
 
 
 def _write_artifacts(
-    ctx: CLIContext, result: ScheduleResult, started_at: str, finished_at: str, engine_: _RunEngine
+    ctx: CLIContext,
+    result: ScheduleResult,
+    started_at: str,
+    finished_at: str,
+    engine_: _RunEngine,
+    budgets: dict[str, Any] | None,
 ) -> None:
     write_manifest(ctx.project)
 
@@ -534,10 +911,19 @@ def _write_artifacts(
     failed = result.failed or {}
     all_names = set(result.per_node_s.keys()) | set(failed.keys())
 
+    # stats accumulated by the executor per node (if available)
+    per_node_stats = getattr(engine_, "query_stats", {}) or {}
+
     for name in sorted(all_names):
         dur_s = float(result.per_node_s.get(name, 0.0))
         status = "error" if name in failed else "success"
         msg = str(failed.get(name)) if name in failed else None
+
+        stats = per_node_stats.get(name) or {}
+        bytes_scanned = int(stats.get("bytes_scanned", 0))
+        rows = int(stats.get("rows", 0))
+        q_ms = int(stats.get("query_duration_ms", 0))
+
         node_results.append(
             RunNodeResult(
                 name=name,
@@ -547,11 +933,18 @@ def _write_artifacts(
                 duration_ms=int(dur_s * 1000),
                 message=msg,
                 http=engine_.http_snaps.get(name),
+                bytes_scanned=bytes_scanned,
+                rows=rows,
+                query_duration_ms=q_ms,
             )
         )
 
     write_run_results(
-        ctx.project, started_at=started_at, finished_at=finished_at, node_results=node_results
+        ctx.project,
+        started_at=started_at,
+        finished_at=finished_at,
+        node_results=node_results,
+        budgets=budgets,
     )
 
 
@@ -581,7 +974,7 @@ def run(
     vars: VarsOpt = None,
     select: SelectOpt = None,
     exclude: ExcludeOpt = None,
-    jobs: JobsOpt = 1,
+    jobs: JobsOpt = "1",
     keep_going: KeepOpt = False,
     cache: CacheOpt = CacheMode.RW,
     no_cache: NoCacheOpt = False,
@@ -591,7 +984,6 @@ def run(
     http_cache: HttpCacheOpt = None,
     changed_since: ChangedSinceOpt = None,
 ) -> None:
-    # _ensure_logging()
     # HTTP/API-Flags → ENV, damit fastflowtransform.api.http sie liest
     if offline:
         os.environ["FF_HTTP_OFFLINE"] = "1"
@@ -622,11 +1014,15 @@ def run(
 
     result, logq, started_at, finished_at = _run_schedule(engine_, lvls, jobs, keep_going, ctx)
 
-    _write_artifacts(ctx, result, started_at, finished_at, engine_)
+    # Evaluate budgets.yml based on collected query stats
+    budget_error, budgets_summary = _evaluate_budgets(ctx.project, engine_)
+
+    _write_artifacts(ctx, result, started_at, finished_at, engine_, budgets_summary)
+
     _attempt_catalog(ctx)
     _emit_logs_and_errors(logq, result, engine_)
 
-    if result.failed:
+    if result.failed or budget_error:
         raise typer.Exit(1)
 
     engine_.persist_on_success(result)

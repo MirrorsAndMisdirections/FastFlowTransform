@@ -39,6 +39,7 @@ nav:
   - Unit Tests: Unit_Tests.md
   - Snapshots: Snapshots.md
   - CI Checks & Change-Aware Runs: CI_Check.md
+  - Cost Monitoring: Cost_Monitoring.md
   - Troubleshooting: Troubleshooting.md
   - Examples:
       - Basic Demo: examples/Basic_Demo.md

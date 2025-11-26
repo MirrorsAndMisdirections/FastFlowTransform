@@ -7,6 +7,7 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
+from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
@@ -19,6 +20,8 @@ from fastflowtransform.api import context as _http_ctx
 from fastflowtransform.config.sources import resolve_source_entry
 from fastflowtransform.core import REGISTRY, Node, relation_for
 from fastflowtransform.errors import ModelExecutionError
+from fastflowtransform.executors.budget import BudgetGuard
+from fastflowtransform.executors.query_stats import QueryStats
 from fastflowtransform.incremental import _normalize_unique_key
 from fastflowtransform.logging import echo, echo_debug
 from fastflowtransform.validation import validate_required_columns
@@ -364,31 +367,39 @@ class BaseExecutor[TFrame](ABC):
 
     def _selectable_body(self, sql: str) -> str:
         """
-        Return a valid SELECT-able body for CREATE … AS:
+        Normalize a SELECT/CTE body:
 
-          - If the statement starts (after comments/blank lines) with a CTE (WITH …),
-            return from the WITH onward.
-          - If it starts with SELECT, return from SELECT onward.
-          - Otherwise, fall back to the first SELECT heuristic.
+        - Strip leading SQL comments/blank lines.
+        - Find the first WITH or SELECT keyword (as a word) anywhere in the statement.
+        - Return from that keyword onward, stripping trailing semicolons/whitespace.
+
+        This works for:
+        * plain SELECT
+        * WITH ... (CTEs)
+        * CREATE TABLE/VIEW ... AS WITH ...
+        * CREATE TABLE/VIEW ... AS SELECT ...
+        * INSERT INTO ... SELECT ...
         """
-        # Keep original for fallback, but check after stripping comments
-        s0 = sql
-        s, offset = self._strip_leading_sql_comments(sql)
-        s_ws = s.lstrip()  # in case comments left some spaces
-        head = s_ws[:6].lower()
+        s0 = sql or ""
 
-        if s_ws.startswith(("with ", "with\n", "with\t")):
-            # Return from the start of this WITH (preserve exactly s_ws form)
-            # Compute index into original string to retain original casing beyond comments
-            idx = s.find(s_ws)
-            return sql[offset + (idx if idx >= 0 else 0) :].lstrip()
+        # Strip leading comments; s starts at 'offset' in the original string.
+        s, offset = self._strip_leading_sql_comments(s0)
+        s_ws = s.lstrip()
 
-        if head.startswith("select"):
-            idx = s.find(s_ws)
-            return sql[offset + (idx if idx >= 0 else 0) :].lstrip()
+        # Find first WITH or SELECT as a whole word (case-insensitive)
+        m = re.search(r"\b(with|select)\b", s_ws, flags=re.IGNORECASE)
+        if not m:
+            # No obvious SELECT/CTE - just return the statement minus trailing semicolons.
+            return s0.strip().rstrip(";\n\t ")
 
-        # Fallback: first SELECT anywhere in the statement
-        return self._first_select_body(s0)
+        # m.start() is index within s_ws. Need to map back into the original sql.
+        leading_ws_len = len(s) - len(s_ws)  # spaces we lstripped
+        start_in_s = leading_ws_len + m.start()
+        start_in_sql = offset + start_in_s
+
+        body = s0[start_in_sql:]
+        # Strip trailing semicolons and whitespace
+        return body.strip().rstrip(";\n\t ")
 
     def _looks_like_direct_ddl(self, sql: str) -> bool:
         """
@@ -438,6 +449,175 @@ class BaseExecutor[TFrame](ABC):
         sql = self._strip_leading_config(sql).strip()
         body = self._selectable_body(sql).rstrip(" ;\n\t")
         return f"(\n{body}\n)"
+
+    # ---------- Query stats (per-node, aggregated across queries) ----------
+
+    def _record_query_stats(self, stats: QueryStats) -> None:
+        """
+        Append per-query stats to an internal buffer.
+
+        Executors call this from their engine-specific recording logic.
+        The run engine can later drain this buffer per node.
+        """
+        buf = getattr(self, "_ff_query_stats_buffer", None)
+        if buf is None:
+            buf = []
+            self._ff_query_stats_buffer = buf
+        buf.append(stats)
+
+    def _drain_query_stats(self) -> list[QueryStats]:
+        """
+        Drain and return the buffered stats, resetting the buffer.
+
+        Used by the run engine around per-node execution.
+        """
+        buf = getattr(self, "_ff_query_stats_buffer", None)
+        if not buf:
+            self._ff_query_stats_buffer = []
+            return []
+        self._ff_query_stats_buffer = []
+        return list(buf)
+
+    def _record_query_job_stats(self, job: Any) -> None:
+        """
+        Best-effort extraction of stats from a 'job-like' object.
+
+        This is intentionally generic; engines that return job handles
+        (BigQuery, Snowflake, Spark) can pass them here. Engines can
+        override this if they want more precise logic.
+        """
+
+        def _safe_int(val: Any) -> int | None:
+            try:
+                if val is None:
+                    return None
+                return int(val)
+            except Exception:
+                return None
+
+        # Heuristic attribute names - BigQuery and others may expose these.
+        bytes_processed = _safe_int(
+            getattr(job, "total_bytes_processed", None) or getattr(job, "bytes_processed", None)
+        )
+
+        rows = _safe_int(
+            getattr(job, "num_dml_affected_rows", None)
+            or getattr(job, "total_rows", None)
+            or getattr(job, "rowcount", None)
+        )
+
+        duration_ms: int | None = None
+        try:
+            started = getattr(job, "started", None)
+            ended = getattr(job, "ended", None)
+            if isinstance(started, datetime) and isinstance(ended, datetime):
+                duration_ms = int((ended - started).total_seconds() * 1000)
+        except Exception:
+            pass
+
+        self._record_query_stats(
+            QueryStats(
+                bytes_processed=bytes_processed,
+                rows=rows,
+                duration_ms=duration_ms,
+            )
+        )
+
+    def configure_query_budget_limit(self, limit: int | None) -> None:
+        """
+        Inject a configured per-query byte limit (e.g. from budgets.yml).
+        """
+        if limit is None:
+            self._ff_configured_query_limit = None
+            return
+        try:
+            iv = int(limit)
+        except Exception:
+            self._ff_configured_query_limit = None
+            return
+        self._ff_configured_query_limit = iv if iv > 0 else None
+
+    def _configured_query_limit(self) -> int | None:
+        val = getattr(self, "_ff_configured_query_limit", None)
+        if val is None:
+            return None
+        try:
+            iv = int(val)
+        except Exception:
+            return None
+        return iv if iv > 0 else None
+
+    def _set_query_budget_estimate(self, estimate: int | None) -> None:
+        self._ff_last_query_budget_estimate = estimate
+
+    def _consume_query_budget_estimate(self) -> int | None:
+        estimate = getattr(self, "_ff_last_query_budget_estimate", None)
+        self._ff_last_query_budget_estimate = None
+        return estimate
+
+    def _apply_budget_guard(self, guard: BudgetGuard | None, sql: str) -> int | None:
+        if guard is None:
+            self._set_query_budget_estimate(None)
+            self._ff_budget_guard_active = False
+            return None
+        limit, source = guard.resolve_limit(self._configured_query_limit())
+        if not limit:
+            self._set_query_budget_estimate(None)
+            self._ff_budget_guard_active = False
+            return None
+        self._ff_budget_guard_active = True
+        estimate = guard.enforce(sql, self, limit=limit, source=source)
+        self._set_query_budget_estimate(estimate)
+        return estimate
+
+    def _is_budget_guard_active(self) -> bool:
+        return bool(getattr(self, "_ff_budget_guard_active", False))
+
+    # ---------- Per-node stats API (used by run engine) ----------
+
+    def reset_node_stats(self) -> None:
+        """
+        Reset per-node statistics buffer.
+
+        The run engine calls this before executing a model so that all
+        stats recorded via `_record_query_stats(...)` belong to that node.
+        """
+        # just clear the buffer; next recording will re-create it
+        self._ff_query_stats_buffer = []
+
+    def get_node_stats(self) -> dict[str, int]:
+        """
+        Aggregate buffered QueryStats into a simple dict:
+
+            {
+              "bytes_scanned": <sum>,
+              "rows": <sum>,
+              "query_duration_ms": <sum>,
+            }
+
+        Called by the run engine after a node finishes.
+        """
+        stats_list = self._drain_query_stats()
+        if not stats_list:
+            return {}
+
+        total_bytes = 0
+        total_rows = 0
+        total_duration = 0
+
+        for s in stats_list:
+            if s.bytes_processed is not None:
+                total_bytes += int(s.bytes_processed)
+            if s.rows is not None:
+                total_rows += int(s.rows)
+            if s.duration_ms is not None:
+                total_duration += int(s.duration_ms)
+
+        return {
+            "bytes_scanned": total_bytes,
+            "rows": total_rows,
+            "query_duration_ms": total_duration,
+        }
 
     # ---------- Python models ----------
     def run_python(self, node: Node) -> None:

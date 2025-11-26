@@ -44,6 +44,7 @@ This demo showcases several FastFlowTransform features:
 | Environment invalidation   | Any `FF_*` change triggers rebuild              |
 | Python model caching       | Fingerprints derived from function source       |
 | HTTP response caching      | Persistent API result cache with offline mode   |
+| Cost guards + budgets      | `budgets.yml → query_limits` + run-level budgets |
 
 ---
 
@@ -58,6 +59,7 @@ make change_seed       # use patches/seed_users_patch.csv -> rebuilds staging + 
 make change_env        # set FF_* env -> invalidates cache globally
 make change_py         # edit py_constants.ff.py -> rebuilds that model
 make run_parallel      # runs entire DAG with 4 workers per level
+make cost_guard_example ENGINE=duckdb   # demonstrate per-query guard
 ```
 
 > Engines: set `ENGINE=<duckdb|postgres|databricks_spark|bigquery|snowflake_snowpark>` and copy the matching `.env.dev_*` file (`.env.dev_snowflake` for Snowflake; install `fastflowtransform[snowflake]`).
@@ -67,7 +69,7 @@ Seeds stay immutable: `change_seed` assembles a temporary combined copy in `.loc
 
 Inspect results:
 
-* `.fastflowtransform/target/run_results.json` – fingerprints, results, timings, HTTP stats
+* `.fastflowtransform/target/run_results.json` – per-model stats (bytes, rows, durations, HTTP)
 * `site/dag/index.html` – DAG visualization
 * `.local/http-cache/` – persisted API responses
 
@@ -154,15 +156,16 @@ fft run . --env dev_duckdb --jobs 4
 
 ## 🧪 Example Experiments
 
-| Scenario                  | Command                                | Expected behavior               |
-| ------------------------- | -------------------------------------- | ------------------------------- |
-| First full run            | `make cache_first`                     | All models build, cache written |
-| No-op run                 | `make cache_second`                    | All skipped (no rebuilds)       |
-| Modify SQL                | `make change_sql`                      | Downstream mart rebuilds        |
-| Add seed row              | `make change_seed`                     | Staging + mart rebuild (temp combined seed from patches/) |
-| Change env                | `make change_env`                      | All nodes rebuild               |
-| Edit Python constant      | `make change_py`                       | Only that Python model rebuilds |
-| Warm & offline HTTP cache | `make http_first && make http_offline` | HTTP cache reused, no network   |
+| Scenario                  | Command                                  | Expected behavior                     |
+| ------------------------- | ---------------------------------------- | ------------------------------------- |
+| First full run            | `make cache_first`                       | All models build, cache written       |
+| No-op run                 | `make cache_second`                      | All skipped (no rebuilds)             |
+| Modify SQL                | `make change_sql`                        | Downstream mart rebuilds              |
+| Add seed row              | `make change_seed`                       | Staging + mart rebuild using patches/ |
+| Change env                | `make change_env`                        | All nodes rebuild                     |
+| Edit Python constant      | `make change_py`                         | Only that Python model rebuilds       |
+| Warm & offline HTTP cache | `make http_first && make http_offline`   | HTTP cache reused, no network         |
+| Per-query guard demo      | `make cost_guard_example ENGINE=duckdb`  | Query aborted by bytes limit          |
 
 ---
 

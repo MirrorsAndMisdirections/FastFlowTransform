@@ -1,6 +1,7 @@
 # fastflowtransform/table_formats/spark_default.py
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from fastflowtransform.table_formats.base import SparkFormatHandler
@@ -25,8 +26,14 @@ class DefaultSparkFormatHandler(SparkFormatHandler):
         *,
         table_format: str | None = None,
         table_options: dict[str, Any] | None = None,
+        sql_runner: Callable[[str], Any] | None = None,
     ) -> None:
-        super().__init__(spark, table_format=table_format, table_options=table_options)
+        super().__init__(
+            spark,
+            table_format=table_format,
+            table_options=table_options,
+            sql_runner=sql_runner,
+        )
 
     def save_df_as_table(self, table_name: str, df: SDF) -> None:
         """

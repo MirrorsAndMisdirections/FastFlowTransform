@@ -123,6 +123,11 @@ class RunNodeResult:
     message: str | None = None
     http: dict | None = None
 
+    # per-node query stats (aggregated across all SQL queries)
+    bytes_scanned: int | None = None
+    rows: int | None = None
+    query_duration_ms: int | None = None
+
 
 def write_run_results(
     project_dir: Path,
@@ -130,9 +135,11 @@ def write_run_results(
     started_at: str,
     finished_at: str,
     node_results: list[RunNodeResult],
+    budgets: dict[str, Any] | None = None,
 ) -> Path:
     """
     Write run_results.json containing run envelope and per-node results.
+    Optionally includes a 'budgets' summary block.
     """
     project_dir = Path(project_dir)
     out_dir = _target_dir(project_dir)
@@ -144,6 +151,10 @@ def write_run_results(
         "run_finished_at": finished_at,
         "results": [asdict(nr) for nr in sorted(node_results, key=lambda r: r.name)],
     }
+
+    if budgets is not None:
+        data["budgets"] = budgets
+
     _json_dump(results_path, data)
     return results_path
 
@@ -302,3 +313,38 @@ def write_catalog(project_dir: Path, executor: Any) -> Path:
     }
     _json_dump(catalog_path, data)
     return catalog_path
+
+
+# ---------- READ DURATIONS ----------
+
+
+def load_last_run_durations(project_dir: Path) -> dict[str, float]:
+    """
+    Best-effort reader for the last run_results.json.
+
+    Returns: { model_name: duration_in_seconds }.
+    On any error or missing file: {}.
+    """
+    path = _target_dir(project_dir)
+    if not path.exists():
+        return {}
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+    # tolerate a few possible shapes
+    items: list[dict[str, Any]] = (
+        raw.get("results") or raw.get("node_results") or raw.get("nodes") or []
+    )
+
+    out: dict[str, float] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        dur_ms = item.get("duration_ms")
+        if isinstance(name, str) and isinstance(dur_ms, (int, float)):
+            out[name] = float(dur_ms) / 1000.0
+    return out

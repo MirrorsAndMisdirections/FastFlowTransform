@@ -12,3 +12,19 @@ def format_duration_minutes(minutes: float | None) -> str:
     if mins >= 60:
         return f"{mins / 60:.1f}h"
     return f"{mins:.1f}m"
+
+
+def _format_duration_ms(ms: int) -> str:
+    """
+    Human-friendly duration from milliseconds.
+    """
+    if ms < 1000:
+        return f"{ms} ms"
+    sec = ms / 1000.0
+    if sec < 60:
+        return f"{sec:.1f} s"
+    minutes = sec / 60.0
+    if minutes < 60:
+        return f"{minutes:.1f} min"
+    hours = minutes / 60.0
+    return f"{hours:.1f} h"

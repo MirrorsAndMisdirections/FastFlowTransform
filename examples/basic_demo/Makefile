@@ -64,7 +64,7 @@ else ifeq ($(ENGINE),bigquery)
 else ifeq ($(ENGINE),snowflake_snowpark)
   CLEAN_CMD = env $(BASE_ENV) $(UV) run python $(CLEAN_SCRIPT) --engine snowflake_snowpark --env "$(PROFILE_ENV)" --project "$(PROJECT)"
 else
-  $(error Unsupported ENGINE=$(ENGINE) - pick duckdb|postgres|databricks_spark)
+  $(error Unsupported ENGINE=$(ENGINE) - pick duckdb|postgres|databricks_spark|bigquery|snowflake_snowpark)
 endif
 
 # --- Targets ----------------------------------------------------------------

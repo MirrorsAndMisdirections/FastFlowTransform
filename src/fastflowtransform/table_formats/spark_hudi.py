@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from fastflowtransform.table_formats.base import SparkFormatHandler
@@ -23,9 +24,15 @@ class HudiFormatHandler(SparkFormatHandler):
         *,
         default_database: str | None = None,
         table_options: dict[str, Any] | None = None,
+        sql_runner: Callable[[str], Any] | None = None,
     ) -> None:
         # table_format="hudi" so the base class knows what we're dealing with
-        super().__init__(spark, table_format="hudi", table_options=table_options or {})
+        super().__init__(
+            spark,
+            table_format="hudi",
+            table_options=table_options or {},
+            sql_runner=sql_runner,
+        )
         self.default_database = default_database or spark.catalog.currentDatabase()
 
     # ---------- Core helpers ----------
@@ -99,7 +106,7 @@ class HudiFormatHandler(SparkFormatHandler):
             raise ValueError(f"incremental_insert expects SELECT body, got: {body[:40]!r}")
 
         full_name = self._qualify_table_name(table_name)
-        self.spark.sql(f"INSERT INTO {full_name} {body}")
+        self.run_sql(f"INSERT INTO {full_name} {body}")
 
     def incremental_merge(
         self,
@@ -127,7 +134,7 @@ class HudiFormatHandler(SparkFormatHandler):
         full_name = self._qualify_table_name(table_name)
         pred = " AND ".join([f"t.`{k}` = s.`{k}`" for k in unique_key])
 
-        self.spark.sql(
+        self.run_sql(
             f"""
             MERGE INTO {full_name} AS t
             USING ({body}) AS s
