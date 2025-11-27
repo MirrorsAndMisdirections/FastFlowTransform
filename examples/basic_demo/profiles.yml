@@ -20,10 +20,8 @@ dev_databricks:
     warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse"
     database: "{{ env('FF_DBR_DATABASE', 'basic_demo') }}"
     extra_conf:
-      spark.hadoop.javax.jdo.option.ConnectionURL: "jdbc:derby:{{ project_dir() }}/.local/metastore_db;create=true"
-      spark.hadoop.datanucleus.rdbms.datastoreAdapterClassName: "org.datanucleus.store.rdbms.adapter.DerbyAdapter"
-      spark.hadoop.datanucleus.schema.autoCreateAll: "true"
-      spark.hadoop.javax.jdo.option.ConnectionDriverName: "org.apache.derby.jdbc.EmbeddedDriver"
+      spark.sql.statistics.fallBackToHdfs: true
+      spark.sql.shuffle.partitions: "{{ env('SPARK_SQL_SHUFFLE_PARTITIONS', '8') }}"
       spark.driver.extraJavaOptions: >
         -Dderby.stream.error.file={{ project_dir() }}/.local/derby.log
         -Dderby.system.home={{ project_dir() }}/.local/derby_home

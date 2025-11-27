@@ -49,6 +49,22 @@ class _FakeBFSession:
 def bq_exec(monkeypatch):
     _ = install_fake_bigquery(monkeypatch, [bq_exec_mod, bq_mix_mod, bq_base_mod])
 
+    # Test-only shim: ensure the fake bigquery module has DatasetReference,
+    # which BigQueryBaseExecutor._execute_sql now relies on.
+    if not hasattr(bq_base_mod.bigquery, "DatasetReference"):
+
+        class _DummyDatasetReference:
+            def __init__(self, project: str, dataset_id: str):
+                self.project = project
+                self.dataset_id = dataset_id
+
+        monkeypatch.setattr(
+            bq_base_mod.bigquery,
+            "DatasetReference",
+            _DummyDatasetReference,
+            raising=False,
+        )
+
     fake_bigframes = types.ModuleType("bigframes")
     fake_conf = types.ModuleType("bigframes._config")
     fake_conf_bq = types.ModuleType("bigframes._config.bigquery_options")

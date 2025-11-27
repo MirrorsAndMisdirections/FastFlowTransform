@@ -178,6 +178,11 @@ class ModelConfig(BaseModel):
     # Engine restriction, e.g. engines=["duckdb", "postgres"]
     engines: list[str] = Field(default_factory=list)
 
+    # --- Per-model hooks (pre/post) ----------------------------------------
+
+    pre_hook: list[str] = Field(default_factory=list)
+    post_hook: list[str] = Field(default_factory=list)
+
     # --- Storage override (per model) --------------------------------------
 
     storage: StorageConfig | None = None
@@ -226,6 +231,24 @@ class ModelConfig(BaseModel):
     # ----------------------------------------------------------------------
     # Normalisation helpers
     # ----------------------------------------------------------------------
+
+    @field_validator("pre_hook", "post_hook", mode="before")
+    @classmethod
+    def _normalize_hooks(cls, v: Any) -> list[str]:
+        """
+        Allow:
+          - string: "delete from {{ this }}" → ["delete from {{ this }}"]
+          - sequence: ["stmt1", "stmt2"]
+          - null: []
+        """
+        if v is None:
+            return []
+        if isinstance(v, str):
+            text = v.strip()
+            return [text] if text else []
+        if isinstance(v, Sequence) and not isinstance(v, (str, bytes)):
+            return [str(x).strip() for x in v if str(x).strip()]
+        raise TypeError("pre_hook/post_hook must be a string or a sequence of strings")
 
     @field_validator("tags", "engines", mode="before")
     @classmethod

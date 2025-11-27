@@ -689,3 +689,11 @@ where
 """
         self._execute_sql(delete_sql)
         self._analyze_relations([relation])
+
+    def execute_hook_sql(self, sql: str) -> None:
+        """
+        Execute one or multiple SQL statements for pre/post/on_run hooks.
+
+        Accepts a string that may contain ';'-separated statements.
+        """
+        self._execute_sql(sql)

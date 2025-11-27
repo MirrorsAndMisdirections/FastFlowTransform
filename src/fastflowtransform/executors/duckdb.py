@@ -424,7 +424,6 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
         Execute multiple SQL statements separated by ';' on the same connection.
         DuckDB normally accepts one statement per execute(), so we split here.
         """
-        # very simple splitter - good enough for what we emit in the executor
         for stmt in (part.strip() for part in sql.split(";")):
             if not stmt:
                 continue
@@ -845,3 +844,11 @@ where
   and t.{vf} = r.{vf};
 """
         self._execute_sql(delete_sql)
+
+    def execute_hook_sql(self, sql: str) -> None:
+        """
+        Execute one or multiple SQL statements for pre/post/on_run hooks.
+
+        Accepts a string that may contain ';'-separated statements.
+        """
+        self._exec_many(sql)

@@ -70,7 +70,17 @@ class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
         - Returns the QueryJob so callers can call .result().
         """
         self._apply_budget_guard(self._BUDGET_GUARD, sql)
-        job = self.client.query(sql, location=self.location)
+        # job = self.client.query(sql, location=self.location)
+        job_config = bigquery.QueryJobConfig()
+        if self.dataset:
+            # Let unqualified tables resolve to project.dataset.table
+            job_config.default_dataset = bigquery.DatasetReference(self.project, self.dataset)
+
+        job = self.client.query(
+            sql,
+            job_config=job_config,
+            location=self.location,
+        )
         return _TrackedQueryJob(job, on_complete=self._record_query_job_stats)
 
     # --- Cost estimation for the shared BudgetGuard -----------------
@@ -85,6 +95,10 @@ class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
             dry_run=True,
             use_query_cache=False,
         )
+        if self.dataset:
+            # Let unqualified tables resolve to project.dataset.table
+            cfg.default_dataset = bigquery.DatasetReference(self.project, self.dataset)
+
         job = self.client.query(
             sql,
             job_config=cfg,
@@ -522,3 +536,9 @@ WHERE EXISTS (
 )
 """
         self._execute_sql(delete_sql).result()
+
+    def execute_hook_sql(self, sql: str) -> None:
+        """
+        Execute one SQL statement for pre/post/on_run hooks.
+        """
+        self._execute_sql(sql).result()

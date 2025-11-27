@@ -8,7 +8,9 @@ dev_duckdb:
 prod_bigquery:
   engine: bigquery
   bigquery:
-    project: "{{ env('FF_BQ_PROJECT') }}"
+    project: "basic_data"
     dataset: "production_marts"
+    location: "EU"
     # FFT handles the client (BigFrames or Pandas) automatically
     use_bigframes: true
+    allow_create_dataset: true

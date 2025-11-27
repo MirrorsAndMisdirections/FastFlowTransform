@@ -142,6 +142,16 @@ class SnowflakeSnowparkExecutor(BaseExecutor[SNDF]):
         )
         return df
 
+    def _exec_many(self, sql: str) -> None:
+        """
+        Execute multiple SQL statements separated by ';' on the same connection.
+        Snowflake normally accepts one statement per execute(), so we split here.
+        """
+        for stmt in (part.strip() for part in sql.split(";")):
+            if not stmt:
+                continue
+            self._execute_sql(stmt).collect()
+
     # ---------- Helpers ----------
     def _q(self, s: str) -> str:
         return '"' + s.replace('"', '""') + '"'
@@ -700,6 +710,12 @@ WHERE
   AND t.{vf} = r.{vf}
 """
         self._execute_sql(delete_sql).collect()
+
+    def execute_hook_sql(self, sql: str) -> None:
+        """
+        Execute one SQL statement for pre/post/on_run hooks.
+        """
+        self._exec_many(sql)
 
 
 # ────────────────────────── local testing shim ───────────────────────────

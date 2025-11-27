@@ -109,7 +109,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # DuckDB examples
+          # ---------- DuckDB examples ----------
           - engine: duckdb
             extra: ""
             example: api_demo
@@ -132,6 +132,10 @@ jobs:
             env_file: examples/dq_demo/.env.dev_duckdb
           - engine: duckdb
             extra: ""
+            example: hooks_demo
+            env_file: examples/hooks_demo/.env.dev_duckdb
+          - engine: duckdb
+            extra: ""
             example: incremental_demo
             env_file: examples/incremental_demo/.env.dev_duckdb
           - engine: duckdb
@@ -142,7 +146,7 @@ jobs:
             extra: ""
             example: materializations_demo
             env_file: examples/materializations_demo/.env.dev_duckdb
-          # Postgres examples
+          # ---------- Postgres examples ----------
           - engine: postgres
             extra: "postgres"
             example: api_demo
@@ -165,6 +169,10 @@ jobs:
             env_file: examples/dq_demo/.env.dev_postgres
           - engine: postgres
             extra: "postgres"
+            example: hooks_demo
+            env_file: examples/hooks_demo/.env.dev_postgres
+          - engine: postgres
+            extra: "postgres"
             example: incremental_demo
             env_file: examples/incremental_demo/.env.dev_postgres
           - engine: postgres
@@ -175,7 +183,7 @@ jobs:
             extra: "postgres"
             example: materializations_demo
             env_file: examples/materializations_demo/.env.dev_postgres
-          # Spark examples
+          # ---------- Spark examples ----------
           - engine: databricks_spark
             extra: "spark"
             example: api_demo
@@ -201,6 +209,11 @@ jobs:
             example: dq_demo
             java: true
             env_file: examples/dq_demo/.env.dev_databricks
+          - engine: databricks_spark
+            extra: "spark"
+            example: hooks_demo
+            java: true
+            env_file: examples/hooks_demo/.env.dev_databricks
           - engine: databricks_spark
             extra: "spark"
             example: incremental_demo

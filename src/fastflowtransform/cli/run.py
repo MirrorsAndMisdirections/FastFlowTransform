@@ -5,12 +5,13 @@ import os
 import textwrap
 import threading
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
+from uuid import uuid4
 
 import typer
 
@@ -56,8 +57,10 @@ from fastflowtransform.config.budgets import (
     BudgetsConfig,
     load_budgets_config,
 )
-from fastflowtransform.core import REGISTRY, relation_for
+from fastflowtransform.config.project import HookSpec
+from fastflowtransform.core import REGISTRY, Node, relation_for
 from fastflowtransform.dag import levels as dag_levels
+from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.executors.budget import format_bytes
 from fastflowtransform.fingerprint import (
     EnvCtx,
@@ -66,11 +69,53 @@ from fastflowtransform.fingerprint import (
     fingerprint_sql,
     get_function_source,
 )
+from fastflowtransform.hooks.registry import load_project_hooks, resolve_hook
+from fastflowtransform.hooks.types import (
+    HookContext,
+    ModelContext,
+    ModelStatsContext,
+    RunContext,
+    RunStatsContext,
+)
 from fastflowtransform.log_queue import LogQueue
-from fastflowtransform.logging import bind_context, bound_context, clear_context, echo, error, warn
+from fastflowtransform.logging import (
+    bind_context,
+    bound_context,
+    clear_context,
+    echo,
+    echo_debug,
+    error,
+    warn,
+)
 from fastflowtransform.meta import ensure_meta_table
 from fastflowtransform.run_executor import ScheduleResult, schedule
 from fastflowtransform.utils.timefmt import _format_duration_ms
+
+
+class _HookThis:
+    """
+    Lightweight proxy for {{ this }} in hooks:
+
+      - str(this) -> relation name (without .ff)
+      - this.name / this.relation
+      - this.materialized (table|view|incremental|...)
+    """
+
+    def __init__(self, relation: str, materialized: str):
+        self.name = relation
+        self.relation = relation
+        self.materialized = materialized
+        self.schema = None
+        self.database = None
+
+    def __str__(self) -> str:
+        return self.name
+
+    def __repr__(self) -> str:
+        return f"_HookThis(name={self.name!r})"
+
+
+HookWhen = Literal["on_run_start", "on_run_end", "before_model", "after_model"]
 
 
 @dataclass
@@ -92,6 +137,10 @@ class _RunEngine:
     # per-node query stats (aggregated across all queries in that node)
     query_stats: dict[str, dict[str, int]] = field(default_factory=dict, init=False)
     stats_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+
+    # run metadata for hooks
+    invocation_id: str | None = None
+    run_started_at: str | None = None
 
     def __post_init__(self) -> None:
         echo(f"Profile: {self.env_name} | Engine: {self.ctx.profile.engine}")
@@ -260,75 +309,248 @@ class _RunEngine:
         node = REGISTRY.nodes[name]
         ex, run_sql_fn, run_py_fn = self._get_runner()
 
+        self._reset_executor_node_stats(ex)
+
+        meta = getattr(node, "meta", {}) or {}
+
+        pre_hooks, post_hooks = self._get_model_hooks(node)
+
+        # --- force rebuild path -------------------------------------------------
+        if name in self.force_rebuild:
+            self._run_node_force_rebuild(
+                name=name,
+                node=node,
+                ex=ex,
+                run_sql_fn=run_sql_fn,
+                run_py_fn=run_py_fn,
+                pre_hooks=pre_hooks,
+                post_hooks=post_hooks,
+            )
+            return
+
+        # --- fingerprint + cache skip path --------------------------------------
+        cand_fp = self._maybe_fingerprint(node, ex)
+        if self._should_skip_node(
+            name=name,
+            node=node,
+            ex=ex,
+            cand_fp=cand_fp,
+            meta=meta,
+        ):
+            return
+
+        # --- normal run ---------------------------------------------------------
+        self._run_model_with_hooks(
+            name=name,
+            node=node,
+            ex=ex,
+            run_sql_fn=run_sql_fn,
+            run_py_fn=run_py_fn,
+            pre_hooks=pre_hooks,
+            post_hooks=post_hooks,
+        )
+
+        self._finalize_node_run(
+            name=name,
+            node=node,
+            ex=ex,
+            cand_fp=cand_fp,
+        )
+
+    # ---------------------------------------------------------------------------
+    # Helpers for run_node
+    # ---------------------------------------------------------------------------
+
+    def _reset_executor_node_stats(self, ex: BaseExecutor) -> None:
         # Reset per-node stats if the executor supports it
         with suppress(Exception):
             reset = getattr(ex, "reset_node_stats", None)
             if callable(reset):
                 reset()
 
-        if name in self.force_rebuild:
-            (run_sql_fn if node.kind == "sql" else run_py_fn)(node)
-            cand_fp = self._maybe_fingerprint(node, ex)
-            if cand_fp:
-                with self.fps_lock:
-                    self.computed_fps[name] = cand_fp
-                with suppress(Exception):
-                    ex.on_node_built(node, relation_for(name), cand_fp)
-            # HTTP snapshot (stored in node.meta by the executor)
-            with suppress(Exception):
-                snap = (getattr(node, "meta", {}) or {}).get("_http_snapshot")
-                if snap:
-                    self.http_snaps[name] = snap
+    def _get_model_hooks(
+        self,
+        node: Node,
+    ) -> tuple[Sequence[HookSpec] | None, Sequence[HookSpec] | None]:
+        pre_hooks = self._model_hooks_for_when("before_model", node)
+        post_hooks = self._model_hooks_for_when("after_model", node)
+        return pre_hooks, post_hooks
 
-            # capture per-node stats after successful run
-            with suppress(Exception):
-                raw_getter = getattr(ex, "get_node_stats", None)
-                if callable(raw_getter):
-                    getter = cast(Callable[[], dict[str, int] | None], raw_getter)
-                    stats = getter()
-                    if stats:
-                        with self.stats_lock:
-                            self.query_stats[name] = stats
+    def _run_model_with_hooks(
+        self,
+        *,
+        name: str,
+        node: Node,
+        ex: BaseExecutor,
+        run_sql_fn: Callable[[Node], None],
+        run_py_fn: Callable[[Node], None],
+        pre_hooks: Sequence[HookSpec] | None,
+        post_hooks: Sequence[HookSpec] | None,
+    ) -> ModelStatsContext | None:
+        # pre-hook
+        self._run_hooks(pre_hooks, node=node, when="before_model", ex=ex)
 
-            return
-
-        cand_fp = self._maybe_fingerprint(node, ex)
-        if cand_fp is not None:
-            materialized = (getattr(node, "meta", {}) or {}).get("materialized", "table")
-            may_skip = self.cache_mode in (CacheMode.RW, CacheMode.RO)
-            if may_skip and can_skip_node(
-                node_name=name,
-                new_fp=cand_fp,
-                cache=self.cache,
-                executor=ex,
-                materialized=materialized,
-            ):
-                with self.fps_lock:
-                    self.computed_fps[name] = cand_fp
-                # Even when skipped, we treat stats as zero → nothing to do
-                with self.stats_lock:
-                    self.query_stats[name] = {
-                        "bytes_scanned": 0,
-                        "rows": 0,
-                        "query_duration_ms": 0,
-                        "cached": True,
-                    }
-                return
-
+        # actual model
         (run_sql_fn if node.kind == "sql" else run_py_fn)(node)
 
+        # capture per-node stats *now* so after_model hooks can use them
+        model_stats = self._collect_model_stats_for_hooks(ex=ex, name=name)
+
+        # post-hook
+        self._run_hooks(
+            post_hooks,
+            node=node,
+            when="after_model",
+            ex=ex,
+            model_stats=model_stats,
+        )
+
+        return model_stats
+
+    def _collect_model_stats_for_hooks(
+        self,
+        *,
+        ex: BaseExecutor,
+        name: str,
+    ) -> ModelStatsContext | None:
+        model_stats: ModelStatsContext | None = None
+        with suppress(Exception):
+            raw_getter = getattr(ex, "get_node_stats", None)
+            if callable(raw_getter):
+                getter = cast(Callable[[], dict[str, int] | None], raw_getter)
+                s = getter()
+                if s:
+                    rows = int(s.get("rows", 0) or 0)
+                    bytes_scanned = int(s.get("bytes_scanned", 0) or 0)
+                    query_duration_ms = int(s.get("query_duration_ms", 0) or 0)
+
+                    model_stats = ModelStatsContext(
+                        rows=rows,
+                        bytes_scanned=bytes_scanned,
+                        query_duration_ms=query_duration_ms,
+                    )
+
+                    # keep a plain dict[str, int] copy for budgets / run_results
+                    with self.stats_lock:
+                        self.query_stats[name] = {
+                            "rows": rows,
+                            "bytes_scanned": bytes_scanned,
+                            "query_duration_ms": query_duration_ms,
+                        }
+
+        return model_stats
+
+    def _run_node_force_rebuild(
+        self,
+        *,
+        name: str,
+        node: Node,
+        ex: BaseExecutor,
+        run_sql_fn: Callable[[Node], None],
+        run_py_fn: Callable[[Node], None],
+        pre_hooks: Sequence[HookSpec] | None,
+        post_hooks: Sequence[HookSpec] | None,
+    ) -> None:
+        # Run model (with hooks + early stats)
+        self._run_model_with_hooks(
+            name=name,
+            node=node,
+            ex=ex,
+            run_sql_fn=run_sql_fn,
+            run_py_fn=run_py_fn,
+            pre_hooks=pre_hooks,
+            post_hooks=post_hooks,
+        )
+
+        # fingerprint + on_node_built
+        cand_fp = self._maybe_fingerprint(node, ex)
+        if cand_fp:
+            self._store_fingerprint(name, cand_fp)
+            self._notify_executor_node_built(node=node, ex=ex, name=name, cand_fp=cand_fp)
+
+        # HTTP snapshot
+        self._capture_http_snapshot(node=node, name=name)
+
+        # capture per-node stats after successful run
+        self._capture_final_stats(ex=ex, name=name)
+
+    def _should_skip_node(
+        self,
+        *,
+        name: str,
+        node: Node,
+        ex: BaseExecutor,
+        cand_fp: str | None,
+        meta: dict[str, Any] | None,
+    ) -> bool:
+        if cand_fp is None:
+            return False
+
+        materialized = (meta or {}).get("materialized", "table")
+        may_skip = self.cache_mode in (CacheMode.RW, CacheMode.RO)
+        if not may_skip:
+            return False
+
+        if not can_skip_node(
+            node_name=name,
+            new_fp=cand_fp,
+            cache=self.cache,
+            executor=ex,
+            materialized=materialized,
+        ):
+            return False
+
+        # we're skipping: still record fingerprint + zero stats
+        self._store_fingerprint(name, cand_fp)
+        with self.stats_lock:
+            self.query_stats[name] = {
+                "bytes_scanned": 0,
+                "rows": 0,
+                "query_duration_ms": 0,
+                "cached": True,
+            }
+        return True
+
+    def _finalize_node_run(
+        self,
+        *,
+        name: str,
+        node: Node,
+        ex: BaseExecutor,
+        cand_fp: str | None,
+    ) -> None:
         if cand_fp is not None:
-            with self.fps_lock:
-                self.computed_fps[name] = cand_fp
-            with suppress(Exception):
-                ex.on_node_built(node, relation_for(name), cand_fp)
+            self._store_fingerprint(name, cand_fp)
+            self._notify_executor_node_built(node=node, ex=ex, name=name, cand_fp=cand_fp)
+
         # HTTP snapshot (stored in node.meta by the executor)
+        self._capture_http_snapshot(node=node, name=name)
+
+        # capture per-node stats after successful run
+        self._capture_final_stats(ex=ex, name=name)
+
+    def _store_fingerprint(self, name: str, cand_fp: str) -> None:
+        with self.fps_lock:
+            self.computed_fps[name] = cand_fp
+
+    def _notify_executor_node_built(
+        self,
+        *,
+        node: Node,
+        ex: BaseExecutor,
+        name: str,
+        cand_fp: str,
+    ) -> None:
+        with suppress(Exception):
+            ex.on_node_built(node, relation_for(name), cand_fp)
+
+    def _capture_http_snapshot(self, *, node: Node, name: str) -> None:
         with suppress(Exception):
             snap = (getattr(node, "meta", {}) or {}).get("_http_snapshot")
             if snap:
                 self.http_snaps[name] = snap
 
-        # capture per-node stats after successful run
+    def _capture_final_stats(self, *, ex: BaseExecutor, name: str) -> None:
         with suppress(Exception):
             raw_getter = getattr(ex, "get_node_stats", None)
             if callable(raw_getter):
@@ -337,6 +559,559 @@ class _RunEngine:
                 if stats:
                     with self.stats_lock:
                         self.query_stats[name] = stats
+
+    # ---------- Hook helpers ----------
+
+    @staticmethod
+    def _normalize_hooks(hooks_raw: Any) -> list[str]:
+        """
+        Accept str | list[str] | None and return a clean list[str].
+        """
+        if hooks_raw is None:
+            return []
+        if isinstance(hooks_raw, str):
+            text = hooks_raw.strip()
+            return [text] if text else []
+        if isinstance(hooks_raw, Iterable) and not isinstance(hooks_raw, (str, bytes, Mapping)):
+            out: list[str] = []
+            for item in hooks_raw:
+                if item is None:
+                    continue
+                s = str(item).strip()
+                if s:
+                    out.append(s)
+            return out
+        # Be permissive: anything else → single string repr
+        s = str(hooks_raw).strip()
+        return [s] if s else []
+
+    def _render_hook_sql(self, template_text: str, node: Any | None, ex: Any) -> str:
+        """
+        Render a single hook expression into SQL using the project's Jinja env.
+        """
+        env = self.ctx.jinja_env
+        tmpl = env.from_string(template_text)
+
+        run_started = self.run_started_at
+        inv_id = self.invocation_id
+
+        this_obj = None
+        target = None
+
+        if node is not None:
+            meta = getattr(node, "meta", {}) or {}
+            relation = relation_for(node.name)
+            mat = str(meta.get("materialized") or "table")
+            this_obj = _HookThis(relation, mat)
+            target = self._qualified_target(node.name) or relation
+
+        def _hook_ref(name: str) -> str:
+            # Use executor's resolution if available
+            try:
+                return ex._format_relation_for_ref(name)
+            except Exception:
+                return relation_for(name)
+
+        def _hook_source(source_name: str, table_name: str) -> str:
+            try:
+                return ex._resolve_source(source_name, table_name)
+            except Exception as exc:
+                raise KeyError(
+                    f"Error resolving source('{source_name}', '{table_name}') in hook: {exc}"
+                ) from exc
+
+        return tmpl.render(
+            # hook-specific context
+            this=this_obj,
+            target=target,
+            run_started_at=run_started,
+            invocation_id=inv_id,
+            # resolution helpers
+            ref=_hook_ref,
+            source=_hook_source,
+        )
+
+    def _execute_hook_sql(self, sql: str, ex: Any) -> None:
+        """
+        Execute one or more SQL statements for a hook.
+
+        We normalize away semicolons in full-line comments so that naive
+        ';'-based splitters in executors don't produce bogus statements like:
+
+            "-- comment; with semicolon"  ->  ["-- comment", " with semicolon"]
+        """
+        if not sql or not sql.strip():
+            return
+
+        # Trim outer whitespace but preserve inner newlines
+        sql = sql.strip()
+
+        # --- Normalize comment lines: drop ';' inside "-- ..." lines -----------
+        cleaned_lines: list[str] = []
+        for line in sql.splitlines():
+            stripped = line.lstrip()
+            if stripped.startswith("--"):
+                # Keep comment but remove semicolons so ';' splitters don't see them
+                prefix_len = len(line) - len(stripped)
+                comment = stripped.replace(";", "")
+                cleaned_lines.append(" " * prefix_len + comment)
+            else:
+                cleaned_lines.append(line)
+
+        normalized_sql = "\n".join(cleaned_lines)
+
+        # --- Delegate to executor if it has a hook-aware API -------------------
+        # Let the executor decide how to split multi-statement SQL
+        ex.execute_hook_sql(normalized_sql)
+        return
+
+    def _load_sql_hook_body(self, spec: HookSpec) -> str:
+        """
+        Resolve the SQL text for a SQL hook.
+
+        Resolution order:
+        1) Inline `spec.sql`
+        2) Any `<project_dir>/hooks/**/*.sql` whose *stem* matches `spec.name`.
+            (first match wins)
+        """
+        # 1) Inline SQL wins if present
+        if spec.sql and spec.sql.strip():
+            return spec.sql
+
+        name = spec.name
+        if name is None:
+            raise ValueError("SQL HookSpec must have a non-empty 'name' for file-based hooks")
+
+        project_dir = Path(self.ctx.project)
+        hooks_dir = project_dir / "hooks"
+
+        if not hooks_dir.is_dir():
+            raise FileNotFoundError(
+                f"SQL hook {spec.name!r} has no inline `sql` and no 'hooks/' directory exists "
+                f"under project: {project_dir}"
+            )
+
+        # 2) Build (or reuse) cache: stem -> Path
+        cache_attr = "_sql_hook_files"
+        mapping: dict[str, Path]
+
+        if hasattr(self, cache_attr):
+            mapping = getattr(self, cache_attr)
+        else:
+            mapping = {}
+            for _path in hooks_dir.rglob("*.sql"):
+                # stem is the filename without suffix, e.g. "audit_run_end"
+                stem = _path.stem
+                # last-one-wins is fine; or keep first with `if stem not in mapping:`
+                mapping[stem] = _path
+            setattr(self, cache_attr, mapping)
+
+        path: Path | None = mapping.get(name)
+        if not path:
+            raise FileNotFoundError(
+                f"SQL hook {name!r} has no inline `sql` and no matching "
+                f"file '<project>/hooks/**/{name}.sql' was found."
+            )
+
+        return path.read_text(encoding="utf-8")
+
+    def _model_hooks_for_when(self, when: HookWhen, node: Node) -> list[HookSpec]:
+        """
+        Return all model-level HookSpecs from project.yml that apply to this node
+        for the given lifecycle event (before_model / after_model), based on
+        their `select` expression.
+
+        Global run-level hooks (on_run_start / on_run_end) are handled elsewhere.
+        """
+        if when == "before_model":
+            all_specs: Sequence[HookSpec] = getattr(REGISTRY, "before_model_hooks", []) or []
+        elif when == "after_model":
+            all_specs = getattr(REGISTRY, "after_model_hooks", []) or []
+        else:
+            # Only model-level lifecycles are handled here
+            return []
+
+        applicable: list[HookSpec] = []
+
+        for spec in all_specs:
+            sel = (spec.select or "").strip()
+            if not sel:
+                # No selector → applies to all models
+                applicable.append(spec)
+                continue
+
+            try:
+                # Reuse the same selector compiler as the CLI
+                tokens = _parse_select([sel])
+                _, pred = _compile_selector(tokens)
+                if pred(node):
+                    applicable.append(spec)
+            except Exception as exc:
+                warn(
+                    f"[hooks] invalid select={sel!r} for hook {spec.name!r} "
+                    f"on when={when}: {exc}; skipping"
+                )
+
+        return applicable
+
+    def _hook_matches_current_env(self, spec: HookSpec) -> bool:
+        """
+        Decide whether a hook should run in the current engine/env.
+
+        - If spec.engines is set, the active engine must be in that list.
+        - If spec.envs is set, the active env_name must be in that list.
+        - If a field is None/empty, it does not restrict execution.
+        """
+        engine_name = (self.ctx.profile.engine or "").lower()
+        env_name = self.env_name
+
+        # engines filter
+        if spec.engines:
+            allowed_engines = [e.lower() for e in spec.engines if isinstance(e, str)]
+            if engine_name not in allowed_engines:
+                return False
+
+        # envs filter
+        return not (spec.envs and env_name not in spec.envs)
+
+    def _run_hooks(
+        self,
+        hooks_raw: Sequence[HookSpec] | None,
+        node: Node | None,
+        when: HookWhen,
+        ex: BaseExecutor,
+        *,
+        run_status: str | None = None,
+        run_stats: RunStatsContext | None = None,
+        model_stats: ModelStatsContext | None = None,
+    ) -> None:
+        """
+        Execute a list of hooks.
+
+        New model:
+        - Only HookSpec objects (no string hooks).
+        - kind: "sql" or "python".
+        - Python hooks are resolved from the decorator registry
+        by (when, spec.name) and receive a single `context` dict.
+        """
+        self._validate_hook_when(when)
+
+        label = node.name if node is not None else "<run>"
+
+        if not hooks_raw:
+            echo(f"[hooks] when={when} node={label}: no hooks registered")
+            return
+
+        jenv = self.ctx.jinja_env
+
+        # Ensure all hooks/*.py are loaded and their @fft_hook decorators executed
+        project_dir = str(self.ctx.project)
+        load_project_hooks(project_dir)
+
+        run_ctx_py = self._build_run_context(run_status=run_status, run_stats=run_stats)
+        model_ctx = self._build_model_context(
+            node=node,
+            model_stats=model_stats,
+            when=when,
+        )
+        env_vars = self._snapshot_env_vars()
+
+        active_specs = self._filter_active_specs(hooks_raw)
+        if not active_specs:
+            echo(f"[hooks] when={when} node={label}: no hooks after engine/env filtering")
+            return
+
+        self._log_active_specs(active_specs, when, label)
+
+        for idx, spec in enumerate(active_specs, start=1):
+            self._execute_single_hook(
+                spec=spec,
+                idx=idx,
+                when=when,
+                node_label=label,
+                run_ctx_py=run_ctx_py,
+                model_ctx=model_ctx,
+                env_vars=env_vars,
+                run_stats=run_stats,
+                model_stats=model_stats,
+                ex=ex,
+                jenv=jenv,
+            )
+
+    # ----------------- helpers for _run_hook -----------------
+
+    def _validate_hook_when(self, when: HookWhen) -> None:
+        allowed = ("on_run_start", "on_run_end", "before_model", "after_model")
+        if when not in allowed:
+            raise ValueError(f"Unsupported hook 'when' value: {when!r}")
+
+    def _build_run_context(
+        self,
+        *,
+        run_status: str | None,
+        run_stats: RunStatsContext | None,
+    ) -> RunContext:
+        row_count: int | None = None
+        if run_stats is not None:
+            rc = run_stats.get("rows_total")
+            if rc is not None:
+                row_count = int(rc)
+
+        return {
+            "run_id": str(self.invocation_id),
+            "env_name": self.env_name,
+            "engine_name": (self.ctx.profile.engine or "").lower(),
+            "started_at": str(self.run_started_at),
+            "status": run_status,
+            "row_count": row_count,
+            "error": None,
+        }
+
+    def _build_model_context(
+        self,
+        *,
+        node: Node | None,
+        model_stats: ModelStatsContext | None,
+        when: HookWhen,
+    ) -> ModelContext | None:
+        if node is None:
+            return None
+
+        meta = getattr(node, "meta", {}) or {}
+
+        raw_tags = meta.get("tags")
+        if isinstance(raw_tags, (list, tuple, set)):
+            tags_list = [str(t) for t in raw_tags]
+        elif isinstance(raw_tags, str):
+            tags_list = [raw_tags]
+        else:
+            tags_list = []
+
+        model_ctx = cast(
+            ModelContext,
+            {
+                "name": str(node.name),
+                "path": node.path,
+                "tags": sorted(tags_list),
+                "meta": meta,
+                "status": None,
+                "rows_affected": None,
+                "elapsed_ms": None,
+                "error": None,
+            },
+        )
+
+        if model_stats is not None:
+            model_ctx["rows_affected"] = model_stats.get("rows")
+            model_ctx["elapsed_ms"] = model_stats.get("query_duration_ms")
+            if when == "after_model" and model_ctx.get("status") is None:
+                model_ctx["status"] = "success"
+
+        return model_ctx
+
+    def _snapshot_env_vars(self) -> dict[str, str]:
+        # Snapshot env vars as a plain dict[str, str]
+        return dict(getattr(self.env_ctx, "env_vars", {}) or {})
+
+    def _filter_active_specs(
+        self,
+        hooks_raw: Sequence[HookSpec] | None,
+    ) -> list[HookSpec]:
+        if not hooks_raw:
+            return []
+        return [s for s in hooks_raw if self._hook_matches_current_env(s)]
+
+    def _log_active_specs(
+        self,
+        active_specs: Sequence[HookSpec],
+        when: HookWhen,
+        label: str,
+    ) -> None:
+        summary = ", ".join(f"{spec.kind}:{(spec.name or '<unnamed>')}" for spec in active_specs)
+        echo(f"[hooks] when={when} node={label}: executing {len(active_specs)} hook(s): {summary}")
+
+    def _execute_single_hook(
+        self,
+        *,
+        spec: HookSpec,
+        idx: int,
+        when: HookWhen,
+        node_label: str,
+        run_ctx_py: RunContext,
+        model_ctx: ModelContext | None,
+        env_vars: dict[str, str],
+        run_stats: RunStatsContext | None,
+        model_stats: ModelStatsContext | None,
+        ex: BaseExecutor,
+        jenv: Any,
+    ) -> None:
+        hook_name = spec.name or "<unnamed>"
+
+        try:
+            if not isinstance(spec, HookSpec):
+                raise TypeError(
+                    f"Hooks must be HookSpec instances; got {type(spec)!r} at index {idx}"
+                )
+
+            # Engine/env filter (kept for safety even after pre-filtering)
+            if not self._hook_matches_current_env(spec):
+                echo_debug(
+                    f"[hooks] when={when} node={node_label} hook#{idx} "
+                    f"name={hook_name!r} - skipped (engine/env mismatch)"
+                )
+                return
+
+            if spec.kind == "sql":
+                self._execute_sql_hook(
+                    spec=spec,
+                    idx=idx,
+                    when=when,
+                    node_label=node_label,
+                    run_ctx_py=run_ctx_py,
+                    model_ctx=model_ctx,
+                    ex=ex,
+                    jenv=jenv,
+                )
+                return
+
+            if spec.kind == "python":
+                self._execute_python_hook(
+                    spec=spec,
+                    idx=idx,
+                    when=when,
+                    node_label=node_label,
+                    run_ctx_py=run_ctx_py,
+                    model_ctx=model_ctx,
+                    env_vars=env_vars,
+                    run_stats=run_stats,
+                    model_stats=model_stats,
+                )
+                return
+
+            raise ValueError(f"Unknown hook kind {spec.kind!r} for hook #{idx}")
+
+        except Exception as exc:
+            error(
+                f"[hooks] ERROR when={when} node={node_label} hook#{idx} "
+                f"kind={spec.kind!r} name={(spec.name or '<unnamed>')!r}: {exc}"
+            )
+            raise RuntimeError(
+                f"Failed to execute {when} hook #{idx} for {node_label}: {exc}"
+            ) from exc
+
+    def _execute_sql_hook(
+        self,
+        *,
+        spec: HookSpec,
+        idx: int,
+        when: HookWhen,
+        node_label: str,
+        run_ctx_py: RunContext,
+        model_ctx: ModelContext | None,
+        ex: BaseExecutor,
+        jenv: Any,
+    ) -> None:
+        hook_name = spec.name or "<unnamed>"
+
+        echo_debug(
+            f"[hooks] when={when} node={node_label} hook#{idx} "
+            f"kind=sql name={hook_name!r} - rendering SQL"
+        )
+
+        sql_body = self._load_sql_hook_body(spec)
+        sql_tmpl = sql_body.strip()
+        if not sql_tmpl:
+            warn(
+                f"[hooks] when={when} node={node_label} hook#{idx} "
+                f"name={hook_name!r} has empty SQL, skipping"
+            )
+            return
+
+        tmpl = jenv.from_string(sql_tmpl)
+
+        run_ctx_sql = dict(run_ctx_py)
+
+        if model_ctx is None:
+            model_ctx_render: dict[str, Any] | None = None
+        else:
+            model_ctx_render = dict(model_ctx)
+            if when in ("before_model", "after_model"):
+                model_ctx_render.setdefault(
+                    "status",
+                    "running" if when == "before_model" else "success",
+                )
+                model_ctx_render.setdefault("rows_affected", None)
+                model_ctx_render.setdefault("elapsed_ms", None)
+                model_ctx_render.setdefault("error", None)
+
+        sql = tmpl.render(
+            run=run_ctx_sql,
+            model=model_ctx_render,
+            node=model_ctx_render,
+        )
+
+        if not sql.strip():
+            warn(
+                f"[hooks] when={when} node={node_label} hook#{idx} "
+                f"name={hook_name!r} rendered empty SQL, skipping"
+            )
+            return
+
+        echo_debug(
+            f"[hooks] when={when} node={node_label} hook#{idx} "
+            f"name={hook_name!r} executing SQL:\n{sql}"
+        )
+        self._execute_hook_sql(sql, ex)
+
+    def _execute_python_hook(
+        self,
+        *,
+        spec: HookSpec,
+        idx: int,
+        when: HookWhen,
+        node_label: str,
+        run_ctx_py: RunContext,
+        model_ctx: ModelContext | None,
+        env_vars: dict[str, str],
+        run_stats: RunStatsContext | None,
+        model_stats: ModelStatsContext | None,
+    ) -> None:
+        if not spec.name:
+            raise ValueError(
+                "Python HookSpec must have a 'name' set; "
+                "this is used to resolve the hook from the registry."
+            )
+
+        hook_name = spec.name
+
+        echo(
+            f"[hooks] when={when} node={node_label} hook#{idx} "
+            f"kind=python name={hook_name!r} - resolving from registry"
+        )
+
+        fn = resolve_hook(when=when, name=spec.name)
+
+        context: HookContext = {
+            "when": when,
+            "run": run_ctx_py,
+            "model": model_ctx,
+            "env": env_vars,
+        }
+
+        if run_stats is not None:
+            context["run_stats"] = run_stats
+        if model_stats is not None:
+            context["model_stats"] = model_stats
+
+        if spec.params:
+            context["params"] = dict(spec.params)
+
+        echo(
+            f"[hooks] when={when} node={node_label} hook#{idx} "
+            f"name={hook_name!r} - invoking python hook"
+        )
+
+        fn(context)
 
     @staticmethod
     def before(_name: str, lvl_idx: int | None = None) -> None:
@@ -863,7 +1638,9 @@ def _levels_for_run(explicit_targets: list[str], wanted: set[str]) -> list[list[
     return dag_levels(sub_nodes)
 
 
-def _run_schedule(engine_, lvls, jobs, keep_going, ctx):
+def _run_schedule(
+    engine_: _RunEngine, lvls: list[list[str]], jobs: int | str, keep_going: bool, ctx: CLIContext
+) -> tuple[ScheduleResult, LogQueue, str, str]:
     logq = LogQueue()
     started_at = datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -967,6 +1744,41 @@ def _emit_logs_and_errors(logq: LogQueue, result: ScheduleResult, engine_: _RunE
 # ----------------- run function -----------------
 
 
+def _run_global_hooks(
+    engine_: _RunEngine,
+    when: HookWhen,
+    *,
+    run_status: str | None = None,
+    run_stats: RunStatsContext | None = None,
+) -> None:
+    """
+    Execute project-level hooks.on_run_start / hooks.on_run_end.
+    """
+    if when not in ("on_run_start", "on_run_end"):
+        # Safety: global hooks are only defined for these two events
+        return
+
+    if when == "on_run_start":
+        hooks = getattr(REGISTRY, "on_run_start_hooks", []) or []
+    elif when == "on_run_end":
+        hooks = getattr(REGISTRY, "on_run_end_hooks", []) or []
+    else:
+        return
+
+    if not hooks:
+        return
+
+    ex, _, _ = engine_._get_runner()
+    engine_._run_hooks(
+        hooks,
+        node=None,
+        when=when,
+        ex=ex,
+        run_status=run_status,
+        run_stats=run_stats,
+    )
+
+
 def run(
     project: ProjectArg = ".",
     env_name: EnvOpt = "dev",
@@ -993,7 +1805,24 @@ def run(
         )
 
     ctx, engine_ = _build_engine_ctx(project, env_name, engine, vars, cache, no_cache)
-    bind_context(engine=ctx.profile.engine, env=env_name)
+
+    # Run metadata for hooks
+    engine_.invocation_id = uuid4().hex
+    engine_.run_started_at = datetime.now(UTC).isoformat(timespec="seconds")
+
+    bind_context(
+        engine=ctx.profile.engine,
+        env=env_name,
+        run_id=engine_.run_started_at,
+        invocation_id=engine_.invocation_id,
+    )
+
+    # Load python hooks from hooks/ directory
+    project_dir = ctx.project
+    load_project_hooks(project_dir)
+
+    # Global on_run_start hooks
+    _run_global_hooks(engine_, when="on_run_start")
 
     select_tokens, _, raw_selected = _select_predicate_and_raw(engine_, ctx, select)
     wanted = _wanted_names(select_tokens=select_tokens, exclude=exclude, raw_selected=raw_selected)
@@ -1021,6 +1850,31 @@ def run(
 
     _attempt_catalog(ctx)
     _emit_logs_and_errors(logq, result, engine_)
+
+    # Compute aggregated row + time totals for hooks
+    totals = _aggregate_totals(getattr(engine_, "query_stats", {}) or {})
+    rows_total = totals.get("rows", 0)
+    elapsed_ms_total = totals.get("query_duration_ms", 0)
+
+    # Global on_run_end hooks (only reached if no model raised fatal error inside schedule)
+    has_failures = bool(result.failed)
+    run_status = "error" if has_failures or budget_error else "success"
+
+    run_stats: RunStatsContext = {
+        "models_built": len(result.per_node_s) - len(result.failed),
+        "models_failed": len(result.failed),
+        "models_skipped": 0,
+        "rows_total": rows_total,
+        "elapsed_ms_total": elapsed_ms_total,
+        "run_status": run_status,
+    }
+
+    _run_global_hooks(
+        engine_,
+        when="on_run_end",
+        run_status=run_status,
+        run_stats=run_stats,
+    )
 
     if result.failed or budget_error:
         raise typer.Exit(1)

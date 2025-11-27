@@ -100,6 +100,22 @@ EXAMPLES: list[ExampleConfig] = [
         },
     ),
     ExampleConfig(
+        name="hooks_demo",
+        path=ROOT / "examples" / "hooks_demo",
+        make_target="demo",
+        env_by_engine={
+            "duckdb": "dev_duckdb",
+            "postgres": "dev_postgres",
+            "databricks_spark": "dev_databricks",
+            "bigquery": "dev_bigquery_pandas",
+            "snowflake_snowpark": "dev_snowflake",
+        },
+        bigquery_env_by_backend={
+            "pandas": "dev_bigquery_pandas",
+            "bigframes": "dev_bigquery_bigframes",
+        },
+    ),
+    ExampleConfig(
         name="incremental_demo",
         path=ROOT / "examples" / "incremental_demo",
         make_target="demo",

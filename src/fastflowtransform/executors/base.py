@@ -840,6 +840,14 @@ class BaseExecutor[TFrame](ABC):
         ...
 
     # ---------- SQL hook contracts ----------
+
+    def execute_hook_sql(self, sql: str) -> None:
+        """
+        Execute a SQL hook block (pre-/post-run, on-run-start, on-run-end, etc.).
+        """
+        raise NotImplementedError(f"SQL hooks are not implemented for engine '{self.engine_name}'.")
+
+    # ---------- SQL hook contracts ----------
     @abstractmethod
     def _format_relation_for_ref(self, name: str) -> str:
         """

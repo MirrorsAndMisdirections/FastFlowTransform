@@ -40,6 +40,7 @@ nav:
   - Snapshots: Snapshots.md
   - CI Checks & Change-Aware Runs: CI_Check.md
   - Cost Monitoring: Cost_Monitoring.md
+  - Hooks: Hooks.md
   - Troubleshooting: Troubleshooting.md
   - Examples:
       - Basic Demo: examples/Basic_Demo.md
@@ -52,6 +53,7 @@ nav:
       - API Demo: examples/API_Demo.md
       - Local Engine Setup: examples/Local_Engine_Setup.md
       - Snapshot Demo: examples/Snapshot_Demo.md
+      - Hooks Demo: examples/Hooks_Demo.md
   - API Reference: reference/
   - Contributing: Contributing.md
   - License: License.md

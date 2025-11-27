@@ -1,0 +1,13 @@
+model: stg_users
+
+cases:
+  - name: lowercase_email
+    inputs:
+    seed_users:
+      rows:
+        - {id: 1, email: "a@EXAMPLE.com", signup_date: "2023-01-01"}
+        - {id: 2, email: "B@gmail.com", signup_date: "2023-01-02"}
+    expect:
+      rows:
+        - {id: 1, email: "a@example.com", signup_date: "2023-01-01"}
+        - {id: 2, email: "b@gmail.com", signup_date: "2023-01-02"}

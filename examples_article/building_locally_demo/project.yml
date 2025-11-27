@@ -15,4 +15,13 @@ docs:
 vars: {}
 
 # Declare project-wide data quality checks under `tests`. See docs/Data_Quality_Tests.md.
-tests: []
+tests:
+  - type: not_null
+    table: stg_users
+    column: id
+    tags: [example:building_locally_demo]
+  - type: row_count_between
+    table: stg_users
+    min_rows: 2
+    max_rows: 2
+    tags: [example:building_locally_demo]

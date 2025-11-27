@@ -439,6 +439,7 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
                 estimated_bytes = self._spark_plan_bytes(sql)
         t0 = perf_counter()
         df = self.spark.sql(sql)
+
         dt_ms = int((perf_counter() - t0) * 1000)
 
         # Best-effort logical estimate
@@ -1241,6 +1242,20 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
             for handle in materialized:
                 with suppress(Exception):
                     handle.unpersist()
+
+    def execute_hook_sql(self, sql: str) -> None:
+        """
+        Entry point for hook SQL.
+
+        Accepts a string that may contain multiple ';'-separated statements.
+        `_RunEngine._execute_hook_sql` has already normalized away semicolons
+        in full-line comments, so naive splitting by ';' is acceptable here.
+        """
+        for stmt in (part.strip() for part in sql.split(";")):
+            if not stmt:
+                continue
+            # Reuse your existing single-statement executor
+            self._execute_sql(stmt)
 
 
 # ────────────────────────── local helpers / shim ──────────────────────────

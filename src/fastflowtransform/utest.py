@@ -145,15 +145,13 @@ def _read_result(executor: Any, rel: str) -> pd.DataFrame:
 
 
 def _project_root_for_spec(spec: UnitSpec) -> Path:
-    # bevorzugt Registry
     if getattr(REGISTRY, "project_dir", None):
         return Path(REGISTRY.get_project_dir()).resolve()
-    # heuristisch: nach oben laufen, bis 'models/' existiert
     p = spec.path.resolve()
     for parent in [p.parent, *list(p.parents)]:
         if (parent / "models").is_dir():
             return parent
-    return spec.path.parent  # letzter Fallback
+    return spec.path.parent
 
 
 # ---------- Cache and Fingerprint Helpers ----------

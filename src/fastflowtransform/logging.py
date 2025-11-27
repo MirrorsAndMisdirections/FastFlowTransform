@@ -80,8 +80,11 @@ def bind_context(
     engine: str | None = None,
     env: str | None = None,
     node: str | None = None,
+    invocation_id: str | None = None,
 ) -> None:
     """Bind fields that get injected into every record."""
+    if invocation_id is not None:
+        run_id = invocation_id
     if run_id is not None:
         _run_id.set(run_id)
     if engine is not None:
@@ -107,6 +110,7 @@ def bound_context(
     engine: str | None = None,
     env: str | None = None,
     node: str | None = None,
+    invocation_id: str | None = None,
 ) -> Generator[None, None, None]:
     """
     Temporarily bind (or override) selected fields.
@@ -114,7 +118,13 @@ def bound_context(
     """
     prev = (_run_id.get(), _engine.get(), _env.get(), _node.get())
     try:
-        bind_context(run_id=run_id, engine=engine, env=env, node=node)
+        bind_context(
+            run_id=run_id,
+            engine=engine,
+            env=env,
+            node=node,
+            invocation_id=invocation_id,
+        )
         yield
     finally:
         # restore previous values; keep run_id/engine/env stable if you want by not overriding

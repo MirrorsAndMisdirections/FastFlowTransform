@@ -221,54 +221,76 @@ my_project/
 ```yaml
 version: 1
 
-# Default behaviour when a budget is exceeded.
-# One of: "warn", "error"
-defaults:
-  on_exceed: "warn"
+# Per-engine query limits (applied before executing individual queries)
+query_limits:
+  duckdb:
+    max_bytes: 5_000_000
+  postgres:
+    max_bytes: 10_000_000
+  bigquery:
+    max_bytes: 50_000_000
+  databricks_spark:
+    max_bytes: 50_000_000
+  snowflake_snowpark:
+    max_bytes: 50_000_000
 
-budgets:
-  # Global cap for total bytes scanned by all models.
-  total_bytes_scanned:
-    warn_after: "10GB"    # log a warning above this
-    error_after: "50GB"   # fail the run above this
+# Global limits across the entire fft run
+total:
+  bytes_scanned:
+    # ~10 MB – adjust down if you want to force a warning
+    warn: 100
+    # ~100 MB – adjust down if you want to force an error
+    error: 100_000_000
 
-  # Optional: total query time across all models.
-  total_query_duration_ms:
-    warn_after: 600000    # 10 minutes
-    error_after: 3600000  # 60 minutes
+  # Optional: total query time across all queries in the run
+  query_duration_ms:
+    warn: "30s"   # human-friendly duration, parsed to ms
+    error: "2m"
 
-  # Per-engine budgets
-  by_engine:
-    bigquery:
-      bytes_scanned:
-        warn_after: "5GB"
-        error_after: "20GB"
+# Per-model limits (keys must match node names: stg_users.ff, mart_user_orders.ff, http_users, ...)
+models:
+  stg_users.ff:
+    bytes_scanned:
+      # keep this fairly low so you can see a warn if you want
+      warn: 100
+      error: 10_000_000
 
-    snowflake_snowpark:
-      bytes_scanned:
-        warn_after: "2GB"
-        error_after: "10GB"
+  stg_orders.ff:
+    bytes_scanned:
+      warn: 1_000_000
+      error: 10_000_000
 
-  # Optional per-model budgets (key = model name)
-  per_model:
-    fct_events:
-      bytes_scanned:
-        warn_after: "500MB"
-        error_after: "2GB"
+  mart_user_orders.ff:
+    bytes_scanned:
+      warn: 1_000_000
+      error: 100_000_000
 
-    dim_users:
-      bytes_scanned:
-        warn_after: "100MB"
+  http_users:
+    # HTTP model → mainly interesting on engines that can report bytes_scanned
+    bytes_scanned:
+      warn: 5_000_000
+      error: 50_000_000
+
+  py_constants:
+    bytes_scanned:
+      warn: 5_000_000
+      error: 50_000_000
+
+# Per-tag budgets (aggregated over all models with that tag)
+tags:
+  "example:cache_demo":
+    bytes_scanned:
+      warn: 10_000_000
 ```
 
 #### Value syntax
 
-* `warn_after` / `error_after` for **bytes** use the same notation as
+* `warn` / `error` for **bytes** use the same notation as
   `FF_*_MAX_BYTES`:
 
   ```yaml
-  warn_after: "5GB"
-  error_after: "500_000_000"
+  warn: "5GB"
+  error: "500_000_000"
   ```
 
 * Durations are currently in **milliseconds** (plain integers).
@@ -290,7 +312,7 @@ budgets:
 * If an **error** budget is exceeded, FFT treats it like a failed run and exits
   with `1`.
 
-If both `warn_after` and `error_after` are defined and exceeded, the **error**
+If both `arn` and `error` are defined and exceeded, the **error**
 behaviour wins.
 
 ### Interaction with env-level guards
