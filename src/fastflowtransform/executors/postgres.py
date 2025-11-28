@@ -1,7 +1,6 @@
 # fastflowtransform/executors/postgres.py
 import json
 from collections.abc import Iterable
-from contextlib import suppress
 from time import perf_counter
 from typing import Any
 
@@ -13,6 +12,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from fastflowtransform.core import Node, relation_for
 from fastflowtransform.errors import ModelExecutionError, ProfileConfigError
+from fastflowtransform.executors._budget_runner import run_sql_with_budget
 from fastflowtransform.executors._shims import SAConnShim
 from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.executors.budget import BudgetGuard
@@ -120,39 +120,27 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
 
         Also records simple per-query stats for run_results.json.
         """
-        estimated_bytes = self._apply_budget_guard(self._BUDGET_GUARD, sql)
-        if estimated_bytes is None and not self._is_budget_guard_active():
-            with suppress(Exception):
-                estimated_bytes = self._estimate_query_bytes(sql)
-        t0 = perf_counter()
 
-        if conn is None:
-            # Standalone use: open our own transaction
-            with self.engine.begin() as local_conn:
-                result = self._execute_sql_core(sql, *args, conn=local_conn, **kwargs)
-        else:
-            # Reuse existing connection / transaction (e.g. in run_snapshot_sql)
-            result = self._execute_sql_core(sql, *args, conn=conn, **kwargs)
+        def _exec() -> Any:
+            if conn is None:
+                with self.engine.begin() as local_conn:
+                    return self._execute_sql_core(sql, *args, conn=local_conn, **kwargs)
+            return self._execute_sql_core(sql, *args, conn=conn, **kwargs)
 
-        dt_ms = int((perf_counter() - t0) * 1000)
-
-        # rows: best-effort from Result.rowcount (DML only; SELECT is often -1)
-        rows: int | None = None
-        try:
+        def _rows(result: Any) -> int | None:
             rc = getattr(result, "rowcount", None)
             if isinstance(rc, int) and rc >= 0:
-                rows = rc
-        except Exception:
-            rows = None
+                return rc
+            return None
 
-        self._record_query_stats(
-            QueryStats(
-                bytes_processed=estimated_bytes,
-                rows=rows,
-                duration_ms=dt_ms,
-            )
+        return run_sql_with_budget(
+            self,
+            sql,
+            guard=self._BUDGET_GUARD,
+            exec_fn=_exec,
+            rowcount_extractor=_rows,
+            estimate_fn=self._estimate_query_bytes,
         )
-        return result
 
     def _analyze_relations(
         self,

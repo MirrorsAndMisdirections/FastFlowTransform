@@ -15,6 +15,7 @@ from jinja2 import Environment
 from fastflowtransform import storage
 from fastflowtransform.core import REGISTRY, Node, relation_for
 from fastflowtransform.errors import ModelExecutionError
+from fastflowtransform.executors._budget_runner import run_sql_with_budget
 from fastflowtransform.executors._spark_imports import (
     get_spark_functions,
     get_spark_window,
@@ -434,29 +435,18 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         - Returns a Spark DataFrame (same as spark.sql).
         - Records best-effort query stats for run_results.json.
         """
-        estimated_bytes = self._apply_budget_guard(self._BUDGET_GUARD, sql)
-        if estimated_bytes is None and not self._is_budget_guard_active():
-            with suppress(Exception):
-                estimated_bytes = self._spark_plan_bytes(sql)
-        t0 = perf_counter()
-        df = self.spark.sql(sql)
 
-        dt_ms = int((perf_counter() - t0) * 1000)
+        def _exec() -> SDF:
+            return self.spark.sql(sql)
 
-        # Best-effort logical estimate
-        bytes_processed = (
-            estimated_bytes if estimated_bytes is not None else self._spark_plan_bytes(sql)
+        return run_sql_with_budget(
+            self,
+            sql,
+            guard=self._BUDGET_GUARD,
+            exec_fn=_exec,
+            estimate_fn=self._spark_plan_bytes,
+            post_estimate_fn=lambda _, __: self._spark_plan_bytes(sql),
         )
-
-        # For Spark we don't attempt row counts without executing the job
-        self._record_query_stats(
-            QueryStats(
-                bytes_processed=bytes_processed,
-                rows=None,
-                duration_ms=dt_ms,
-            )
-        )
-        return df
 
     # ---------- Frame hooks (required) ----------
     def _read_relation(self, relation: str, node: Node, deps: Iterable[str]) -> SDF:

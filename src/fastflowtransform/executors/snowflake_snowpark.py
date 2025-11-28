@@ -11,6 +11,7 @@ import pandas as pd
 from jinja2 import Environment
 
 from fastflowtransform.core import Node, relation_for
+from fastflowtransform.executors._budget_runner import run_sql_with_budget
 from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.executors.budget import BudgetGuard
 from fastflowtransform.executors.query_stats import QueryStats
@@ -123,25 +124,17 @@ class SnowflakeSnowparkExecutor(BaseExecutor[SNDF]):
         - Returns a Snowpark DataFrame (same as session.sql).
         - Records best-effort query stats for run_results.json.
         """
-        estimated_bytes = self._apply_budget_guard(self._BUDGET_GUARD, sql)
-        if estimated_bytes is None and not self._is_budget_guard_active():
-            with suppress(Exception):
-                estimated_bytes = self._estimate_query_bytes(sql)
-        t0 = perf_counter()
-        df = self.session.sql(sql)
-        dt_ms = int((perf_counter() - t0) * 1000)
 
-        # We *don't* call df.count() here - that would execute the query again.
-        # For Snowflake we also don't cheaply access bytes/rows here; the cost
-        # guard already did a dry-run EXPLAIN if FF_SF_MAX_BYTES is set.
-        self._record_query_stats(
-            QueryStats(
-                bytes_processed=estimated_bytes,
-                rows=None,
-                duration_ms=dt_ms,
-            )
+        def _exec() -> SNDF:
+            return self.session.sql(sql)
+
+        return run_sql_with_budget(
+            self,
+            sql,
+            guard=self._BUDGET_GUARD,
+            exec_fn=_exec,
+            estimate_fn=self._estimate_query_bytes,
         )
-        return df
 
     def _exec_many(self, sql: str) -> None:
         """
