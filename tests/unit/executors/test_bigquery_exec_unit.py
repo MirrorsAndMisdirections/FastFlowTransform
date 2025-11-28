@@ -373,9 +373,9 @@ def test_incremental_insert_cleans_select(bq_exec):
 def test_incremental_merge_executes_two_statements(bq_exec):
     bq_exec.client.queries.clear()
     bq_exec.incremental_merge("dst_tbl", "SELECT 1 AS id", ["id"])
-    assert len(bq_exec.client.queries) == 2
+    assert len(bq_exec.client.queries) == 4
     assert "DELETE FROM" in bq_exec.client.queries[0][0]
-    assert "INSERT INTO" in bq_exec.client.queries[1][0]
+    assert "INSERT INTO" in bq_exec.client.queries[2][0]
 
 
 @pytest.mark.unit

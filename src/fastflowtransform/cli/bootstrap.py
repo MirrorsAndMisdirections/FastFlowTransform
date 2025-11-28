@@ -24,6 +24,7 @@ from fastflowtransform.settings import (
     EnvSettings,
     Profile,
     resolve_profile as _resolve_profile_impl,
+    resolve_utest_profile as _resolve_utest_profile_impl,
 )
 
 
@@ -242,12 +243,21 @@ def _prepare_context(
     env_name: str,
     engine: EngineType | None,
     vars_opt: list[str] | None,
+    utest: bool = False,
 ) -> CLIContext:
     proj = _resolve_project_path(project_arg)
     _load_dotenv_layered(proj, env_name)
 
-    env_settings, prof = _resolve_profile(env_name, engine, proj)
-    _validate_profile_params(env_name, prof)
+    env_settings, base_prof = _resolve_profile(env_name, engine, proj)
+
+    if utest:
+        # Use the dedicated utest profile "<env_name>_utest"
+        utest_prof = _resolve_utest_profile(env_name, proj, env_settings)
+        _validate_profile_params(f"{env_name}_utest", utest_prof)
+        prof = utest_prof
+    else:
+        _validate_profile_params(env_name, base_prof)
+        prof = base_prof
 
     engine_name = getattr(prof, "engine", None)
     REGISTRY.set_active_engine(engine_name)
@@ -273,6 +283,20 @@ def _prepare_context(
         profile=prof,
         budgets_cfg=budgets_cfg,
     )
+
+
+def _resolve_utest_profile(env_name: str, proj: Path, env: EnvSettings) -> Profile:
+    """
+    Resolve the utest profile "<env_name>_utest" using the same EnvSettings.
+    """
+    try:
+        # Note: settings.resolve_utest_profile(project_dir, base_env_name, env)
+        prof = _resolve_utest_profile_impl(proj, env_name, env)
+    except Exception as exc:
+        raise typer.BadParameter(
+            f"Failed to resolve unit-test profile '{env_name}_utest': {exc}"
+        ) from exc
+    return prof
 
 
 def _parse_cli_vars(pairs: list[str]) -> dict[str, object]:
@@ -407,5 +431,5 @@ def _make_executor(prof: Profile, jenv: Environment) -> tuple[Any, Callable, Cal
         ex = SnowflakeSnowparkExecutor(cfg)
         return ex, (lambda n: ex.run_sql(n, jenv)), ex.run_python
 
-    _die(f"Unbekannter Engine-Typ: {getattr(prof, 'engine', None)}", code=1)
+    _die(f"Unknown engine type: {getattr(prof, 'engine', None)}", code=1)
     raise AssertionError("unreachable")

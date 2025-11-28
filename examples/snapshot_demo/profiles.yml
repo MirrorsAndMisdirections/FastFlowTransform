@@ -19,10 +19,8 @@ dev_databricks_parquet: &snapshot_demo_databricks_parquet
     warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse_parquet"
     database: "{{ env('FF_DBR_DATABASE', 'snapshot_demo_parquet') }}"
     extra_conf:
-      spark.hadoop.javax.jdo.option.ConnectionURL: "jdbc:derby:{{ project_dir() }}/.local/metastore_db;create=true"
-      spark.hadoop.datanucleus.rdbms.datastoreAdapterClassName: "org.datanucleus.store.rdbms.adapter.DerbyAdapter"
-      spark.hadoop.datanucleus.schema.autoCreateAll: "true"
-      spark.hadoop.javax.jdo.option.ConnectionDriverName: "org.apache.derby.jdbc.EmbeddedDriver"
+      spark.sql.statistics.fallBackToHdfs: true
+      spark.sql.shuffle.partitions: "{{ env('SPARK_SQL_SHUFFLE_PARTITIONS', '8') }}"
       spark.driver.extraJavaOptions: >
         -Dderby.stream.error.file={{ project_dir() }}/.local/derby.log
         -Dderby.system.home={{ project_dir() }}/.local/derby_home
@@ -35,11 +33,11 @@ dev_databricks_delta:
     warehouse_dir: "{{ project_dir() }}/.local/spark_warehouse_delta"
     database: "{{ env('FF_DBR_DATABASE', 'snapshot_demo_delta') }}"
     extra_conf:
-      spark.hadoop.javax.jdo.option.ConnectionURL: "jdbc:derby:{{ project_dir() }}/.local/metastore_db;create=true"
-      spark.hadoop.datanucleus.rdbms.datastoreAdapterClassName: "org.datanucleus.store.rdbms.adapter.DerbyAdapter"
-      spark.hadoop.datanucleus.schema.autoCreateAll: "true"
-      spark.hadoop.javax.jdo.option.ConnectionDriverName: "org.apache.derby.jdbc.EmbeddedDriver"
-      spark.driver.extraJavaOptions: "-Dderby.stream.error.file={{ project_dir() }}/.local/derby.log"
+      spark.sql.statistics.fallBackToHdfs: true
+      spark.sql.shuffle.partitions: "{{ env('SPARK_SQL_SHUFFLE_PARTITIONS', '8') }}"
+      spark.driver.extraJavaOptions: >
+        -Dderby.stream.error.file={{ project_dir() }}/.local/derby.log
+        -Dderby.system.home={{ project_dir() }}/.local/derby_home
 
 dev_databricks_iceberg:
   engine: databricks_spark

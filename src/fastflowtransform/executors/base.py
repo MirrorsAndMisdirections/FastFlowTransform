@@ -840,6 +840,14 @@ class BaseExecutor[TFrame](ABC):
         ...
 
     # ---------- SQL hook contracts ----------
+
+    def execute_hook_sql(self, sql: str) -> None:
+        """
+        Execute a SQL hook block (pre-/post-run, on-run-start, on-run-end, etc.).
+        """
+        raise NotImplementedError(f"SQL hooks are not implemented for engine '{self.engine_name}'.")
+
+    # ---------- SQL hook contracts ----------
     @abstractmethod
     def _format_relation_for_ref(self, name: str) -> str:
         """
@@ -1071,6 +1079,41 @@ class BaseExecutor[TFrame](ABC):
             return False
         materialized = str(meta.get("materialized") or "").lower()
         return materialized == "snapshot"
+
+    # ---------- Unit-test helpers (to be overridden by engines) ----------
+
+    def utest_load_relation_from_rows(self, relation: str, rows: list[dict]) -> None:
+        """
+        Load test input rows into a physical relation for unit tests.
+
+        Default: not implemented. Engines that support `fft utest` should override.
+        """
+        raise NotImplementedError(
+            f"utest_load_relation_from_rows not implemented for engine '{self.engine_name}'."
+        )
+
+    def utest_read_relation(self, relation: str) -> _PDDataFrame:
+        """
+        Read a physical relation into a pandas.DataFrame for unit-test assertions.
+
+        Default: not implemented. Engines that support `fft utest` should override.
+        """
+        raise NotImplementedError(
+            f"utest_read_relation not implemented for engine '{self.engine_name}'."
+        )
+
+    def utest_clean_target(self, relation: str) -> None:
+        """
+        Best-effort cleanup hook before executing a unit-test model:
+
+        - Drop tables/views with the target name so view<->table flips
+          cannot fail (DuckDB, Postgres, ...).
+        - This runs *only* in `fft utest`, and we already enforce that
+          utest profiles use isolated DBs/schemas.
+
+        Default: no-op.
+        """
+        return
 
     ENGINE_NAME: str = "generic"
 

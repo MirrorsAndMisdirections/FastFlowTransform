@@ -71,6 +71,14 @@ class FakeJob:
 class FakeQueryJobConfig:
     def __init__(self, **kwargs: Any):
         self.kwargs = kwargs
+        # allow executors to set job_config.default_dataset = DatasetReference(...)
+        self.default_dataset = None
+
+
+class FakeDatasetReference:
+    def __init__(self, project: str, dataset_id: str):
+        self.project = project
+        self.dataset_id = dataset_id
 
 
 class FakeScalarQueryParameter:
@@ -246,6 +254,7 @@ def make_fake_bigquery_module() -> types.ModuleType:
     mod.QueryJobConfig = FakeQueryJobConfig  # type: ignore[attr-defined]
     mod.ScalarQueryParameter = FakeScalarQueryParameter  # type: ignore[attr-defined]
     mod.Dataset = FakeDataset  # type: ignore[attr-defined]
+    mod.DatasetReference = FakeDatasetReference  # type: ignore[attr-defined]
     mod.BadRequest = FakeBadRequest  # type: ignore[attr-defined]
     mod.NotFound = FakeNotFound  # type: ignore[attr-defined]
     mod.WriteDisposition = FakeWriteDisposition  # type: ignore[attr-defined]

@@ -1,7 +1,7 @@
 # fastflowtransform/config/project.py
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
@@ -145,6 +145,61 @@ class DocsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     dag_dir: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# hooks: block from project.yml
+# ---------------------------------------------------------------------------
+
+
+class HookSpec(BaseModel):
+    """
+    One hook entry from project.yml -> hooks.* lists.
+    Example:
+      - name: audit_run_start
+        kind: sql
+        sql: "insert into ..."
+
+      - name: python_banner
+        kind: python
+        callable: "hooks_demo.hooks.notify:on_run_start"
+        select: "tag:example:hooks_demo"
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    kind: Literal["sql", "python"]
+
+    # SQL hook body (for kind == "sql")
+    sql: str | None = None
+
+    # Python callable path (for kind == "python"), "pkg.mod:func" or "pkg.mod.func"
+    callable: str | None = None
+
+    # Optional selection filter (for before_model / after_model)
+    select: str | None = None
+
+    # Optional free-form params if you want them later
+    params: Mapping[str, Any] | None = None
+
+    engines: list[str] | None = None  # e.g. ["duckdb", "databricks_spark"]
+    envs: list[str] | None = None  # e.g. ["dev_duckdb", "prod_duckdb"]
+
+
+class HooksConfig(BaseModel):
+    """
+    Top-level hooks section in project.yml.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    on_run_start: list[HookSpec] = Field(default_factory=list)
+    on_run_end: list[HookSpec] = Field(default_factory=list)
+
+    # Per-model hooks are optional but allowed
+    before_model: list[HookSpec] = Field(default_factory=list)
+    after_model: list[HookSpec] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -457,21 +512,6 @@ class CustomProjectTestConfig(BaseProjectTestConfig):
     column: str | None = None
 
 
-# ProjectTestConfig = Annotated[
-#     NotNullTestConfig
-#     | UniqueTestConfig
-#     | AcceptedValuesTestConfig
-#     | GreaterEqualTestConfig
-#     | NonNegativeSumTestConfig
-#     | RowCountBetweenTestConfig
-#     | FreshnessTestConfig
-#     | ReconcileEqualTestConfig
-#     | ReconcileRatioWithinTestConfig
-#     | ReconcileDiffWithinTestConfig
-#     | ReconcileCoverageTestConfig,
-#     Field(discriminator="type"),
-# ]
-
 ProjectTestConfig = (
     NotNullTestConfig
     | UniqueTestConfig
@@ -535,6 +575,8 @@ class ProjectConfig(BaseModel):
     tests: list[ProjectTestConfig] = Field(default_factory=list)
 
     docs: DocsConfig | None = None
+
+    hooks: HooksConfig | None = None
 
 
 # ---------------------------------------------------------------------------

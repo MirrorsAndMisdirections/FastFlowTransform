@@ -30,7 +30,7 @@ def utest(
     cache: UTestCacheOpt = UTestCacheMode.OFF,
     reuse_meta: ReuseMetaOpt = False,
 ) -> None:
-    ctx = _prepare_context(project, env_name, engine, vars)
+    ctx = _prepare_context(project, env_name, engine, vars, utest=True)
     ex, _, _ = ctx.make_executor()
 
     specs = discover_unit_specs(ctx.project, path=path, only_model=model)

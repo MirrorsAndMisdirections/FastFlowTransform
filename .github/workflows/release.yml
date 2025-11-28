@@ -31,14 +31,19 @@ jobs:
         id: meta
         run: |
           python - << 'PY'
-          import pathlib, tomllib
+          import os
+          import pathlib
+          import tomllib
 
           data = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
           version = data.get("project", {}).get("version")
           if not version:
-            raise SystemExit("No [project].version found in pyproject.toml")
+              raise SystemExit("No [project].version found in pyproject.toml")
+
           print(f"Version: {version}")
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf8") as fh:
+
+          out_path = os.environ["GITHUB_OUTPUT"]
+          with open(out_path, "a", encoding="utf8") as fh:
               fh.write(f"version={version}\n")
           PY
 

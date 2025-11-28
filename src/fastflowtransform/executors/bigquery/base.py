@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, TypeVar
 
 from fastflowtransform.core import Node, relation_for
+from fastflowtransform.executors._budget_runner import run_sql_with_budget
 from fastflowtransform.executors._shims import BigQueryConnShim
 from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.executors.bigquery._bigquery_mixin import BigQueryIdentifierMixin
@@ -69,9 +70,28 @@ class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
         - All 'real' SQL statements in this executor should go through here.
         - Returns the QueryJob so callers can call .result().
         """
-        self._apply_budget_guard(self._BUDGET_GUARD, sql)
-        job = self.client.query(sql, location=self.location)
-        return _TrackedQueryJob(job, on_complete=self._record_query_job_stats)
+
+        def _exec() -> _TrackedQueryJob:
+            job_config = bigquery.QueryJobConfig()
+            if self.dataset:
+                # Let unqualified tables resolve to project.dataset.table
+                job_config.default_dataset = bigquery.DatasetReference(self.project, self.dataset)
+
+            job = self.client.query(
+                sql,
+                job_config=job_config,
+                location=self.location,
+            )
+            return _TrackedQueryJob(job, on_complete=self._record_query_job_stats)
+
+        return run_sql_with_budget(
+            self,
+            sql,
+            guard=self._BUDGET_GUARD,
+            exec_fn=_exec,
+            estimate_fn=self._estimate_query_bytes,
+            record_stats=False,
+        )
 
     # --- Cost estimation for the shared BudgetGuard -----------------
 
@@ -85,6 +105,10 @@ class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
             dry_run=True,
             use_query_cache=False,
         )
+        if self.dataset:
+            # Let unqualified tables resolve to project.dataset.table
+            cfg.default_dataset = bigquery.DatasetReference(self.project, self.dataset)
+
         job = self.client.query(
             sql,
             job_config=cfg,
@@ -522,3 +546,9 @@ WHERE EXISTS (
 )
 """
         self._execute_sql(delete_sql).result()
+
+    def execute_hook_sql(self, sql: str) -> None:
+        """
+        Execute one SQL statement for pre/post/on_run hooks.
+        """
+        self._execute_sql(sql).result()

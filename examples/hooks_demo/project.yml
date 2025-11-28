@@ -1,0 +1,303 @@
+name: hooks_demo
+version: "0.1"
+models_dir: models
+
+docs:
+  dag_dir: site/dag
+
+vars: {}
+
+tests:
+  - type: not_null
+    table: events_clean
+    column: event_id
+    tags: [example:hooks_demo]
+
+  - type: row_count_between
+    table: mart_events_daily
+    min_rows: 1
+    max_rows: 1000
+    tags: [example:hooks_demo]
+
+# --- Audit: run-level -------------------------------------------------------
+  # Ensure we have at least one run audit row for the demo run
+  - type: row_count_between
+    table: _ff_run_audit
+    min_rows: 1
+    max_rows: 10
+    tags: [example:hooks_demo, audit]
+
+  # Core run audit columns should never be NULL
+  - type: not_null
+    table: _ff_run_audit
+    column: run_id
+    tags: [example:hooks_demo, audit]
+
+    # started_at must be recorded
+  - type: not_null
+    table: _ff_run_audit
+    column: started_at
+    tags: [example:hooks_demo, audit]
+
+    # status should be 'running'/'success'/'error', but at least not NULL
+  - type: not_null
+    table: _ff_run_audit
+    column: status
+    tags: [example:hooks_demo, audit]
+
+  - type: not_null
+    table: _ff_run_audit
+    column: finished_at
+    tags: [example:hooks_demo, audit]
+
+  - type: not_null
+    table: _ff_run_audit
+    column: row_count
+    tags: [example:hooks_demo, audit]
+
+  - type: accepted_values
+    table: _ff_run_audit
+    column: status
+    values: [success]
+    tags: [example:hooks_demo, audit]
+
+  - type: row_count_between
+    table: _ff_run_audit
+    min_rows: 1
+    max_rows: 1
+    tags: [example:hooks_demo, audit]
+
+  # --- Audit: model-level -----------------------------------------------------
+  # For this demo there are 2 tagged models; we expect at least 2 audit rows
+  - type: row_count_between
+    table: _ff_model_audit
+    min_rows: 2
+    max_rows: 10
+    tags: [example:hooks_demo, audit]
+
+  # Model audit rows must have a run_id
+  - type: not_null
+    table: _ff_model_audit
+    column: run_id
+    tags: [example:hooks_demo, audit]
+
+  # And must reference a model_name
+  - type: not_null
+    table: _ff_model_audit
+    column: model_name
+    tags: [example:hooks_demo, audit]
+
+  # And a non-null status ('running' / 'success' / 'error')
+  - type: not_null
+    table: _ff_model_audit
+    column: status
+    tags: [example:hooks_demo, audit]
+
+  - type: not_null
+    table: _ff_model_audit
+    column: finished_at
+    tags: [example:hooks_demo, audit]
+
+  - type: not_null
+    table: _ff_model_audit
+    column: rows_affected
+    tags: [example:hooks_demo, audit]
+
+  - type: not_null
+    table: _ff_model_audit
+    column: elapsed_ms
+    tags: [example:hooks_demo, audit]
+
+# ---------------------------------------------------------------------------
+# Hooks configuration
+# ---------------------------------------------------------------------------
+hooks:
+  # Lifecycle hooks (run-level)
+  on_run_start:
+    - name: create_audit_tables
+      kind: sql
+      engines: ["duckdb", "postgres"]
+      sql: |
+        create table if not exists _ff_run_audit (
+          run_id       text,
+          started_at   timestamp,
+          finished_at  timestamp,
+          status       text,
+          env          text,
+          engine       text,
+          row_count    bigint,
+          error        text
+        );
+
+        create table if not exists _ff_model_audit (
+          run_id        text,
+          model_name    text,
+          event         text,
+          status        text,
+          started_at    timestamp,
+          finished_at   timestamp,
+          rows_affected bigint,
+          elapsed_ms    bigint,
+          error         text
+        );
+
+    - name: create_audit_tables_spark
+      kind: sql
+      engines: ["databricks_spark"]
+      sql: |
+        create table if not exists _ff_run_audit (
+          run_id       string,
+          started_at   timestamp,
+          finished_at  timestamp,
+          status       string,
+          env          string,
+          engine       string,
+          row_count    bigint,
+          error        string
+        ) using delta;
+
+        create table if not exists _ff_model_audit (
+          run_id        string,
+          model_name    string,
+          event         string,
+          status        string,
+          started_at    timestamp,
+          finished_at   timestamp,
+          rows_affected bigint,
+          elapsed_ms    bigint,
+          error         string
+        ) using delta;
+
+    - name: create_audit_tables_bigquery
+      kind: sql
+      engines: ["bigquery"]
+      sql: |
+        CREATE TABLE IF NOT EXISTS `_ff_run_audit` (
+          run_id      STRING,
+          started_at  TIMESTAMP,
+          finished_at TIMESTAMP,
+          status      STRING,
+          env         STRING,
+          engine      STRING,
+          row_count   INT64,
+          error       STRING
+        );
+
+        CREATE TABLE IF NOT EXISTS `_ff_model_audit` (
+          run_id        STRING,
+          model_name    STRING,
+          event         STRING,
+          status        STRING,
+          started_at    TIMESTAMP,
+          finished_at   TIMESTAMP,
+          rows_affected INT64,
+          elapsed_ms    INT64,
+          error         STRING
+        );
+
+    - name: create_audit_tables_snowflake
+      kind: sql
+      engines: ["snowflake_snowpark"]
+      sql: |
+        CREATE TABLE IF NOT EXISTS _ff_run_audit (
+          run_id      STRING,
+          started_at  TIMESTAMP_NTZ,
+          finished_at TIMESTAMP_NTZ,
+          status      STRING,
+          env         STRING,
+          engine      STRING,
+          row_count   NUMBER,
+          error       STRING
+        );
+
+        CREATE TABLE IF NOT EXISTS _ff_model_audit (
+          run_id        STRING,
+          model_name    STRING,
+          event         STRING,
+          status        STRING,
+          started_at    TIMESTAMP_NTZ,
+          finished_at   TIMESTAMP_NTZ,
+          rows_affected NUMBER,
+          elapsed_ms    NUMBER,
+          error         STRING
+        );
+
+    - name: audit_run_start
+      kind: sql
+      sql: |
+        -- Record run start; assumes `run_id`, `env_name`, `engine_name` are available
+        insert into _ff_run_audit (run_id, started_at, status, env, engine)
+        values (
+          {{ run.run_id    | sql_literal }},
+          current_timestamp,
+          'running',
+          {{ run.env_name  | sql_literal }},
+          {{ run.engine_name | sql_literal }}
+        );
+
+    - name: python_banner
+      kind: python
+
+  on_run_end:
+    - name: audit_run_end
+      engines: ["duckdb", "postgres", "bigquery", "snowflake_snowpark"]
+      kind: sql
+
+    - name: audit_run_end_spark
+      engines: ["databricks_spark"]
+      kind: sql
+
+    - name: python_summary
+      kind: python
+
+  # Model-level hooks: executed for models matching `select`
+  before_model:
+    - name: model_start_audit
+      kind: sql
+      select: "tag:example:hooks_demo"
+      sql: |
+        insert into _ff_model_audit (run_id, model_name, event, status, started_at)
+        values (
+          {{ run.run_id | sql_literal }},
+          {{ model.name | sql_literal }},
+          'start',
+          'running',
+          current_timestamp
+        );
+
+  after_model:
+    - name: model_end_audit
+      kind: sql
+      engines: ["duckdb", "postgres", "bigquery", "snowflake_snowpark"]
+      select: "tag:example:hooks_demo"
+      sql: |
+        update _ff_model_audit
+        set
+            finished_at    = current_timestamp,
+            status         = {{ model.status | sql_literal }},
+            rows_affected  = {{ model.rows_affected if model.rows_affected is not none else 'NULL' }},
+            elapsed_ms     = {{ model.elapsed_ms    if model.elapsed_ms    is not none else 'NULL' }},
+            error          = {{ model.error | sql_literal if model.error is not none else 'NULL' }}
+        where run_id = {{ run.run_id   | sql_literal }}
+          and model_name = {{ model.name | sql_literal }}
+          and event = 'start';
+
+    - name: model_end_audit_spark
+      kind: sql
+      engines: ["databricks_spark"]
+      select: "tag:example:hooks_demo"
+      sql: |
+        update _ff_model_audit
+        set
+            finished_at   = current_timestamp(),
+            status        = {{ model.status | sql_literal }},
+            rows_affected = {{ model.rows_affected if model.rows_affected is not none else 'NULL' }},
+            elapsed_ms    = {{ model.elapsed_ms if model.elapsed_ms is not none  else 'NULL' }},
+            error         = {{ model.error if model.error is not none else 'NULL' }}
+        where run_id     = {{ run.run_id | sql_literal }}
+          and model_name = {{ model.name | sql_literal }}
+          and event      = 'start';
+
+    - name: model_end_log_python
+      kind: python
+      select: "tag:scope:mart"

@@ -1,0 +1,25 @@
+model: mart_users_by_domain.ff
+
+defaults:
+  inputs:
+    users_clean:
+      rows:
+        - {user_id: 1, email: "anna@example.com", email_domain: "example.com", signup_date: "2024-01-05"}
+        - {user_id: 2, email: "bob@example.com",  email_domain: "example.com", signup_date: "2024-01-07"}
+        - {user_id: 3, email: "cara@net.com",     email_domain: "net.com",     signup_date: "2024-03-01"}
+  expect:
+    relation: mart_users_by_domain
+    order_by: [email_domain]
+
+cases:
+  - name: aggregates_counts_and_first_last_signup
+    expect:
+      rows:
+        - {email_domain: "example.com",
+           user_count: 2,
+           first_signup: "2024-01-05",
+           last_signup:  "2024-01-07"}
+        - {email_domain: "net.com",
+           user_count: 1,
+           first_signup: "2024-03-01",
+           last_signup:  "2024-03-01"}

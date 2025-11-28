@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import suppress
 from time import perf_counter
 
 import pandas as pd
@@ -94,3 +95,55 @@ class BigQueryExecutor(BigQueryBaseExecutor[pd.DataFrame]):
                 duration_ms=duration_ms,
             )
         )
+
+        # ---- Unit-test helpers (pandas) ---------------------------------------
+
+    def utest_read_relation(self, relation: str) -> pd.DataFrame:
+        """
+        Read a relation into a pandas DataFrame for unit-test assertions.
+        """
+        q = f"SELECT * FROM {self._qualified_identifier(relation)}"
+        job = self.client.query(q, location=self.location)
+        # Same convention as _read_relation: use BigQuery Storage if available
+        return job.result().to_dataframe(create_bqstorage_client=True)
+
+    def utest_load_relation_from_rows(self, relation: str, rows: list[dict]) -> None:
+        """
+        Load rows into a BigQuery table for unit tests (replace if exists).
+        """
+        self._ensure_dataset()
+        table_id = f"{self.project}.{self.dataset}.{relation}"
+        df = pd.DataFrame(rows)
+
+        job_config = LoadJobConfig(write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE)
+
+        try:
+            job = self.client.load_table_from_dataframe(
+                df,
+                table_id,
+                job_config=job_config,
+                location=self.location,
+            )
+            job.result()
+        except BadRequest as e:
+            raise RuntimeError(f"BigQuery utest write failed: {table_id}\n{e}") from e
+
+    def utest_clean_target(self, relation: str) -> None:
+        """
+        For unit tests: drop any table/view with this name in the configured dataset.
+        """
+        table_id = f"{self.project}.{self.dataset}.{relation}"
+        # BigQuery treats views & tables both as "tables" for deletion.
+        try:
+            # not_found_ok=True is available on the real client; our typing alias
+            # should be compatible - if not, just ignore NotFound below.
+            self.client.delete_table(table_id, not_found_ok=True)
+        except NotFound:
+            pass
+        except TypeError:
+            # For older client versions without not_found_ok, fall back:
+            with suppress(NotFound):
+                self.client.delete_table(table_id)
+        except Exception:
+            # Cleanup is best-effort in utests.
+            pass

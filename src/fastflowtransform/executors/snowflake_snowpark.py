@@ -7,9 +7,11 @@ from contextlib import suppress
 from time import perf_counter
 from typing import Any, cast
 
+import pandas as pd
 from jinja2 import Environment
 
 from fastflowtransform.core import Node, relation_for
+from fastflowtransform.executors._budget_runner import run_sql_with_budget
 from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.executors.budget import BudgetGuard
 from fastflowtransform.executors.query_stats import QueryStats
@@ -122,25 +124,27 @@ class SnowflakeSnowparkExecutor(BaseExecutor[SNDF]):
         - Returns a Snowpark DataFrame (same as session.sql).
         - Records best-effort query stats for run_results.json.
         """
-        estimated_bytes = self._apply_budget_guard(self._BUDGET_GUARD, sql)
-        if estimated_bytes is None and not self._is_budget_guard_active():
-            with suppress(Exception):
-                estimated_bytes = self._estimate_query_bytes(sql)
-        t0 = perf_counter()
-        df = self.session.sql(sql)
-        dt_ms = int((perf_counter() - t0) * 1000)
 
-        # We *don't* call df.count() here - that would execute the query again.
-        # For Snowflake we also don't cheaply access bytes/rows here; the cost
-        # guard already did a dry-run EXPLAIN if FF_SF_MAX_BYTES is set.
-        self._record_query_stats(
-            QueryStats(
-                bytes_processed=estimated_bytes,
-                rows=None,
-                duration_ms=dt_ms,
-            )
+        def _exec() -> SNDF:
+            return self.session.sql(sql)
+
+        return run_sql_with_budget(
+            self,
+            sql,
+            guard=self._BUDGET_GUARD,
+            exec_fn=_exec,
+            estimate_fn=self._estimate_query_bytes,
         )
-        return df
+
+    def _exec_many(self, sql: str) -> None:
+        """
+        Execute multiple SQL statements separated by ';' on the same connection.
+        Snowflake normally accepts one statement per execute(), so we split here.
+        """
+        for stmt in (part.strip() for part in sql.split(";")):
+            if not stmt:
+                continue
+            self._execute_sql(stmt).collect()
 
     # ---------- Helpers ----------
     def _q(self, s: str) -> str:
@@ -700,6 +704,95 @@ WHERE
   AND t.{vf} = r.{vf}
 """
         self._execute_sql(delete_sql).collect()
+
+    def execute_hook_sql(self, sql: str) -> None:
+        """
+        Execute one SQL statement for pre/post/on_run hooks.
+        """
+        self._exec_many(sql)
+
+    # ---- Unit-test helpers -----------------------------------------------
+
+    def utest_read_relation(self, relation: str) -> pd.DataFrame:
+        """
+        Read a relation into a pandas DataFrame for unit-test assertions.
+
+        We use Snowpark to read the table and convert to pandas,
+        normalizing column names to lowercase to match _read_relation.
+        """
+        df = self.session.table(self._qualified(relation))
+        # Mirror _read_relation: present lowercase schema to the test layer
+        lowered = [c.lower() for c in df.schema.names]
+        df = df.toDF(*lowered)
+
+        to_pandas = getattr(df, "to_pandas", None)
+
+        pdf: pd.DataFrame
+        if callable(to_pandas):
+            pdf = cast(pd.DataFrame, to_pandas())
+        else:
+            rows = df.collect()
+            records = [r.asDict() for r in rows]
+            pdf = pd.DataFrame.from_records(records)
+
+        # Return a new DF with lowercase columns (no attribute assignment)
+        return pdf.rename(columns=lambda c: str(c).lower())
+
+    def utest_load_relation_from_rows(self, relation: str, rows: list[dict]) -> None:
+        """
+        Load rows into a Snowflake table for unit tests (replace if exists).
+
+        We build a Snowpark DataFrame from the Python rows and overwrite the
+        target table using save_as_table().
+        """
+        # Best-effort: if rows are empty, create an empty table with no rows.
+        # We assume at least one row in normal test usage so we can infer schema.
+        if not rows:
+            # Without any rows we don't know the schema; create a trivial
+            # single-column table to surface the situation clearly.
+            tmp_df = self.session.create_dataframe([[None]], schema=["__empty__"])
+            tmp_df.write.save_as_table(self._qualified(relation), mode="overwrite")
+            return
+
+        # Infer column order from the first row
+        first = rows[0]
+        columns = list(first.keys())
+
+        # Normalize data to a list of lists in a fixed column order
+        data = [[row.get(col) for col in columns] for row in rows]
+
+        df = self.session.create_dataframe(data, schema=columns)
+
+        # Store with uppercase column names in Snowflake (conventional)
+        upper_cols = [c.upper() for c in columns]
+        if columns != upper_cols:
+            df = df.toDF(*upper_cols)
+
+        # Overwrite the target table
+        df.write.save_as_table(self._qualified(relation), mode="overwrite")
+
+    def utest_clean_target(self, relation: str) -> None:
+        """
+        For unit tests: drop any table or view with this name in the configured
+        database/schema.
+
+        We:
+          - try DROP VIEW IF EXISTS DB.SCHEMA.REL
+          - try DROP TABLE IF EXISTS DB.SCHEMA.REL
+
+        and ignore "not a view/table" style errors so it doesn't matter what
+        kind of object is currently there - after this, nothing with that name
+        should remain (best-effort).
+        """
+        qualified = self._qualified(relation)
+
+        # Drop view first; ignore errors if it's actually a table or doesn't exist.
+        with suppress(Exception):
+            self.session.sql(f"DROP VIEW IF EXISTS {qualified}").collect()
+
+        # Then drop table; ignore errors if it's actually a view or doesn't exist.
+        with suppress(Exception):
+            self.session.sql(f"DROP TABLE IF EXISTS {qualified}").collect()
 
 
 # ────────────────────────── local testing shim ───────────────────────────

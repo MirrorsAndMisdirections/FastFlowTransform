@@ -1,11 +1,9 @@
 # src/fastflowtransform/utest.py
-from __future__ import annotations
-
+import datetime
 import difflib
 import hashlib
 import json
 import os
-import uuid
 from collections.abc import Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -14,7 +12,7 @@ from typing import Any, cast
 
 import pandas as pd
 import yaml
-from sqlalchemy import text
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from fastflowtransform.cache import FingerprintCache, can_skip_node
 from fastflowtransform.fingerprint import (
@@ -31,38 +29,102 @@ from .core import REGISTRY, Node, relation_for
 # ---------- Specifications ----------
 
 
-@dataclass
-class UnitCase:
+class UnitInput(BaseModel):
+    """Single relation input: either inline rows or a CSV file."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rows: list[dict[str, Any]] | None = None
+    csv: str | None = None
+
+
+class UnitExpect(BaseModel):
+    """
+    Expected result configuration for a unit-test case.
+
+    Extra keys are forbidden so YAML specs are tightly validated.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    relation: str | None = None
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    order_by: list[str] | None = None
+    any_order: bool = False
+    approx: dict[str, float] | None = None
+    ignore_columns: list[str] | None = None
+    subset: bool = False
+
+
+class UnitDefaults(BaseModel):
+    """Defaults that apply to all cases in a spec unless overridden."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    inputs: dict[str, UnitInput] = Field(default_factory=dict)
+    expect: UnitExpect = Field(default_factory=UnitExpect)
+
+
+class UnitCase(BaseModel):
+    """A single unit-test case within a spec."""
+
+    model_config = ConfigDict(extra="forbid")
+
     name: str
-    inputs: dict[str, dict]  # rel -> {rows|csv}
-    expect: dict  # {relation?, rows?, order_by?, any_order?, approx?, ignore_columns?, subset?}
+    inputs: dict[str, UnitInput] = Field(default_factory=dict)
+    expect: UnitExpect = Field(default_factory=UnitExpect)
 
 
-@dataclass
-class UnitSpec:
+class UnitSpec(BaseModel):
+    """
+    Top-level unit-test specification loaded from YAML.
+
+    `path` and `project_dir` are runtime-only and are not populated from YAML
+    (we set them in discovery).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     model: str
-    engine: str | None
-    defaults: dict
-    cases: list[UnitCase]
-    path: Path
-    project_dir: Path
+    engine: str | None = None
+    defaults: UnitDefaults = Field(default_factory=UnitDefaults)
+    cases: list[UnitCase] = Field(default_factory=list)
 
+    path: Path | None = Field(default=None, exclude=True)
+    project_dir: Path | None = Field(default=None, exclude=True)
 
-# ---------- Discovery & Defaults ----------
+    # ---- defaults merging helpers -------------------------------------
+    def _merge_expect(self, case_expect: UnitExpect) -> UnitExpect:
+        """
+        Merge spec-level default.expect with case.expect.
 
+        Only fields explicitly set on the case override the defaults.
+        """
+        base = self.defaults.expect.model_dump()
+        override = case_expect
 
-def _deep_merge(base: Any, override: Any) -> Any:
-    """
-    Recursive merge for dicts. Lists/scalars are replaced entirely.
-    (Perfectly adequate for our DSL.)
-    """
-    if isinstance(base, dict) and isinstance(override, dict):
-        out = dict(base)
-        for k, v in override.items():
-            out[k] = _deep_merge(out.get(k), v)
-        return out
-    # Fallback: replace (lists and scalars included)
-    return override if override is not None else base
+        for field_name in override.model_fields_set:
+            base[field_name] = getattr(override, field_name)
+
+        return UnitExpect(**base)
+
+    def _merge_inputs(self, case_inputs: dict[str, UnitInput]) -> dict[str, UnitInput]:
+        """
+        Merge spec-level default.inputs with case.inputs (case wins per relation).
+        """
+        merged: dict[str, UnitInput] = dict(self.defaults.inputs)
+        merged.update(case_inputs or {})
+        return merged
+
+    def merged_case(self, case: UnitCase) -> UnitCase:
+        """
+        Return a new UnitCase where defaults have been applied (inputs + expect).
+        """
+        return UnitCase(
+            name=case.name,
+            inputs=self._merge_inputs(case.inputs),
+            expect=self._merge_expect(case.expect),
+        )
 
 
 def discover_unit_specs(
@@ -70,33 +132,25 @@ def discover_unit_specs(
 ) -> list[UnitSpec]:
     files = [Path(path)] if path else list((project_dir / "tests" / "unit").glob("*.yml"))
     specs: list[UnitSpec] = []
+
     for f in files:
-        data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
-        model = data.get("model")
-        if not model:
+        raw = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+        if not raw:
             continue
-        if only_model and model != only_model:
+
+        try:
+            spec = UnitSpec.model_validate(raw)
+        except ValidationError as exc:
+            raise ValueError(f"Invalid unit-test spec {f}: {exc}") from exc
+
+        if only_model and spec.model != only_model:
             continue
-        defaults = data.get("defaults", {}) or {}
-        engine = data.get("engine")
-        cases_raw = data.get("cases", []) or []
-        cases: list[UnitCase] = []
-        for c in cases_raw:
-            base = {"inputs": defaults.get("inputs", {}), "expect": defaults.get("expect", {})}
-            merged = _deep_merge(
-                base, {"inputs": c.get("inputs", {}), "expect": c.get("expect", {})}
-            )
-            cases.append(UnitCase(name=c["name"], inputs=merged["inputs"], expect=merged["expect"]))
-        specs.append(
-            UnitSpec(
-                model=model,
-                engine=engine,
-                defaults=defaults,
-                cases=cases,
-                path=f,
-                project_dir=project_dir.resolve(),
-            )
-        )
+
+        # Attach runtime fields
+        spec.path = f
+        spec.project_dir = project_dir.resolve()
+        specs.append(spec)
+
     return specs
 
 
@@ -104,27 +158,15 @@ def discover_unit_specs(
 
 
 def _load_relation_from_rows(executor: Any, rel: str, rows: list[dict]) -> None:
-    df = pd.DataFrame(rows)
-    if hasattr(executor, "con"):  # DuckDB
-        # unique temp name per call to avoid clashes under parallel runs
-        tmp_name = f"_ff_unit_tmp_{uuid.uuid4().hex[:12]}"
-        executor.con.register(tmp_name, df)
-        try:
-            executor.con.execute(f'create or replace table "{rel}" as select * from {tmp_name}')
-        finally:
-            # DuckDB >= 0.8: unregister exists; otherwise drop the view fallback
-            try:
-                executor.con.unregister(tmp_name)
-            except Exception:
-                executor.con.execute(f"drop view if exists {tmp_name}")
-        return
-    if hasattr(executor, "engine"):  # Postgres
-        schema = getattr(executor, "schema", None)
-        df.to_sql(
-            rel, executor.engine, if_exists="replace", index=False, schema=schema, method="multi"
+    """
+    Delegate loading test-input rows to the executor's utest helper.
+    """
+    if not hasattr(executor, "utest_load_relation_from_rows"):
+        raise RuntimeError(
+            f"Unit tests: executor of type {type(executor).__name__} "
+            "does not implement utest_load_relation_from_rows()."
         )
-        return
-    raise RuntimeError("Unit tests: unsupported executor backend")
+    executor.utest_load_relation_from_rows(rel, rows)
 
 
 def _load_relation_from_csv(executor: Any, rel: str, csv_path: Path) -> None:
@@ -133,27 +175,28 @@ def _load_relation_from_csv(executor: Any, rel: str, csv_path: Path) -> None:
 
 
 def _read_result(executor: Any, rel: str) -> pd.DataFrame:
-    if hasattr(executor, "con"):  # DuckDB
-        return executor.con.table(rel).df()
-    if hasattr(executor, "engine"):  # Postgres
-        schema = getattr(executor, "schema", None)
-        qualified = f'"{schema}"."{rel}"' if schema else f'"{rel}"'
-
-        with executor.engine.begin() as conn:
-            return pd.read_sql_query(text(f"select * from {qualified}"), conn)
-    raise RuntimeError("Unit tests: unsupported executor backend for reading results")
+    """
+    Delegate reading result relation to the executor's utest helper.
+    """
+    if not hasattr(executor, "utest_read_relation"):
+        raise RuntimeError(
+            f"Unit tests: executor of type {type(executor).__name__} "
+            "does not implement utest_read_relation()."
+        )
+    return executor.utest_read_relation(rel)
 
 
 def _project_root_for_spec(spec: UnitSpec) -> Path:
-    # bevorzugt Registry
     if getattr(REGISTRY, "project_dir", None):
         return Path(REGISTRY.get_project_dir()).resolve()
-    # heuristisch: nach oben laufen, bis 'models/' existiert
+    if spec.path is None:
+        proj = spec.project_dir
+        return proj.resolve() if isinstance(proj, Path) else Path.cwd()
     p = spec.path.resolve()
     for parent in [p.parent, *list(p.parents)]:
         if (parent / "models").is_dir():
             return parent
-    return spec.path.parent  # letzter Fallback
+    return spec.path.parent
 
 
 # ---------- Cache and Fingerprint Helpers ----------
@@ -236,57 +279,33 @@ def _resolve_csv_path(spec: Any, csv_val: str) -> Path:
     return (candidates[0] if candidates else (Path.cwd() / p)).resolve()
 
 
-def _extract_defaults_inputs(spec: Any) -> dict[str, Any]:
-    """Return defaults.inputs as dict or {}. Works for dict, namespace/dataclass, mapping-like."""
-    defaults = getattr(spec, "defaults", None)
-
-    # Case 1: dict / Mapping
-    if isinstance(defaults, Mapping):
-        val = cast(Mapping[str, Any], defaults).get("inputs", {})
-        return val if isinstance(val, dict) else {}
-
-    if defaults is None:
-        return {}
-
-    # Case 2: object with attribute 'inputs' (e.g. SimpleNamespace / dataclass)
-    val = getattr(defaults, "inputs", None)
-    if isinstance(val, dict):
-        return val
-
-    # Case 3: mapping-like object with get()
-    get = getattr(defaults, "get", None)
-    if callable(get):
-        try:
-            val = get("inputs")
-            return val if isinstance(val, dict) else {}
-        except Exception:
-            return {}
-
-    return {}
-
-
-def _fingerprint_case_inputs(spec: Any, case: Any) -> str:
+def _fingerprint_case_inputs(spec: UnitSpec, case: UnitCase) -> str:
     """
     Compute a deterministic fingerprint of the EFFECTIVE inputs for a case.
     Merges spec.defaults.inputs and case.inputs (case overrides), then:
       - For rows: include normalized rows.
       - For csv: include the resolved path AND its file content digest if available.
     """
-    # Gather defaults.inputs robustly
-    defaults_inputs = _extract_defaults_inputs(spec)
-
-    case_inputs = getattr(case, "inputs", None) or {}
-
-    effective_inputs = _deep_merge(defaults_inputs, case_inputs)
-
     norm: dict[str, Any] = {}
-    for rel, cfg in (effective_inputs or {}).items():
-        item = {}
-        if isinstance(cfg, dict):
-            # rows
+    for rel, cfg in (case.inputs or {}).items():
+        item: dict[str, Any] = {}
+
+        # Pydantic model from spec/case
+        if isinstance(cfg, UnitInput):
+            if cfg.rows is not None:
+                item["rows"] = _normalize_for_hash(cfg.rows)
+            if cfg.csv:
+                csv_path = _resolve_csv_path(spec, cfg.csv)
+                item["csv_path"] = csv_path.as_posix()
+                file_hash = _digest_file(csv_path)
+                if file_hash:
+                    item["csv_sha256"] = file_hash
+                else:
+                    item.setdefault("csv_unreadable", True)
+        # Defensive fallback: mapping-like config
+        elif isinstance(cfg, Mapping):
             if "rows" in cfg:
                 item["rows"] = _normalize_for_hash(cfg["rows"])
-            # csv
             if "csv" in cfg and isinstance(cfg["csv"], str):
                 csv_path = _resolve_csv_path(spec, cfg["csv"])
                 item["csv_path"] = csv_path.as_posix()
@@ -294,7 +313,6 @@ def _fingerprint_case_inputs(spec: Any, case: Any) -> str:
                 if file_hash:
                     item["csv_sha256"] = file_hash
                 else:
-                    # Fallback: include path string only if unreadable
                     item.setdefault("csv_unreadable", True)
         else:
             # Unknown shape: include normalized raw value
@@ -444,14 +462,72 @@ def _rows_as_tuples(df: pd.DataFrame, key_cols: Iterable[str]) -> list[tuple]:
     return [tuple(df[c].iloc[i] if c in df.columns else None for c in key_cols) for i in idx_range]
 
 
+def _normalize_cell_for_compare(v: Any) -> Any:
+    """Normalize individual cell values so that semantically equal values compare equal."""
+    # Treat NaNs / None uniformly
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "__NA__"
+
+    # pandas.Timestamp
+    if isinstance(v, pd.Timestamp):
+        # to_pydatetime() → datetime, then .date() → date
+        return v.to_pydatetime().date().isoformat()
+
+    # datetime.datetime
+    if isinstance(v, datetime.datetime):
+        return v.date().isoformat()
+
+    # datetime.date (but not datetime.datetime, already handled above)
+    if isinstance(v, datetime.date):
+        return v.isoformat()
+
+    return v
+
+
+def _normalize_df_for_compare(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert a DataFrame to a comparison-friendly shape:
+      - normalize each cell
+      - resulting dtypes will usually be 'object', so int32 vs int64 etc. no longer matter
+    """
+    # Avoid DataFrame.applymap() to keep Pylance happy:
+    # for each column (Series), map every value through _normalize_cell_for_compare
+    return df.apply(lambda col: col.map(_normalize_cell_for_compare))
+
+
 def _assert_exact_equal(actual_df: pd.DataFrame, exp: pd.DataFrame) -> None:
-    A = actual_df[exp.columns].fillna("__NA__")
-    E = exp.fillna("__NA__")
-    if A.equals(E):
+    # Align columns first
+    A = actual_df[exp.columns]
+    E = exp
+
+    # ---- Make comparison *row-order insensitive* by default ----
+    sort_cols = list(E.columns)
+    A = A.sort_values(sort_cols).reset_index(drop=True)
+    E = E.sort_values(sort_cols).reset_index(drop=True)
+
+    # Normalize both sides
+    A_norm = _normalize_df_for_compare(A)
+    E_norm = _normalize_df_for_compare(E)
+
+    if A_norm.equals(E_norm):
         return
 
-    a_csv = A.to_csv(index=False)
-    e_csv = E.to_csv(index=False)
+    # Helpful debug: show dtypes *after* normalization and indices
+    debug = [
+        "Rows differ but CSV output is identical or deceptively similar.",
+        f"Actual index:   {list(A_norm.index)}",
+        f"Expected index: {list(E_norm.index)}",
+        "",
+        "Actual dtypes:",
+        str(A_norm.dtypes),
+        "",
+        "Expected dtypes:",
+        str(E_norm.dtypes),
+    ]
+    debug_msg = "\n".join(debug)
+
+    a_csv = A_norm.to_csv(index=False)
+    e_csv = E_norm.to_csv(index=False)
     diff = "\n".join(
         difflib.unified_diff(
             e_csv.splitlines(),
@@ -461,7 +537,7 @@ def _assert_exact_equal(actual_df: pd.DataFrame, exp: pd.DataFrame) -> None:
             lineterm="",
         )
     )
-    raise UnitAssertionFailure(f"Rows differ:\n{diff}")
+    raise UnitAssertionFailure(f"{debug_msg}\n\nDiff:\n{diff}")
 
 
 # ---------- Runner ----------
@@ -497,6 +573,12 @@ def _normalize_cache_mode(cache_mode: str | Any) -> str:
 
 
 def _detect_engine_name(executor: Any) -> str:
+    # Prefer explicit engine_name on BaseExecutor subclasses
+    name = getattr(executor, "engine_name", None)
+    if isinstance(name, str) and name:
+        return name
+
+    # Fallback heuristics for non-BaseExecutor usage
     if hasattr(executor, "con"):
         return "duckdb"
     if hasattr(executor, "engine"):
@@ -631,13 +713,19 @@ def run_unit_specs(
     )
 
     for spec in specs:
+        if spec.engine and spec.engine != engine_name:
+            continue
+
         node = REGISTRY.nodes.get(spec.model)
         if not node:
             print(f"⚠️  Model '{spec.model}' not found (in {spec.path})")
             ctx.failures += 1
             continue
 
-        for case in spec.cases:
+        for raw_case in spec.cases:
+            # Apply spec.defaults to each case (merged view)
+            case = spec.merged_case(raw_case)
+
             if only_case and case.name != only_case:
                 continue
             print(f"→ {spec.model} :: {case.name}")
@@ -648,16 +736,35 @@ def run_unit_specs(
 
             cand_fp = _fingerprint_case(node, spec, case, ctx)
 
+            before_failures = ctx.failures
             ctx.failures += _load_inputs_for_case(executor, spec, case, node)
+
+            # If any input failed to load, skip execution & assertion for this case.
+            if ctx.failures > before_failures:
+                print("   ⚠️ skipping execution due to input load failure")
+                continue
 
             if _maybe_skip_by_cache(node, cand_fp, ctx):
                 _read_and_assert(spec, case, ctx)
+                _cleanup_inputs_for_case(executor, case)
                 continue
 
+            target_rel_cfg = getattr(case, "expect", None)
+            if isinstance(target_rel_cfg, UnitExpect):
+                target_rel = target_rel_cfg.relation or relation_for(spec.model)
+            elif isinstance(target_rel_cfg, Mapping):
+                target_rel = target_rel_cfg.get("relation") or relation_for(spec.model)
+            else:
+                target_rel = relation_for(spec.model)
+
+            _reset_utest_relation(executor, target_rel)
+
             if not _execute_and_update_cache(node, cand_fp, ctx):
+                _cleanup_inputs_for_case(executor, case)
                 continue
 
             _read_and_assert(spec, case, ctx)
+            _cleanup_inputs_for_case(executor, case)
 
     if ctx.cache and ctx.computed_fps and ctx.cache_mode == "rw":  # pragma: no cover
         ctx.cache.update_many(ctx.computed_fps)
@@ -667,6 +774,29 @@ def run_unit_specs(
 
 
 # ----------------- Helper -----------------
+
+
+def _reset_utest_relation(executor: Any, relation: str) -> None:
+    """
+    Best-effort: ask the executor to drop any view/table for this relation
+    before we (re)create it in a unit test.
+    """
+    reset = getattr(executor, "utest_clean_target", None)
+    if callable(reset):
+        with suppress(Exception):
+            reset(relation)
+
+
+def _cleanup_inputs_for_case(executor: Any, case: Any) -> None:
+    """
+    Best-effort: drop all input relations after a unit-test case finishes.
+
+    This prevents tables created as test fixtures (like 'users_clean' in mart tests)
+    from leaking into other specs (like the 'users_clean' model tests).
+    """
+    inputs = getattr(case, "inputs", None) or {}
+    for rel in inputs:
+        _reset_utest_relation(executor, rel)
 
 
 def _load_inputs_for_case(executor: Any, spec: Any, case: Any, node: Any) -> int:
@@ -684,10 +814,22 @@ def _load_inputs_for_case(executor: Any, spec: Any, case: Any, node: Any) -> int
 
     for rel, cfg in (case.inputs or {}).items():
         try:
-            if "rows" in cfg:
-                _load_relation_from_rows(executor, rel, cfg["rows"])
-            elif "csv" in cfg:
-                csv_path = _resolve_csv_path(spec, cfg["csv"])
+            _reset_utest_relation(executor, rel)
+
+            rows: list[dict] | None = None
+            csv_val: str | None = None
+
+            if isinstance(cfg, UnitInput):
+                rows = cfg.rows
+                csv_val = cfg.csv
+            elif isinstance(cfg, Mapping):
+                rows = cast(Mapping[str, Any], cfg).get("rows")
+                csv_val = cast(Mapping[str, Any], cfg).get("csv")
+
+            if rows is not None:
+                _load_relation_from_rows(executor, rel, rows)
+            elif csv_val:
+                csv_path = _resolve_csv_path(spec, csv_val)
                 _load_relation_from_csv(executor, rel, csv_path)
             else:
                 print(f"   ❌ invalid input for relation '{rel}'")
@@ -700,6 +842,14 @@ def _load_inputs_for_case(executor: Any, spec: Any, case: Any, node: Any) -> int
 
 
 def _execute_node(executor: Any, node: Any, jenv: Any) -> tuple[bool, str | None]:
+    # Best-effort cleanup so view<->table flips don't fail in DuckDB/Postgres.
+    try:
+        rel = relation_for(node.name)
+        _reset_utest_relation(executor, rel)
+    except Exception:
+        # Cleanup is best-effort; don't fail the test run on cleanup errors.
+        pass
+
     try:
         if getattr(node, "kind", None) == "sql":
             executor.run_sql(node, jenv)
@@ -711,7 +861,13 @@ def _execute_node(executor: Any, node: Any, jenv: Any) -> tuple[bool, str | None
 
 
 def _read_target_df(executor: Any, spec: Any, case: Any) -> tuple[bool, Any, str]:
-    target_rel = case.expect.get("relation") or relation_for(spec.model)
+    exp_cfg = getattr(case, "expect", None) or {}
+    if isinstance(exp_cfg, UnitExpect):
+        target_rel = exp_cfg.relation or relation_for(spec.model)
+    elif isinstance(exp_cfg, Mapping):
+        target_rel = exp_cfg.get("relation") or relation_for(spec.model)
+    else:
+        target_rel = relation_for(spec.model)
     try:
         df = _read_result(executor, target_rel)
         return True, df, target_rel
@@ -721,18 +877,41 @@ def _read_target_df(executor: Any, spec: Any, case: Any) -> tuple[bool, Any, str
 
 def _assert_expected_rows(df: Any, case: Any) -> tuple[bool, str | None]:
     try:
+        exp_cfg = getattr(case, "expect", None) or {}
+
+        if isinstance(exp_cfg, UnitExpect):
+            rows_cfg = exp_cfg.rows or []
+            order_by = exp_cfg.order_by
+            any_order = exp_cfg.any_order
+            approx = exp_cfg.approx
+            ignore_columns = exp_cfg.ignore_columns
+            subset = exp_cfg.subset
+        elif isinstance(exp_cfg, Mapping):
+            rows_cfg = exp_cfg.get("rows", [])
+            order_by = exp_cfg.get("order_by")
+            any_order = exp_cfg.get("any_order", False)
+            approx = exp_cfg.get("approx")
+            ignore_columns = exp_cfg.get("ignore_columns")
+            subset = exp_cfg.get("subset", False)
+        else:
+            rows_cfg = []
+            order_by = None
+            any_order = False
+            approx = None
+            ignore_columns = None
+            subset = False
+
         assert_rows_equal(
             df,
-            case.expect.get("rows", []),
-            order_by=case.expect.get("order_by"),
-            any_order=case.expect.get("any_order", False),
-            approx=case.expect.get("approx"),
-            ignore_columns=case.expect.get("ignore_columns"),
-            subset=case.expect.get("subset", False),
+            rows_cfg,
+            order_by=order_by,
+            any_order=any_order,
+            approx=approx,
+            ignore_columns=ignore_columns,
+            subset=subset,
         )
         return True, None
     except UnitAssertionFailure as e:
         return False, str(e)
     except AssertionError as e:
-        # Falls assert_rows_equal in manchen Pfaden nur AssertionError wirft
         return False, str(e)

@@ -1,7 +1,6 @@
 # fastflowtransform/executors/postgres.py
 import json
 from collections.abc import Iterable
-from contextlib import suppress
 from time import perf_counter
 from typing import Any
 
@@ -13,6 +12,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from fastflowtransform.core import Node, relation_for
 from fastflowtransform.errors import ModelExecutionError, ProfileConfigError
+from fastflowtransform.executors._budget_runner import run_sql_with_budget
 from fastflowtransform.executors._shims import SAConnShim
 from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.executors.budget import BudgetGuard
@@ -58,6 +58,51 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
         # ⇣ fastflowtransform.testing expects executor.con.execute("SQL")
         self.con = SAConnShim(self.engine, schema=self.schema)
 
+    def _execute_sql_core(
+        self,
+        sql: str,
+        *args: Any,
+        conn: Connection,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Lowest-level SQL executor:
+
+        - sets search_path
+        - executes the statement via given connection
+        - NO budget guard
+        - NO timing / stats
+
+        Used by both the high-level _execute_sql and maintenance helpers.
+        """
+        self._set_search_path(conn)
+        return conn.execute(text(sql), *args, **kwargs)
+
+    def _execute_sql_maintenance(
+        self,
+        sql: str,
+        *args: Any,
+        conn: Connection | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Utility/maintenance SQL:
+
+        - sets search_path
+        - NO budget guard
+        - NO stats
+
+        Intended for:
+          - utest cleanup
+          - ANALYZE
+          - DDL that shouldn't be budget-accounted
+        """
+        if conn is None:
+            with self.engine.begin() as local_conn:
+                return self._execute_sql_core(sql, *args, conn=local_conn, **kwargs)
+        else:
+            return self._execute_sql_core(sql, *args, conn=conn, **kwargs)
+
     def _execute_sql(
         self,
         sql: str,
@@ -75,41 +120,27 @@ class PostgresExecutor(BaseExecutor[pd.DataFrame]):
 
         Also records simple per-query stats for run_results.json.
         """
-        estimated_bytes = self._apply_budget_guard(self._BUDGET_GUARD, sql)
-        if estimated_bytes is None and not self._is_budget_guard_active():
-            with suppress(Exception):
-                estimated_bytes = self._estimate_query_bytes(sql)
-        t0 = perf_counter()
 
-        if conn is None:
-            # Standalone use: open our own transaction
-            with self.engine.begin() as local_conn:
-                self._set_search_path(local_conn)
-                result = local_conn.execute(text(sql), *args, **kwargs)
-        else:
-            # Reuse existing connection / transaction (e.g. in run_snapshot_sql)
-            self._set_search_path(conn)
-            result = conn.execute(text(sql), *args, **kwargs)
+        def _exec() -> Any:
+            if conn is None:
+                with self.engine.begin() as local_conn:
+                    return self._execute_sql_core(sql, *args, conn=local_conn, **kwargs)
+            return self._execute_sql_core(sql, *args, conn=conn, **kwargs)
 
-        dt_ms = int((perf_counter() - t0) * 1000)
-
-        # rows: best-effort from Result.rowcount (DML only; SELECT is often -1)
-        rows: int | None = None
-        try:
+        def _rows(result: Any) -> int | None:
             rc = getattr(result, "rowcount", None)
             if isinstance(rc, int) and rc >= 0:
-                rows = rc
-        except Exception:
-            rows = None
+                return rc
+            return None
 
-        self._record_query_stats(
-            QueryStats(
-                bytes_processed=estimated_bytes,
-                rows=rows,
-                duration_ms=dt_ms,
-            )
+        return run_sql_with_budget(
+            self,
+            sql,
+            guard=self._BUDGET_GUARD,
+            exec_fn=_exec,
+            rowcount_extractor=_rows,
+            estimate_fn=self._estimate_query_bytes,
         )
-        return result
 
     def _analyze_relations(
         self,
@@ -689,3 +720,132 @@ where
 """
         self._execute_sql(delete_sql)
         self._analyze_relations([relation])
+
+    def execute_hook_sql(self, sql: str) -> None:
+        """
+        Execute one or multiple SQL statements for pre/post/on_run hooks.
+
+        Accepts a string that may contain ';'-separated statements.
+        """
+        self._execute_sql(sql)
+
+    # ---- Unit-test helpers -------------------------------------------------
+
+    def utest_load_relation_from_rows(self, relation: str, rows: list[dict]) -> None:
+        """
+        Load rows into a Postgres table for unit tests (replace if exists),
+        without using pandas.to_sql.
+        """
+        qualified = self._qualified(relation)
+
+        if not rows:
+            # Ensure an empty table exists (corner case).
+            try:
+                with self.engine.begin() as conn:
+                    self._execute_sql_maintenance(
+                        f"DROP TABLE IF EXISTS {qualified} CASCADE",
+                        conn=conn,
+                    )
+                    self._execute_sql_maintenance(
+                        f"CREATE TABLE {qualified} ()",
+                        conn=conn,
+                    )
+            except SQLAlchemyError as e:
+                raise ModelExecutionError(
+                    node_name=f"utest::{relation}",
+                    relation=self._qualified(relation),
+                    message=str(e),
+                ) from e
+            return
+
+        first = rows[0]
+        if not isinstance(first, dict):
+            raise ModelExecutionError(
+                node_name=f"utest::{relation}",
+                relation=self._qualified(relation),
+                message=f"Expected list[dict] for rows, got {type(first).__name__}",
+            )
+
+        cols = list(first.keys())
+        col_list_sql = ", ".join(self._q_ident(c) for c in cols)
+        select_exprs = ", ".join(f":{c} AS {self._q_ident(c)}" for c in cols)
+        insert_values_sql = ", ".join(f":{c}" for c in cols)
+
+        try:
+            with self.engine.begin() as conn:
+                # Replace any existing table
+                self._execute_sql_maintenance(
+                    f"DROP TABLE IF EXISTS {qualified} CASCADE",
+                    conn=conn,
+                )
+
+                # Create table from first row
+                create_sql = f"CREATE TABLE {qualified} AS SELECT {select_exprs}"
+                self._execute_sql_maintenance(create_sql, first, conn=conn)
+
+                # Insert remaining rows
+                if len(rows) > 1:
+                    insert_sql = (
+                        f"INSERT INTO {qualified} ({col_list_sql}) VALUES ({insert_values_sql})"
+                    )
+                    for row in rows[1:]:
+                        self._execute_sql_maintenance(insert_sql, row, conn=conn)
+
+        except SQLAlchemyError as e:
+            raise ModelExecutionError(
+                node_name=f"utest::{relation}",
+                relation=self._qualified(relation),
+                message=str(e),
+            ) from e
+
+    def utest_read_relation(self, relation: str) -> pd.DataFrame:
+        """
+        Read a relation as a DataFrame for unit-test assertions.
+        """
+        qualified = self._qualified(relation)
+        with self.engine.begin() as conn:
+            self._set_search_path(conn)
+            return pd.read_sql_query(text(f"select * from {qualified}"), conn)
+
+    def utest_clean_target(self, relation: str) -> None:
+        """
+        For unit tests: drop any view or table with this name in the configured schema.
+
+        We avoid WrongObjectType by:
+          - querying information_schema for existing table/view with this name
+          - dropping only the matching kinds.
+        """
+        with self.engine.begin() as conn:
+            # Use the same search_path logic as the rest of the executor
+            self._set_search_path(conn)
+
+            # Decide which schema to inspect
+            cur_schema = conn.execute(text("select current_schema()")).scalar()
+            schema = self.schema or cur_schema
+
+            # Find objects named <relation> in that schema
+            info_sql = """
+                select kind, table_schema, table_name from (
+                  select 'table' as kind, table_schema, table_name
+                  from information_schema.tables
+                  where lower(table_schema) = lower(:schema)
+                    and lower(table_name) = lower(:rel)
+                  union all
+                  select 'view' as kind, table_schema, table_name
+                  from information_schema.views
+                  where lower(table_schema) = lower(:schema)
+                    and lower(table_name) = lower(:rel)
+                ) s
+                order by kind;
+            """
+            rows = conn.execute(
+                text(info_sql),
+                {"schema": schema, "rel": relation},
+            ).fetchall()
+
+            for kind, table_schema, table_name in rows:
+                qualified = f'"{table_schema}"."{table_name}"'
+                if kind == "view":
+                    conn.execute(text(f"DROP VIEW IF EXISTS {qualified} CASCADE"))
+                else:  # table
+                    conn.execute(text(f"DROP TABLE IF EXISTS {qualified} CASCADE"))

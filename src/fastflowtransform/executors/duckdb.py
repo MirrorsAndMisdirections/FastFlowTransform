@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
-from time import perf_counter
 from typing import Any, ClassVar
 
 import duckdb
@@ -15,9 +15,9 @@ from duckdb import CatalogException
 from jinja2 import Environment
 
 from fastflowtransform.core import Node, relation_for
+from fastflowtransform.executors._budget_runner import run_sql_with_budget
 from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.executors.budget import BudgetGuard
-from fastflowtransform.executors.query_stats import QueryStats
 from fastflowtransform.logging import echo
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
 from fastflowtransform.snapshots import resolve_snapshot_config
@@ -95,32 +95,24 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
         The cost guard may call _estimate_query_bytes(sql) before executing.
         This wrapper also records simple per-query stats for run_results.json.
         """
-        estimated_bytes = self._apply_budget_guard(self._BUDGET_GUARD, sql)
-        if estimated_bytes is None and not self._is_budget_guard_active():
-            with suppress(Exception):
-                estimated_bytes = self._estimate_query_bytes(sql)
-        t0 = perf_counter()
-        cursor = self.con.execute(sql, *args, **kwargs)
-        dt_ms = int((perf_counter() - t0) * 1000)
 
-        rows: int | None = None
-        try:
-            rc = getattr(cursor, "rowcount", None)
+        def _exec() -> duckdb.DuckDBPyConnection:
+            return self.con.execute(sql, *args, **kwargs)
+
+        def _rows(result: Any) -> int | None:
+            rc = getattr(result, "rowcount", None)
             if isinstance(rc, int) and rc >= 0:
-                rows = rc
-        except Exception:
-            rows = None
+                return rc
+            return None
 
-        # DuckDB doesn't expose bytes-scanned in a simple way yet → rely on the
-        # estimate we already collected or the best-effort fallback.
-        self._record_query_stats(
-            QueryStats(
-                bytes_processed=estimated_bytes,
-                rows=rows,
-                duration_ms=dt_ms,
-            )
+        return run_sql_with_budget(
+            self,
+            sql,
+            guard=self._BUDGET_GUARD,
+            exec_fn=_exec,
+            rowcount_extractor=_rows,
+            estimate_fn=self._estimate_query_bytes,
         )
-        return cursor
 
     # --- Cost estimation for the shared BudgetGuard -----------------
 
@@ -424,7 +416,6 @@ class DuckExecutor(BaseExecutor[pd.DataFrame]):
         Execute multiple SQL statements separated by ';' on the same connection.
         DuckDB normally accepts one statement per execute(), so we split here.
         """
-        # very simple splitter - good enough for what we emit in the executor
         for stmt in (part.strip() for part in sql.split(";")):
             if not stmt:
                 continue
@@ -845,3 +836,50 @@ where
   and t.{vf} = r.{vf};
 """
         self._execute_sql(delete_sql)
+
+    def execute_hook_sql(self, sql: str) -> None:
+        """
+        Execute one or multiple SQL statements for pre/post/on_run hooks.
+
+        Accepts a string that may contain ';'-separated statements.
+        """
+        self._exec_many(sql)
+
+        # ---- Unit-test helpers -------------------------------------------------
+
+    def utest_load_relation_from_rows(self, relation: str, rows: list[dict]) -> None:
+        """
+        Load rows into a DuckDB table for unit tests, fully qualified to
+        this executor's schema/catalog.
+        """
+        df = pd.DataFrame(rows)
+        tmp = f"_ff_utest_tmp_{uuid.uuid4().hex[:12]}"
+        self.con.register(tmp, df)
+        try:
+            target = self._qualified(relation)
+            self._execute_sql(f"create or replace table {target} as select * from {tmp}")
+        finally:
+            with suppress(Exception):
+                self.con.unregister(tmp)
+            # Fallback for older DuckDB where unregister might not exist
+            with suppress(Exception):
+                self._execute_sql(f'drop view if exists "{tmp}"')
+
+    def utest_read_relation(self, relation: str) -> pd.DataFrame:
+        """
+        Read a relation as a DataFrame for unit-test assertions.
+        """
+        target = self._qualified(relation, quoted=False)
+        return self.con.table(target).df()
+
+    def utest_clean_target(self, relation: str) -> None:
+        """
+        Drop any table/view with the given name in this schema/catalog.
+        Safe because utest uses its own DB/path.
+        """
+        target = self._qualified(relation)
+        # best-effort; ignore failures
+        with suppress(Exception):
+            self._execute_sql(f"drop view if exists {target}")
+        with suppress(Exception):
+            self._execute_sql(f"drop table if exists {target}")

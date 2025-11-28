@@ -1,4 +1,6 @@
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table'
+) }}
 
 select 
     id, 

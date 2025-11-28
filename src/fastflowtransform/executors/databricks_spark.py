@@ -9,11 +9,13 @@ from time import perf_counter
 from typing import Any, cast
 from urllib.parse import unquote, urlparse
 
+import pandas as pd
 from jinja2 import Environment
 
 from fastflowtransform import storage
 from fastflowtransform.core import REGISTRY, Node, relation_for
 from fastflowtransform.errors import ModelExecutionError
+from fastflowtransform.executors._budget_runner import run_sql_with_budget
 from fastflowtransform.executors._spark_imports import (
     get_spark_functions,
     get_spark_window,
@@ -433,28 +435,18 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
         - Returns a Spark DataFrame (same as spark.sql).
         - Records best-effort query stats for run_results.json.
         """
-        estimated_bytes = self._apply_budget_guard(self._BUDGET_GUARD, sql)
-        if estimated_bytes is None and not self._is_budget_guard_active():
-            with suppress(Exception):
-                estimated_bytes = self._spark_plan_bytes(sql)
-        t0 = perf_counter()
-        df = self.spark.sql(sql)
-        dt_ms = int((perf_counter() - t0) * 1000)
 
-        # Best-effort logical estimate
-        bytes_processed = (
-            estimated_bytes if estimated_bytes is not None else self._spark_plan_bytes(sql)
-        )
+        def _exec() -> SDF:
+            return self.spark.sql(sql)
 
-        # For Spark we don't attempt row counts without executing the job
-        self._record_query_stats(
-            QueryStats(
-                bytes_processed=bytes_processed,
-                rows=None,
-                duration_ms=dt_ms,
-            )
+        return run_sql_with_budget(
+            self,
+            sql,
+            guard=self._BUDGET_GUARD,
+            exec_fn=_exec,
+            estimate_fn=self._spark_plan_bytes,
+            post_estimate_fn=lambda _, __: self._spark_plan_bytes(sql),
         )
-        return df
 
     # ---------- Frame hooks (required) ----------
     def _read_relation(self, relation: str, node: Node, deps: Iterable[str]) -> SDF:
@@ -1241,6 +1233,70 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
             for handle in materialized:
                 with suppress(Exception):
                     handle.unpersist()
+
+    def execute_hook_sql(self, sql: str) -> None:
+        """
+        Entry point for hook SQL.
+
+        Accepts a string that may contain multiple ';'-separated statements.
+        `_RunEngine._execute_hook_sql` has already normalized away semicolons
+        in full-line comments, so naive splitting by ';' is acceptable here.
+        """
+        for stmt in (part.strip() for part in sql.split(";")):
+            if not stmt:
+                continue
+            # Reuse your existing single-statement executor
+            self._execute_sql(stmt)
+
+        # ---- Unit-test helpers -------------------------------------------------
+
+    def utest_load_relation_from_rows(self, relation: str, rows: list[dict]) -> None:
+        """
+        Load rows into a Spark table for unit tests (replace if exists).
+
+        We go via pandas → Spark so schema is inferred from the Python
+        data, then delegate to the same table-writing pipeline as the
+        normal engine (_save_df_as_table), so table_format / storage
+        options / catalogs are all respected.
+        """
+        pdf = pd.DataFrame(rows)
+        # Spark can infer schema from the pandas DataFrame, even for empty
+        # frames (it will just create an empty table with no rows).
+        sdf = self.spark.createDataFrame(pdf)
+        # Use the same path as normal model materialization so that
+        # Delta/Iceberg/etc. are handled consistently.
+        self._save_df_as_table(relation, sdf)
+
+    def utest_read_relation(self, relation: str) -> pd.DataFrame:
+        """
+        Read a relation as a pandas DataFrame for unit-test assertions.
+
+        The utest framework always compares on pandas, so we convert from
+        Spark DataFrame here.
+        """
+        physical = self._physical_identifier(relation)
+        sdf = self.spark.table(physical)
+        return sdf.toPandas()
+
+    def utest_clean_target(self, relation: str) -> None:
+        """
+        For unit tests: drop any view or table with this name.
+
+        We:
+          - try DROP VIEW IF EXISTS ...
+          - try DROP TABLE IF EXISTS ...
+        and ignore type-mismatch errors, so it doesn't matter whether a
+        table or a view currently exists under that name.
+        """
+        ident = self._sql_identifier(relation)
+
+        # Drop view first; ignore errors if it's actually a table or missing.
+        with suppress(Exception):
+            self._execute_sql(f"DROP VIEW IF EXISTS {ident}")
+
+        # Then drop table; ignore errors if it's actually a view or missing.
+        with suppress(Exception):
+            self._execute_sql(f"DROP TABLE IF EXISTS {ident}")
 
 
 # ────────────────────────── local helpers / shim ──────────────────────────

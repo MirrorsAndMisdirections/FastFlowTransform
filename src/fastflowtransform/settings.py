@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from copy import deepcopy
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 
@@ -184,6 +185,20 @@ def _render_profiles_template(text: str, project_dir: Path) -> str:
 
 
 # ---------- Resolver ----------
+
+
+def _deep_merge(base: Any, override: Any) -> Any:
+    """
+    Recursive merge for dicts. Lists/scalars are replaced entirely.
+    """
+    if isinstance(base, dict) and isinstance(override, dict):
+        out = dict(base)
+        for k, v in override.items():
+            out[k] = _deep_merge(out.get(k), v)
+        return out
+    return override if override is not None else base
+
+
 def resolve_profile(project_dir: Path, env_name: str, env: EnvSettings) -> Profile:
     profiles: dict[str, dict[str, Any]] = load_profiles(project_dir)
     requested = profiles.get(env_name)
@@ -203,6 +218,110 @@ def resolve_profile(project_dir: Path, env_name: str, env: EnvSettings) -> Profi
     prof: Profile = TypeAdapter(Profile).validate_python(raw)
     _sanity_check_profile(prof)
     return prof
+
+
+def resolve_utest_profile(project_dir: Path, base_env_name: str, env: EnvSettings) -> Profile:
+    """
+    Resolve the *utest* profile for a given base env, e.g.
+      base_env_name = "dev_duckdb"  -> profile "dev_duckdb_utest"
+
+    Requirements:
+      - base profile (base_env_name) is resolved with env overrides (FF_*).
+      - utest profile (base_env_name + "_utest") is resolved from profiles.yml
+        WITHOUT env overrides so it cannot accidentally point at the same DB/schema.
+      - utest profile MUST exist and MUST be isolated from the base one.
+    """
+    profiles: dict[str, dict[str, Any]] = load_profiles(project_dir)
+
+    # 1) Resolve the *base* profile normally (with env overrides).
+    base_prof: Profile = resolve_profile(project_dir, base_env_name, env)
+
+    # 2) Load the raw utest profile from YAML (no env overrides here).
+    utest_env_name = f"{base_env_name}_utest"
+    raw_utest = profiles.get(utest_env_name)
+
+    if raw_utest is None:
+        raise ProfileConfigError(
+            f"Unit-test profile '{utest_env_name}' not found in profiles.yml. "
+            f"Define it explicitly to run 'fft utest' for env '{base_env_name}'."
+        )
+
+    # Work on a copy and DO NOT call _apply_env_overrides().
+    raw_utest_copy = deepcopy(raw_utest)
+
+    # --- Inherit SAFE connection fields from base profile ----------------
+    # The idea:
+    #   - we inherit things that *do not define isolation*
+    #     (e.g. DSN, project, account, warehouse, etc.)
+    #   - but we DO NOT inherit things like schema/dataset/path that we want to be different.
+    eng = base_prof.engine
+
+    if eng == "postgres":
+        base_pg = cast(PostgresProfile, base_prof)
+        base_dsn = base_pg.postgres.dsn
+        if base_dsn:
+            pg_cfg = raw_utest_copy.setdefault("postgres", {})
+            pg_cfg.setdefault("dsn", base_dsn)
+
+    elif eng == "bigquery":
+        base_bq = cast(BigQueryProfile, base_prof)
+        bq_cfg = raw_utest_copy.setdefault("bigquery", {})
+
+        # Safe to inherit: project & location & allow_create_dataset
+        if base_bq.bigquery.project is not None:
+            bq_cfg.setdefault("project", base_bq.bigquery.project)
+        if base_bq.bigquery.location is not None:
+            bq_cfg.setdefault("location", base_bq.bigquery.location)
+        # dataset is the isolation dimension → MUST be set explicitly in the utest profile
+        # and will be checked by _assert_utest_isolated (in CLI/bootstrap).
+        if "allow_create_dataset" in base_bq.bigquery.__dict__:
+            bq_cfg.setdefault("allow_create_dataset", base_bq.bigquery.allow_create_dataset)
+
+    elif eng == "duckdb":
+        base_ddb = cast(DuckDBProfile, base_prof)
+        ddb_cfg = raw_utest_copy.setdefault("duckdb", {})
+        # Safe-ish to inherit catalog; we do NOT inherit path (isolation) or schema
+        if base_ddb.duckdb.catalog is not None:
+            ddb_cfg.setdefault("catalog", base_ddb.duckdb.catalog)
+        # path & db_schema must be explicitly configured for the utest profile.
+
+    elif eng == "databricks_spark":
+        base_dbr = cast(DatabricksSparkProfile, base_prof)
+        dbr_cfg = raw_utest_copy.setdefault("databricks_spark", {})
+        # Safe to inherit connectivity bits:
+        if base_dbr.databricks_spark.master is not None:
+            dbr_cfg.setdefault("master", base_dbr.databricks_spark.master)
+        if base_dbr.databricks_spark.app_name is not None:
+            dbr_cfg.setdefault("app_name", base_dbr.databricks_spark.app_name)
+        if base_dbr.databricks_spark.warehouse_dir is not None:
+            dbr_cfg.setdefault("warehouse_dir", base_dbr.databricks_spark.warehouse_dir)
+        if base_dbr.databricks_spark.catalog is not None:
+            dbr_cfg.setdefault("catalog", base_dbr.databricks_spark.catalog)
+        # database is the isolation dimension → must differ and will be checked elsewhere.
+
+    elif eng == "snowflake_snowpark":
+        base_sf = cast(SnowflakeSnowparkProfile, base_prof)
+        sf_cfg = raw_utest_copy.setdefault("snowflake_snowpark", {})
+        # Safe to inherit: account/user/password/warehouse/database/role/allow_create_schema
+        for attr in (
+            "account",
+            "user",
+            "password",
+            "warehouse",
+            "database",
+            "role",
+            "allow_create_schema",
+        ):
+            val = getattr(base_sf.snowflake_snowpark, attr, None)
+            if val is not None:
+                sf_cfg.setdefault(attr, val)
+        # db_schema (schema) must be explicitly set for the utest profile.
+
+    # 3) Validate the resulting utest profile
+    utest_prof: Profile = TypeAdapter(Profile).validate_python(raw_utest_copy)
+    _sanity_check_profile(utest_prof)
+
+    return utest_prof
 
 
 # ---------- ENV-Overrides ----------
@@ -349,3 +468,67 @@ def _check_snowflake_snowpark(prof: SnowflakeSnowparkProfile) -> None:
             f"Snowflake profile missing: {miss}. "
             "Hint: set profiles.yml → snowflake_snowpark.* or env FF_SF_*."
         )
+
+
+def _assert_utest_isolated(base: Profile, utest: Profile, base_env_name: str) -> None:
+    """
+    Ensure the utest profile does NOT share the same DB/path/schema with the base profile.
+    If it does, raise ProfileConfigError and prevent utest from running.
+    """
+    # Different engines → nothing to compare here
+    if base.engine != utest.engine:
+        return
+
+    eng = base.engine
+
+    if eng == "duckdb":
+        base_path = cast(DuckDBProfile, base).duckdb.path
+        utest_path = cast(DuckDBProfile, utest).duckdb.path
+        if base_path and utest_path and base_path == utest_path:
+            raise ProfileConfigError(
+                f"Unit-test profile '{base_env_name}_utest' must NOT reuse the same DuckDB path "
+                f"('{base_path}') as profile '{base_env_name}'. "
+                "Configure a separate file/path (e.g. '.local/basic_demo_utest.duckdb' "
+                "or ':memory:')."
+            )
+
+    elif eng == "postgres":
+        base_schema = cast(PostgresProfile, base).postgres.db_schema
+        utest_schema = cast(PostgresProfile, utest).postgres.db_schema
+        if base_schema == utest_schema:
+            raise ProfileConfigError(
+                f"Unit-test profile '{base_env_name}_utest' must NOT reuse the same Postgres "
+                f"schema ('{base_schema}') as profile '{base_env_name}'. "
+                "Use a dedicated schema for unit tests."
+            )
+
+    elif eng == "bigquery":
+        base_b = cast(BigQueryProfile, base).bigquery
+        utest_b = cast(BigQueryProfile, utest).bigquery
+        if base_b.project == utest_b.project and base_b.dataset == utest_b.dataset:
+            raise ProfileConfigError(
+                f"Unit-test profile '{base_env_name}_utest' must NOT reuse the same BigQuery "
+                f"project/dataset ('{base_b.project}.{base_b.dataset}') "
+                f"as profile '{base_env_name}'. "
+                "Use a separate dataset for unit tests."
+            )
+
+    elif eng == "databricks_spark":
+        base_db = cast(DatabricksSparkProfile, base).databricks_spark.database
+        utest_db = cast(DatabricksSparkProfile, utest).databricks_spark.database
+        if base_db and utest_db and base_db == utest_db:
+            raise ProfileConfigError(
+                f"Unit-test profile '{base_env_name}_utest' must NOT reuse the same Databricks "
+                f"database ('{base_db}') as profile '{base_env_name}'. "
+                "Use a dedicated database for unit tests."
+            )
+
+    elif eng == "snowflake_snowpark":
+        base_schema = cast(SnowflakeSnowparkProfile, base).snowflake_snowpark.db_schema
+        utest_schema = cast(SnowflakeSnowparkProfile, utest).snowflake_snowpark.db_schema
+        if base_schema == utest_schema:
+            raise ProfileConfigError(
+                f"Unit-test profile '{base_env_name}_utest' must NOT reuse the same Snowflake "
+                f"schema ('{base_schema}') as profile '{base_env_name}'. "
+                "Use a dedicated schema for unit tests."
+            )
