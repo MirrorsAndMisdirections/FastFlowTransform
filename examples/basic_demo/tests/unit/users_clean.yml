@@ -1,0 +1,25 @@
+model: users_clean.ff
+
+defaults:
+  inputs:
+    seed_users:
+      rows:
+        - {id: 1, email: "ANNA@Example.COM", signup_date: "2024-01-05"}
+        - {id: 2, email: "bob@Example.net",  signup_date: "2024-02-11"}
+  expect:
+    relation: users_clean
+    order_by: [user_id]
+
+cases:
+  - name: lowercases_email_and_extracts_domain
+    expect:
+      order_by: ["user_id"]
+      rows:
+        - {user_id: 1,
+           email: "anna@example.com",
+           email_domain: "example.com",
+           signup_date: "2024-01-05"}
+        - {user_id: 2,
+           email: "bob@example.net",
+           email_domain: "example.net",
+           signup_date: "2024-02-11"}

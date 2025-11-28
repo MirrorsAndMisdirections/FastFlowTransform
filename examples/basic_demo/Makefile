@@ -91,6 +91,9 @@ run:
 test:
 	env $(BASE_ENV) $(UV) run fft test "$(PROJECT)" --env $(PROFILE_ENV) $(SELECT_FLAGS)
 
+utest:
+	env $(BASE_ENV) $(UV) run fft utest "$(PROJECT)" --env $(PROFILE_ENV)
+
 dag:
 	env $(RUN_ENV) $(UV) run fft dag "$(PROJECT)" --env $(PROFILE_ENV) $(SELECT_FLAGS) --html
 
@@ -117,5 +120,6 @@ demo: clean
 	+$(MAKE) run ENGINE=$(ENGINE)
 	+$(MAKE) dag ENGINE=$(ENGINE)
 	+$(MAKE) test ENGINE=$(ENGINE)
+	+$(MAKE) utest ENGINE=$(ENGINE)
 	+$(MAKE) artifacts
 	@echo "✅ Demo complete."

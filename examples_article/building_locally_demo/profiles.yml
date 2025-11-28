@@ -4,13 +4,25 @@ dev_duckdb:
   duckdb:
     path: ".local/dev.duckdb"
 
+# My Local utest Overrides
+dev_duckdb_utest:
+  engine: duckdb
+  duckdb:
+    path: ":memory:"
+
 # My Production Environment
 prod_bigquery:
   engine: bigquery
   bigquery:
-    project: "basic_data"
+    project: "fft-basic-demo"
     dataset: "production_marts"
     location: "EU"
-    # FFT handles the client (BigFrames or Pandas) automatically
-    use_bigframes: true
+    # Use the pandas backend here; FFT can also use BigFrames if you set this to true.
+    use_bigframes: false
     allow_create_dataset: true
+
+# My Production utest Overrides
+prod_bigquery_utest:
+  engine: bigquery
+  bigquery:
+    dataset: "production_marts_utest"

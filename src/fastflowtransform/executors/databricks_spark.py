@@ -9,6 +9,7 @@ from time import perf_counter
 from typing import Any, cast
 from urllib.parse import unquote, urlparse
 
+import pandas as pd
 from jinja2 import Environment
 
 from fastflowtransform import storage
@@ -1256,6 +1257,56 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
                 continue
             # Reuse your existing single-statement executor
             self._execute_sql(stmt)
+
+        # ---- Unit-test helpers -------------------------------------------------
+
+    def utest_load_relation_from_rows(self, relation: str, rows: list[dict]) -> None:
+        """
+        Load rows into a Spark table for unit tests (replace if exists).
+
+        We go via pandas → Spark so schema is inferred from the Python
+        data, then delegate to the same table-writing pipeline as the
+        normal engine (_save_df_as_table), so table_format / storage
+        options / catalogs are all respected.
+        """
+        pdf = pd.DataFrame(rows)
+        # Spark can infer schema from the pandas DataFrame, even for empty
+        # frames (it will just create an empty table with no rows).
+        sdf = self.spark.createDataFrame(pdf)
+        # Use the same path as normal model materialization so that
+        # Delta/Iceberg/etc. are handled consistently.
+        self._save_df_as_table(relation, sdf)
+
+    def utest_read_relation(self, relation: str) -> pd.DataFrame:
+        """
+        Read a relation as a pandas DataFrame for unit-test assertions.
+
+        The utest framework always compares on pandas, so we convert from
+        Spark DataFrame here.
+        """
+        physical = self._physical_identifier(relation)
+        sdf = self.spark.table(physical)
+        return sdf.toPandas()
+
+    def utest_clean_target(self, relation: str) -> None:
+        """
+        For unit tests: drop any view or table with this name.
+
+        We:
+          - try DROP VIEW IF EXISTS ...
+          - try DROP TABLE IF EXISTS ...
+        and ignore type-mismatch errors, so it doesn't matter whether a
+        table or a view currently exists under that name.
+        """
+        ident = self._sql_identifier(relation)
+
+        # Drop view first; ignore errors if it's actually a table or missing.
+        with suppress(Exception):
+            self._execute_sql(f"DROP VIEW IF EXISTS {ident}")
+
+        # Then drop table; ignore errors if it's actually a view or missing.
+        with suppress(Exception):
+            self._execute_sql(f"DROP TABLE IF EXISTS {ident}")
 
 
 # ────────────────────────── local helpers / shim ──────────────────────────

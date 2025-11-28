@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
@@ -852,3 +853,42 @@ where
         Accepts a string that may contain ';'-separated statements.
         """
         self._exec_many(sql)
+
+        # ---- Unit-test helpers -------------------------------------------------
+
+    def utest_load_relation_from_rows(self, relation: str, rows: list[dict]) -> None:
+        """
+        Load rows into a DuckDB table for unit tests, fully qualified to
+        this executor's schema/catalog.
+        """
+        df = pd.DataFrame(rows)
+        tmp = f"_ff_utest_tmp_{uuid.uuid4().hex[:12]}"
+        self.con.register(tmp, df)
+        try:
+            target = self._qualified(relation)
+            self._execute_sql(f"create or replace table {target} as select * from {tmp}")
+        finally:
+            with suppress(Exception):
+                self.con.unregister(tmp)
+            # Fallback for older DuckDB where unregister might not exist
+            with suppress(Exception):
+                self._execute_sql(f'drop view if exists "{tmp}"')
+
+    def utest_read_relation(self, relation: str) -> pd.DataFrame:
+        """
+        Read a relation as a DataFrame for unit-test assertions.
+        """
+        target = self._qualified(relation, quoted=False)
+        return self.con.table(target).df()
+
+    def utest_clean_target(self, relation: str) -> None:
+        """
+        Drop any table/view with the given name in this schema/catalog.
+        Safe because utest uses its own DB/path.
+        """
+        target = self._qualified(relation)
+        # best-effort; ignore failures
+        with suppress(Exception):
+            self._execute_sql(f"drop view if exists {target}")
+        with suppress(Exception):
+            self._execute_sql(f"drop table if exists {target}")

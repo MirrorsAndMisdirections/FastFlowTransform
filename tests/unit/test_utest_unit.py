@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import ClassVar, cast
+from typing import cast
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -17,6 +17,8 @@ from fastflowtransform.core import REGISTRY, Node
 from fastflowtransform.utest import (
     EnvCtx,
     UnitCase,
+    UnitDefaults,
+    UnitExpect,
     UnitSpec,
     UtestCtx,
     _make_env_ctx,
@@ -36,44 +38,8 @@ def make_fake_cache() -> FingerprintCache:
 
 
 # ------------------------------------------------------------
-# _deep_merge
+# _fingerprint_case_inputs
 # ------------------------------------------------------------
-
-
-@pytest.mark.unit
-def test_deep_merge_merges_nested_dicts():
-    base = {"a": 1, "b": {"x": 1, "y": 2}}
-    override = {"b": {"y": 99, "z": 3}, "c": 5}
-
-    out = utest._deep_merge(base, override)
-
-    assert out == {
-        "a": 1,
-        "b": {"x": 1, "y": 99, "z": 3},
-        "c": 5,
-    }
-    # base sollte nicht mutiert sein
-    assert base == {"a": 1, "b": {"x": 1, "y": 2}}
-
-
-@pytest.mark.unit
-def test_deep_merge_lists_are_replaced():
-    base = {"a": [1, 2]}
-    override = {"a": [9]}
-    out = utest._deep_merge(base, override)
-    assert out == {"a": [9]}
-
-
-# ------------------------------------------------------------
-# _extract_defaults_inputs + _fingerprint_case_inputs
-# ------------------------------------------------------------
-
-
-@pytest.mark.unit
-def test_extract_defaults_inputs_missing_returns_empty():
-    spec = SimpleNamespace(defaults={})
-    res = utest._extract_defaults_inputs(spec)
-    assert res == {}
 
 
 @pytest.mark.unit
@@ -81,16 +47,27 @@ def test_fingerprint_case_inputs_merges_defaults_and_case(tmp_path, monkeypatch)
     csv_file = tmp_path / "seed.csv"
     csv_file.write_text("id,name\n1,A\n", encoding="utf-8")
 
-    spec = SimpleNamespace(
-        defaults={"inputs": {"src": {"rows": [{"id": 1}]}}},
+    spec = utest.UnitSpec(
+        model="dummy",
+        engine="duckdb",
+        defaults=utest.UnitDefaults(
+            inputs={
+                "src": utest.UnitInput(rows=[{"id": 1}]),
+            },
+            expect=utest.UnitExpect(),
+        ),
+        cases=[],
         path=tmp_path / "ut.yml",
         project_dir=tmp_path,
     )
-    case = SimpleNamespace(
+
+    case = utest.UnitCase(
+        name="c1",
         inputs={
-            "src": {"rows": [{"id": 2}]},
-            "dim": {"csv": "seed.csv"},
-        }
+            "src": utest.UnitInput(rows=[{"id": 2}]),
+            "dim": utest.UnitInput(csv="seed.csv"),
+        },
+        expect=utest.UnitExpect(),
     )
 
     fp = utest._fingerprint_case_inputs(spec, case)
@@ -320,7 +297,8 @@ def test_discover_unit_specs_basic(tmp_path, fake_registry):
     s = specs[0]
     assert s.model == "model_a"
     assert len(s.cases) == 1
-    assert s.cases[0].expect["rows"] == [{"id": 2}]
+    # expect is now a UnitExpect pydantic model, so use attributes
+    assert s.cases[0].expect.rows == [{"id": 2}]
 
 
 @pytest.mark.unit
@@ -348,14 +326,13 @@ def test_discover_unit_specs_only_model_filter(tmp_path, fake_registry):
 @pytest.mark.duckdb
 def test_load_relation_from_rows_duckdb(duckdbutor):
     rows = [{"id": 1}, {"id": 2}]
-    duckdbutor.con.unregister.side_effect = Exception("no unregister in this version")
+
+    # Provide / spy on the new utest helper on our fake executor
+    duckdbutor.utest_load_relation_from_rows = MagicMock()
 
     utest._load_relation_from_rows(duckdbutor, "tmp_tbl", rows)
 
-    assert duckdbutor.con.register.call_count == 1
-    executed_sqls = [c.args[0] for c in duckdbutor.con.execute.call_args_list]
-    assert any("create or replace table" in sql.lower() for sql in executed_sqls)
-    assert any("drop view if exists" in sql.lower() for sql in executed_sqls)
+    duckdbutor.utest_load_relation_from_rows.assert_called_once_with("tmp_tbl", rows)
 
 
 # ---------------------------------------------------------------------------
@@ -433,8 +410,8 @@ def test_project_root_for_spec_fallback(tmp_path, monkeypatch):
     spec = UnitSpec(
         model="m1",
         engine=None,
-        defaults={},
-        cases=[UnitCase(name="c1", inputs={}, expect={})],
+        defaults=UnitDefaults(),
+        cases=[UnitCase(name="c1", inputs={}, expect=UnitExpect())],
         path=spec_path,
         project_dir=tmp_path,
     )
@@ -442,41 +419,6 @@ def test_project_root_for_spec_fallback(tmp_path, monkeypatch):
     root = _project_root_for_spec(spec)
 
     assert root == spec_path.parent
-
-
-# ---------------------------------------------------------------------------
-# _extract_defaults_inputs  (cases 1, 2, 3)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
-def test_extract_defaults_inputs_from_dict():
-    spec = SimpleNamespace(defaults={"inputs": {"a": 1}})
-    res = utest._extract_defaults_inputs(spec)
-    assert res == {"a": 1}
-
-
-@pytest.mark.unit
-def test_extract_defaults_inputs_from_attr():
-    class D:
-        inputs: ClassVar[dict[str, int]] = {"b": 2}
-
-    spec = SimpleNamespace(defaults=D())
-    res = utest._extract_defaults_inputs(spec)
-    assert res == {"b": 2}
-
-
-@pytest.mark.unit
-def test_extract_defaults_inputs_from_get():
-    class D:
-        def get(self, key):
-            if key == "inputs":
-                return {"c": 3}
-            return None
-
-    spec = SimpleNamespace(defaults=D())
-    res = utest._extract_defaults_inputs(spec)
-    assert res == {"c": 3}
 
 
 # ---------------------------------------------------------------------------
@@ -662,12 +604,24 @@ def test_run_unit_specs_happy(tmp_path, fake_registry, duckdbutor, monkeypatch):
     spec = utest.UnitSpec(
         model="model_a",
         engine="duckdb",
-        defaults={"inputs": {"src1": {"rows": [{"id": 1}]}}},
+        defaults=utest.UnitDefaults(
+            inputs={
+                "src1": utest.UnitInput(
+                    rows=[{"id": 1}],
+                )
+            }
+        ),
         cases=[
             utest.UnitCase(
                 name="c1",
-                inputs={"src1": {"rows": [{"id": 1}]}},
-                expect={"rows": [{"id": 1}]},
+                inputs={
+                    "src1": utest.UnitInput(
+                        rows=[{"id": 1}],
+                    )
+                },
+                expect=utest.UnitExpect(
+                    rows=[{"id": 1}],
+                ),
             )
         ],
         path=tmp_path / "tests" / "unit" / "x.yml",

@@ -1,0 +1,40 @@
+model: mart_latest_signup
+
+defaults:
+  inputs:
+    users_clean:
+      rows:
+        - {user_id: 1, email: "anna@example.com", email_domain: "example.com", signup_date: "2024-01-05"}
+        - {user_id: 2, email: "bob@example.com",  email_domain: "example.com", signup_date: "2024-02-11"}
+        - {user_id: 3, email: "cara@net.com",     email_domain: "net.com",     signup_date: "2024-02-27"}
+        - {user_id: 4, email: "dina@net.com",     email_domain: "net.com",     signup_date: "2024-03-01"}
+  expect:
+    relation: mart_latest_signup
+    order_by: [email_domain]
+
+cases:
+  - name: picks_latest_signup_per_domain
+    expect:
+      rows:
+        - {email_domain: "example.com",
+           latest_user_id: 2,
+           latest_email: "bob@example.com",
+           latest_signup_date: "2024-02-11"}
+        - {email_domain: "net.com",
+           latest_user_id: 4,
+           latest_email: "dina@net.com",
+           latest_signup_date: "2024-03-01"}
+
+  - name: override_inputs_single_domain
+    inputs:
+      users_clean:
+        rows:
+          - {user_id: 10, email: "x@foo.com", email_domain: "foo.com", signup_date: "2024-01-01"}
+          - {user_id: 11, email: "y@foo.com", email_domain: "foo.com", signup_date: "2024-01-10"}
+    expect:
+      any_order: true
+      rows:
+        - {email_domain: "foo.com",
+           latest_user_id: 11,
+           latest_email: "y@foo.com",
+           latest_signup_date: "2024-01-10"}

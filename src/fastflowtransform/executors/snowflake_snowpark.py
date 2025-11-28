@@ -7,6 +7,7 @@ from contextlib import suppress
 from time import perf_counter
 from typing import Any, cast
 
+import pandas as pd
 from jinja2 import Environment
 
 from fastflowtransform.core import Node, relation_for
@@ -716,6 +717,89 @@ WHERE
         Execute one SQL statement for pre/post/on_run hooks.
         """
         self._exec_many(sql)
+
+    # ---- Unit-test helpers -----------------------------------------------
+
+    def utest_read_relation(self, relation: str) -> pd.DataFrame:
+        """
+        Read a relation into a pandas DataFrame for unit-test assertions.
+
+        We use Snowpark to read the table and convert to pandas,
+        normalizing column names to lowercase to match _read_relation.
+        """
+        df = self.session.table(self._qualified(relation))
+        # Mirror _read_relation: present lowercase schema to the test layer
+        lowered = [c.lower() for c in df.schema.names]
+        df = df.toDF(*lowered)
+
+        to_pandas = getattr(df, "to_pandas", None)
+
+        pdf: pd.DataFrame
+        if callable(to_pandas):
+            pdf = cast(pd.DataFrame, to_pandas())
+        else:
+            rows = df.collect()
+            records = [r.asDict() for r in rows]
+            pdf = pd.DataFrame.from_records(records)
+
+        # Return a new DF with lowercase columns (no attribute assignment)
+        return pdf.rename(columns=lambda c: str(c).lower())
+
+    def utest_load_relation_from_rows(self, relation: str, rows: list[dict]) -> None:
+        """
+        Load rows into a Snowflake table for unit tests (replace if exists).
+
+        We build a Snowpark DataFrame from the Python rows and overwrite the
+        target table using save_as_table().
+        """
+        # Best-effort: if rows are empty, create an empty table with no rows.
+        # We assume at least one row in normal test usage so we can infer schema.
+        if not rows:
+            # Without any rows we don't know the schema; create a trivial
+            # single-column table to surface the situation clearly.
+            tmp_df = self.session.create_dataframe([[None]], schema=["__empty__"])
+            tmp_df.write.save_as_table(self._qualified(relation), mode="overwrite")
+            return
+
+        # Infer column order from the first row
+        first = rows[0]
+        columns = list(first.keys())
+
+        # Normalize data to a list of lists in a fixed column order
+        data = [[row.get(col) for col in columns] for row in rows]
+
+        df = self.session.create_dataframe(data, schema=columns)
+
+        # Store with uppercase column names in Snowflake (conventional)
+        upper_cols = [c.upper() for c in columns]
+        if columns != upper_cols:
+            df = df.toDF(*upper_cols)
+
+        # Overwrite the target table
+        df.write.save_as_table(self._qualified(relation), mode="overwrite")
+
+    def utest_clean_target(self, relation: str) -> None:
+        """
+        For unit tests: drop any table or view with this name in the configured
+        database/schema.
+
+        We:
+          - try DROP VIEW IF EXISTS DB.SCHEMA.REL
+          - try DROP TABLE IF EXISTS DB.SCHEMA.REL
+
+        and ignore "not a view/table" style errors so it doesn't matter what
+        kind of object is currently there - after this, nothing with that name
+        should remain (best-effort).
+        """
+        qualified = self._qualified(relation)
+
+        # Drop view first; ignore errors if it's actually a table or doesn't exist.
+        with suppress(Exception):
+            self.session.sql(f"DROP VIEW IF EXISTS {qualified}").collect()
+
+        # Then drop table; ignore errors if it's actually a view or doesn't exist.
+        with suppress(Exception):
+            self.session.sql(f"DROP TABLE IF EXISTS {qualified}").collect()
 
 
 # ────────────────────────── local testing shim ───────────────────────────

@@ -2,21 +2,27 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import suppress
 from typing import Any
+
+import pandas as pd
 
 from fastflowtransform.core import Node
 from fastflowtransform.executors.bigquery.base import BigQueryBaseExecutor
 from fastflowtransform.typing import (
+    BadRequest,
     BFDataFrame,
     BigQueryOptions,
+    LoadJobConfig,
     NotFound,
     bf_global_session,
     bigframes,
+    bigquery,
 )
 
 
 class BigQueryBFExecutor(BigQueryBaseExecutor[BFDataFrame]):
-    ENGINE_NAME = "bigquery_batch"
+    ENGINE_NAME = "bigquery"
 
     def __init__(
         self,
@@ -48,7 +54,8 @@ class BigQueryBFExecutor(BigQueryBaseExecutor[BFDataFrame]):
         except Exception as exc:
             raise RuntimeError(
                 "Failed to initialize BigFrames session. Verify FF_BQ_PROJECT, "
-                "FF_BQ_DATASET, and FF_BQ_LOCATION are set for the active profile."
+                "FF_BQ_DATASET, and FF_BQ_LOCATION are set for the active profile. "
+                f"{exc}"
             ) from exc
 
     def run_python(self, node: Node) -> None:
@@ -80,6 +87,7 @@ class BigQueryBFExecutor(BigQueryBaseExecutor[BFDataFrame]):
             ) from e
 
     def _materialize_relation(self, relation: str, df: BFDataFrame, node: Node) -> None:
+        self._ensure_dataset()
         table_id = f"{self.project}.{self.dataset}.{relation}"
 
         to_gbq = getattr(df, "to_gbq", None)
@@ -156,3 +164,57 @@ class BigQueryBFExecutor(BigQueryBaseExecutor[BFDataFrame]):
 
     def _frame_name(self) -> str:
         return "BigQuery DataFrame (BigFrames)"
+
+        # ---- Unit-test helpers (pandas-facing) --------------------------------
+
+    def utest_read_relation(self, relation: str) -> pd.DataFrame:
+        """
+        Read a relation into a pandas DataFrame for unit-test assertions.
+
+        Even though this executor uses BigFrames for normal execution,
+        utests compare pandas DataFrames, so we convert.
+        """
+        q = f"SELECT * FROM {self._qualified_identifier(relation)}"
+        job = self.client.query(q, location=self.location)
+        return job.result().to_dataframe(create_bqstorage_client=True)
+
+    def utest_load_relation_from_rows(self, relation: str, rows: list[dict]) -> None:
+        """
+        Load rows into a BigQuery table for unit tests (replace if exists).
+
+        Implementation uses the raw BigQuery client with pandas, which is
+        perfectly fine for test input setup.
+        """
+        self._ensure_dataset()
+        table_id = f"{self.project}.{self.dataset}.{relation}"
+        df = pd.DataFrame(rows)
+
+        job_config = LoadJobConfig(write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE)
+
+        try:
+            job = self.client.load_table_from_dataframe(
+                df,
+                table_id,
+                job_config=job_config,
+                location=self.location,
+            )
+            job.result()
+        except BadRequest as e:
+            raise RuntimeError(f"BigQuery utest write failed: {table_id}\n{e}") from e
+
+    def utest_clean_target(self, relation: str) -> None:
+        """
+        For unit tests: drop any table/view with this name in the configured dataset.
+        """
+        table_id = f"{self.project}.{self.dataset}.{relation}"
+
+        try:
+            self.client.delete_table(table_id, not_found_ok=True)
+        except NotFound:
+            pass
+        except TypeError:
+            with suppress(NotFound):
+                self.client.delete_table(table_id)
+        except Exception:
+            # Best-effort; don't make the whole test run fail because cleanup hiccupped.
+            pass

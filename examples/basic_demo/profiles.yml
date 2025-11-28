@@ -6,11 +6,23 @@ dev_duckdb:
   duckdb:
     path: "{{ env('FF_DUCKDB_PATH', '.local/basic_demo.duckdb') }}"
 
+dev_duckdb_utest:
+  engine: duckdb          # must match
+  duckdb:
+    # completely separate DB just for utests
+    path: "{{ env('FF_DUCKDB_UTEST_PATH', ':memory:') }}"
+
 dev_postgres:
   engine: postgres
   postgres:
     dsn: "{{ env('FF_PG_DSN') }}"
     db_schema: "{{ env('FF_PG_SCHEMA', 'public') }}"
+
+dev_postgres_utest:
+  engine: postgres        # same engine
+  postgres:
+    # just override schema, keep same DSN
+    db_schema: "{{ env('FF_PG_UTEST_SCHEMA', 'basic_demo_utest') }}"
 
 dev_databricks:
   engine: databricks_spark
@@ -26,6 +38,11 @@ dev_databricks:
         -Dderby.stream.error.file={{ project_dir() }}/.local/derby.log
         -Dderby.system.home={{ project_dir() }}/.local/derby_home
 
+dev_databricks_utest:
+  engine: databricks_spark
+  databricks_spark:
+    database: "{{ env('FF_DBR_DATABASE', 'basic_demo_utest') }}"
+
 dev_bigquery_bigframes:
   engine: bigquery
   bigquery:
@@ -35,6 +52,12 @@ dev_bigquery_bigframes:
     use_bigframes: true
     allow_create_dataset: true
 
+dev_bigquery_bigframes_utest:
+  engine: bigquery
+  bigquery:
+    # override only dataset
+    dataset: "{{ env('FF_BQ_UTEST_DATASET', 'basic_demo_utest') }}"
+
 dev_bigquery_pandas:
   engine: bigquery
   bigquery:
@@ -43,6 +66,12 @@ dev_bigquery_pandas:
     location: "{{ env('FF_BQ_LOCATION', 'EU') }}"
     use_bigframes: false
     allow_create_dataset: true
+
+dev_bigquery_pandas_utest:
+  engine: bigquery
+  bigquery:
+    # override only dataset
+    dataset: "{{ env('FF_BQ_UTEST_DATASET', 'basic_demo_utest') }}"
 
 dev_snowflake:
   engine: snowflake_snowpark
@@ -55,3 +84,8 @@ dev_snowflake:
     schema: "{{ env('FF_SF_SCHEMA', 'BASIC_DEMO') }}"
     role: "{{ env('FF_SF_ROLE', '') }}"
     allow_create_schema: true
+
+dev_snowflake_utest:
+  engine: snowflake_snowpark
+  snowflake_snowpark:
+    schema: "{{ env('FF_SF_UTEST_SCHEMA', 'BASIC_DEMO_UTEST') }}"

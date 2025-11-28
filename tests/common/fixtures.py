@@ -243,20 +243,47 @@ def duckdbutor():
     - con.register(...)
     - con.execute(...)
     - con.table(...).df()
+    - plus utest_* helpers used by utest.run_unit_specs
     """
     con = MagicMock()
     table_df = pd.DataFrame([{"id": 1}])
+    # any con.table("whatever").df() returns this df
     con.table.return_value.df.return_value = table_df
 
     class DuckEx:
         def __init__(self, con):
             self.con = con
+            # simple in-memory storage for utest relations
+            self._utest_tables: dict[str, pd.DataFrame] = {}
 
         def run_sql(self, node, jenv):
+            # For these unit tests we don't actually execute SQL.
+            # The test only checks that the utest plumbing works.
             return None
 
         def run_python(self, node):
             return None
+
+        # ---- utest helpers expected by utest.run_unit_specs ----
+
+        def utest_load_relation_from_rows(self, relation: str, rows: list[dict]) -> None:
+            """
+            Store test input rows in memory as a DataFrame.
+            """
+            self._utest_tables[relation] = pd.DataFrame(rows)
+
+        def utest_read_relation(self, relation: str) -> pd.DataFrame:
+            """
+            Read back a relation for assertions.
+
+            Prefer in-memory tables created via utest_load_relation_from_rows;
+            fall back to the fake con.table(...).df() for things like the model
+            output ('model_a') that we don't explicitly seed.
+            """
+            if relation in self._utest_tables:
+                return self._utest_tables[relation]
+            # fallback: use whatever the MagicMock returns
+            return self.con.table(relation).df()
 
     return DuckEx(con)
 
@@ -272,6 +299,14 @@ def postgresutor():
         def __init__(self, engine):
             self.engine = engine
             self.schema = "public"
+
+        # --- new: utest helper used by utest._read_result ---
+        def utest_read_relation(self, relation: str) -> pd.DataFrame:
+            # For the test we don't care about the exact SQL or connection,
+            # we just need to call utest.pd.read_sql_query so the monkeypatch
+            # in test_read_result_postgres is hit.
+            sql = f"SELECT * FROM {relation}"
+            return utest.pd.read_sql_query(sql, self.engine)
 
     return PgEx(engine)
 

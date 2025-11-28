@@ -121,6 +121,18 @@ cases:
         - {order_id: 11, user_id: 1, email: "x@gmail.com", is_gmail: true, amount: -1.0, valid_amt: false}
 ```
 
+> **Validation**
+>
+> Unit-test specs are validated with Pydantic:
+>
+> - Unknown / misspelled keys (e.g. `rowz` instead of `rows`) cause a clear validation error.
+> - Allowed top-level keys: `model`, `engine`, `defaults`, `cases`.
+> - Under `defaults` / `cases.inputs.*` you may only use `rows` **or** `csv`.
+> - Under `expect` you may only use: `relation`, `rows`, `order_by`, `any_order`,
+>   `approx`, `ignore_columns`, `subset`.
+>
+> This is intentional so that typos in YAML don’t silently get ignored.
+
 ## Input Formats
 
 - `rows`: inline dictionaries per row.
@@ -130,11 +142,23 @@ Keys under `inputs` are physical relations; use `relation_for('users.ff')` if un
 
 ## Expected Output & Comparison
 
-- `relation`: actual table/view name produced by the model (defaults to `relation_for(model)`).
-- Ordering: `order_by: [...]` or `any_order: true`.
-- Columns: `ignore_columns: [...]`, `subset: true`.
-- Numeric tolerance: `approx: true` or `approx: { col: 1e-9, other_col: 0.01 }`
-  (numbers can be plain `1e-9` or quoted; they are cast to float).
+- `relation`: actual table/view name produced by the model  
+  (defaults to `relation_for(model)`).
+- **Row ordering:**
+  - By default, comparisons are **row-order insensitive**. The framework sorts
+    both expected and actual by all columns before comparing.
+  - `order_by: [...]` lets you specify a deterministic sort order for debugging
+    (both sides are sorted by those columns before comparison).
+  - `any_order: true` is accepted for backwards compatibility but is effectively
+    the default behaviour now.
+- Columns:
+  - `ignore_columns: [...]` drops those columns from both expected and actual.
+  - `subset: true` means “every expected row must be present in the actual
+    result”, but the actual result may contain additional rows/columns.
+- Numeric tolerance (`approx`):
+  - `approx: { col: 1e-9, other_col: 0.01 }` compares numeric columns within
+    the given absolute tolerance.
+  - Non-numeric values in `approx` cause a clear error (`must be a number`).
 
 ## Running UTests
 

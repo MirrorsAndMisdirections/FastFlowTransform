@@ -16,19 +16,40 @@ def _stub_minimal_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     # Make sure the minimal project skeleton passes CLI path validation.
     (tmp_path / "models").mkdir(parents=True, exist_ok=True)
 
+    # minimal profiles.yml with dev + dev_utest
+    profiles_yaml = """
+dev:
+  engine: duckdb
+  duckdb:
+    path: "dummy_path"
+
+dev_utest:
+  engine: duckdb
+  duckdb:
+    path: ":memory:"
+""".strip()
+
+    (tmp_path / "profiles.yml").write_text(profiles_yaml)
+
     def fake_load_project_and_env(project_arg: str):
         # Minimal registry with one model file path (not used by utest runner)
         REGISTRY.nodes = {
             "dummy": Node(
-                "dummy", "sql", path=tmp_path / "models" / "dummy.ff.sql", deps=[], meta={}
+                "dummy",
+                "sql",
+                path=tmp_path / "models" / "dummy.ff.sql",
+                deps=[],
+                meta={},
             )
         }
         REGISTRY.env = Environment()
+        # Important: project_dir must be tmp_path so the CLI finds profiles.yml there
         return tmp_path, REGISTRY.env
 
     def fake_resolve_profile(env_name, engine, proj):
+        # We ignore env_name/engine here - tests don't care about real profile contents.
         return (
-            SimpleNamespace(),
+            SimpleNamespace(),  # raw profile (unused)
             SimpleNamespace(engine="duckdb", duckdb=SimpleNamespace(path=":memory:")),
         )
 

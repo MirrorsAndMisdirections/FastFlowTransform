@@ -586,6 +586,7 @@ def _handle_bigquery(table: str, df: pd.DataFrame, executor: Any, schema: str | 
 
     t0 = perf_counter()
     # Let the BigQuery client infer the schema from the pandas DataFrame.
+    executor._ensure_dataset()
     load_job = client.load_table_from_dataframe(df, table_id, job_config=job_config)
     load_job.result()  # Wait for completion
     dt_ms = int((perf_counter() - t0) * 1000)

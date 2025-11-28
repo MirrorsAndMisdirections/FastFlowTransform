@@ -19,9 +19,10 @@ Use it as a sandbox before adding your own sources, macros, or Python models.
 | `models/staging/users_clean.ff.sql` | Normalizes emails, casts types, and tags the model for all engines. |
 | `models/marts/mart_users_by_domain.ff.sql` | Aggregates users per email domain and records the first/last signup dates. |
 | `models/engines/*/mart_latest_signup.ff.py` | Engine-specific Python models selecting the most recent signup per domain from the staging view:<br>• pandas for DuckDB/Postgres<br>• PySpark for Databricks<br>• BigQuery DataFrames (BigFrames) for BigQuery. |
+| `tests/unit/*.yml` | Model unit-test specs for the demo models (`users_clean`, `mart_users_by_domain`, `mart_latest_signup`), used by `fft utest` and `make utest ENGINE=…`. |
 | `profiles.yml` | Declares `dev_duckdb`, `dev_postgres`, `dev_databricks`, and `dev_bigquery` profiles driven by environment variables. |
 | `.env.dev_*` | Template environment files you can `source` per engine (`.env.dev_duckdb`, `.env.dev_postgres`, `.env.dev_databricks`, `.env.dev_bigquery`). |
-| `Makefile` | One command (`make demo ENGINE=…`) to seed, run, document, test, and preview results. |
+| `Makefile` | One command (`make demo ENGINE=…`) to seed, run, unit-test, document, test, and preview results. |
 
 ## Running the demo
 
@@ -58,7 +59,7 @@ Use it as a sandbox before adding your own sources, macros, or Python models.
    # make demo ENGINE=bigquery BQ_FRAME=pandas
    ```
 
-   The Makefile runs `fft seed`, `fft run`, `fft dag`, and `fft test`.
+   The Makefile runs `fft seed`, `fft run`, `fft dag`, `fft utest`, and `fft test`.
 
    To open the rendered DAG site after a run:
 
@@ -86,3 +87,32 @@ The demo enables baseline data quality checks in `project.yml`. Running `fft tes
 * Each email domain appears only once in `mart_latest_signup`.
 
 These tests run against whatever engine/profile is active — including BigQuery, where they execute as standard SQL queries on the configured dataset.
+
+## Model unit tests (`fft utest`)
+
+The basic demo also includes **model-level unit tests** under `tests/unit/`. They exercise:
+
+- `users_clean` (staging)
+- `mart_users_by_domain` (mart)
+- the engine-specific `mart_latest_signup` Python model
+
+Each YAML spec defines small input fixtures (inline `rows` or external CSVs) and the expected
+output rows. To run the unit tests for the active engine:
+
+```bash
+make utest ENGINE=duckdb
+# or, equivalent:
+fft utest . --env dev_duckdb
+```
+
+You can swap engines the same way as for the main demo:
+
+```bash
+make utest ENGINE=postgres
+make utest ENGINE=databricks_spark
+make utest ENGINE=bigquery BQ_FRAME=bigframes
+```
+
+`fft utest` only builds the target model for each spec and compares the result to the expected
+rows, which makes these tests fast and self-contained while still running against the real
+warehouse/engine.
