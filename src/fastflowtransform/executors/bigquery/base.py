@@ -1,24 +1,23 @@
 # fastflowtransform/executors/bigquery/base.py
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from fastflowtransform.core import Node, relation_for
 from fastflowtransform.executors._budget_runner import run_sql_with_budget
 from fastflowtransform.executors._shims import BigQueryConnShim
+from fastflowtransform.executors._snapshot_sql_mixin import SnapshotSqlMixin
 from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.executors.bigquery._bigquery_mixin import BigQueryIdentifierMixin
 from fastflowtransform.executors.budget import BudgetGuard
 from fastflowtransform.executors.query_stats import _TrackedQueryJob
-from fastflowtransform.logging import echo
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
-from fastflowtransform.snapshots import resolve_snapshot_config
 from fastflowtransform.typing import BadRequest, Client, NotFound, bigquery
 
 TFrame = TypeVar("TFrame")
 
 
-class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
+class BigQueryBaseExecutor(BigQueryIdentifierMixin, SnapshotSqlMixin, BaseExecutor[TFrame]):
     """
     Shared BigQuery executor logic (SQL, incremental, meta, DQ helpers).
 
@@ -129,33 +128,13 @@ class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
         return self._qualified_identifier(table.strip())
 
     # ---- SQL hooks ----
-    def _format_relation_for_ref(self, name: str) -> str:
-        return self._qualified_identifier(relation_for(name))
-
     def _this_identifier(self, node: Node) -> str:
         """
         Ensure {{ this }} renders as a fully-qualified identifier so BigQuery
         incremental SQL (e.g., subqueries against {{ this }}) includes project
         and dataset.
         """
-        return self._qualified_identifier(relation_for(node.name))
-
-    def _format_source_reference(
-        self,
-        cfg: dict[str, Any],
-        source_name: str,
-        table_name: str,
-    ) -> str:
-        if cfg.get("location"):
-            raise NotImplementedError("BigQuery executor does not support path-based sources.")
-
-        ident = cfg.get("identifier")
-        if not ident:
-            raise KeyError(f"Source {source_name}.{table_name} missing identifier")
-
-        proj = cfg.get("project") or cfg.get("database") or cfg.get("catalog") or self.project
-        dset = cfg.get("dataset") or cfg.get("schema") or self.dataset
-        return self._qualified_identifier(ident, project=proj, dataset=dset)
+        return self._qualify_identifier(relation_for(node.name))
 
     def _apply_sql_materialization(
         self,
@@ -188,6 +167,29 @@ class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
         back_id = self._qualified_identifier(backing_table)
         self._ensure_dataset()
         self._execute_sql(f"CREATE OR REPLACE VIEW {view_id} AS SELECT * FROM {back_id}").result()
+
+    # ---- Snapshot mixin hooks ----
+    def _snapshot_prepare_target(self) -> None:
+        self._ensure_dataset()
+
+    def _snapshot_target_identifier(self, rel_name: str) -> str:
+        return self._qualified_identifier(rel_name)
+
+    def _snapshot_current_timestamp(self) -> str:
+        return "CURRENT_TIMESTAMP()"
+
+    def _snapshot_null_timestamp(self) -> str:
+        return "CAST(NULL AS TIMESTAMP)"
+
+    def _snapshot_null_hash(self) -> str:
+        return "CAST(NULL AS STRING)"
+
+    def _snapshot_hash_expr(self, check_cols: list[str], src_alias: str) -> str:
+        concat_expr = self._snapshot_concat_expr(check_cols, src_alias)
+        return f"TO_HEX(MD5({concat_expr}))"
+
+    def _snapshot_cast_as_string(self, expr: str) -> str:
+        return f"CAST({expr} AS STRING)"
 
     # ---- Meta hook ----
     def on_node_built(self, node: Node, relation: str, fingerprint: str) -> None:
@@ -325,227 +327,6 @@ class BigQueryBaseExecutor(BigQueryIdentifierMixin, BaseExecutor[TFrame]):
             self._execute_sql(f"ALTER TABLE {target} ADD COLUMN {col} {typ}").result()
 
     # ── Snapshots API (shared for pandas + BigFrames) ─────────────────────
-    def run_snapshot_sql(self, node: Node, env: Any) -> None:
-        """
-        Snapshot materialization for BigQuery SQL models.
-
-        Uses the same semantics as the DuckDB/Postgres/Snowflake executors:
-          - First run: create table with snapshot metadata columns.
-          - Subsequent runs:
-              * close changed current rows (set valid_to, is_current=false)
-              * insert new current rows for new/changed keys.
-        """
-        if node.kind != "sql":
-            raise TypeError(
-                f"Snapshot materialization is only supported for SQL models, "
-                f"got kind={node.kind!r} for {node.name}."
-            )
-
-        meta = getattr(node, "meta", {}) or {}
-        if not self._meta_is_snapshot(meta):
-            raise ValueError(f"Node {node.name} is not configured with materialized='snapshot'.")
-
-        cfg = resolve_snapshot_config(node, meta)
-        strategy = cfg.strategy  # "timestamp" | "check"
-        unique_key = cfg.unique_key  # list[str]
-        updated_at = cfg.updated_at  # str | None
-        check_cols = cfg.check_cols  # list[str]
-
-        if not unique_key:
-            raise ValueError(f"{node.path}: snapshot models require a non-empty unique_key list.")
-
-        # ---- Render SQL and extract SELECT body ----
-        sql_rendered = self.render_sql(
-            node,
-            env,
-            ref_resolver=lambda name: self._resolve_ref(name, env),
-            source_resolver=self._resolve_source,
-        )
-        sql_clean = self._strip_leading_config(sql_rendered).strip()
-        body = self._selectable_body(sql_clean).rstrip(" ;\n\t")
-
-        rel_name = relation_for(node.name)
-        target = self._qualified_identifier(rel_name)
-
-        vf = BaseExecutor.SNAPSHOT_VALID_FROM_COL
-        vt = BaseExecutor.SNAPSHOT_VALID_TO_COL
-        is_cur = BaseExecutor.SNAPSHOT_IS_CURRENT_COL
-        hash_col = BaseExecutor.SNAPSHOT_HASH_COL
-        upd_meta = BaseExecutor.SNAPSHOT_UPDATED_AT_COL
-
-        self._ensure_dataset()
-
-        # ---- First run: create snapshot table ----
-        if not self.exists_relation(rel_name):
-            if strategy == "timestamp":
-                if not updated_at:
-                    raise ValueError(
-                        f"{node.path}: strategy='timestamp' snapshots require an updated_at column."
-                    )
-                create_sql = f"""
-CREATE TABLE {target} AS
-SELECT
-  s.*,
-  s.{updated_at} AS {upd_meta},
-  s.{updated_at} AS {vf},
-  CAST(NULL AS TIMESTAMP) AS {vt},
-  TRUE AS {is_cur},
-  CAST(NULL AS STRING) AS {hash_col}
-FROM ({body}) AS s
-"""
-            else:  # strategy == "check"
-                if not check_cols:
-                    raise ValueError(
-                        f"{node.path}: strategy='check' snapshots require non-empty check_cols."
-                    )
-                col_exprs = [f"COALESCE(CAST(s.{col} AS STRING), '')" for col in check_cols]
-                concat_expr = " || '||' || ".join(col_exprs)
-                hash_expr = f"TO_HEX(MD5({concat_expr}))"
-                upd_expr = f"s.{updated_at}" if updated_at else "CURRENT_TIMESTAMP()"
-                create_sql = f"""
-CREATE TABLE {target} AS
-SELECT
-  s.*,
-  {upd_expr} AS {upd_meta},
-  CURRENT_TIMESTAMP() AS {vf},
-  CAST(NULL AS TIMESTAMP) AS {vt},
-  TRUE AS {is_cur},
-  {hash_expr} AS {hash_col}
-FROM ({body}) AS s
-"""
-            self._execute_sql(create_sql).result()
-            return
-
-        # ---- Incremental snapshot update ----
-        keys_pred = " AND ".join([f"t.{k} = s.{k}" for k in unique_key])
-
-        if strategy == "timestamp":
-            if not updated_at:
-                raise ValueError(
-                    f"{node.path}: strategy='timestamp' snapshots require an updated_at column."
-                )
-            change_condition = f"s.{updated_at} > t.{upd_meta}"
-            new_upd_expr = f"s.{updated_at}"
-            new_valid_from_expr = f"s.{updated_at}"
-            new_hash_expr = "NULL"
-        else:
-            col_exprs_s = [f"COALESCE(CAST(s.{col} AS STRING), '')" for col in check_cols]
-            concat_expr_s = " || '||' || ".join(col_exprs_s)
-            hash_expr_s = f"TO_HEX(MD5({concat_expr_s}))"
-            change_condition = f"COALESCE({hash_expr_s}, '') <> COALESCE(t.{hash_col}, '')"
-            new_upd_expr = f"s.{updated_at}" if updated_at else "CURRENT_TIMESTAMP()"
-            new_valid_from_expr = "CURRENT_TIMESTAMP()"
-            new_hash_expr = hash_expr_s
-
-        # 1) Close changed current rows
-        close_sql = f"""
-UPDATE {target} AS t
-SET
-  {vt} = CURRENT_TIMESTAMP(),
-  {is_cur} = FALSE
-FROM ({body}) AS s
-WHERE
-  {keys_pred}
-  AND t.{is_cur} = TRUE
-  AND {change_condition}
-"""
-        self._execute_sql(close_sql).result()
-
-        # 2) Insert new current versions (new keys or changed rows)
-        first_key = unique_key[0]
-        insert_sql = f"""
-INSERT INTO {target}
-SELECT
-  s.*,
-  {new_upd_expr} AS {upd_meta},
-  {new_valid_from_expr} AS {vf},
-  CAST(NULL AS TIMESTAMP) AS {vt},
-  TRUE AS {is_cur},
-  {new_hash_expr} AS {hash_col}
-FROM ({body}) AS s
-LEFT JOIN {target} AS t
-  ON {keys_pred}
-  AND t.{is_cur} = TRUE
-WHERE
-  t.{first_key} IS NULL
-  OR {change_condition}
-"""
-        self._execute_sql(insert_sql).result()
-
-    def snapshot_prune(
-        self,
-        relation: str,
-        unique_key: list[str],
-        keep_last: int,
-        *,
-        dry_run: bool = False,
-    ) -> None:
-        """
-        Delete older snapshot versions while keeping the most recent `keep_last`
-        rows per business key (including the current row).
-        """
-        if keep_last <= 0:
-            return
-
-        keys = [k for k in unique_key if k]
-        if not keys:
-            return
-
-        target = self._qualified_identifier(
-            relation,
-            project=self.project,
-            dataset=self.dataset,
-        )
-        vf = BaseExecutor.SNAPSHOT_VALID_FROM_COL
-        key_select = ", ".join(keys)
-        part_by = ", ".join(keys)
-
-        ranked_sql = f"""
-SELECT
-  {key_select},
-  {vf},
-  ROW_NUMBER() OVER (
-    PARTITION BY {part_by}
-    ORDER BY {vf} DESC
-  ) AS rn
-FROM {target}
-"""
-
-        if dry_run:
-            sql = f"""
-WITH ranked AS (
-  {ranked_sql}
-)
-SELECT COUNT(*) AS rows_to_delete
-FROM ranked
-WHERE rn > {int(keep_last)}
-"""
-            job = self.client.query(sql, location=self.location)
-            rows = list(job.result())
-            count = int(rows[0][0]) if rows else 0
-
-            echo(
-                f"[DRY-RUN] snapshot_prune({relation}): would delete {count} row(s) "
-                f"(keep_last={keep_last})"
-            )
-            return
-
-        join_pred = " AND ".join([f"t.{k} = r.{k}" for k in keys])
-        delete_sql = f"""
-DELETE FROM {target} AS t
-WHERE EXISTS (
-  WITH ranked AS (
-    {ranked_sql}
-  )
-  SELECT 1
-  FROM ranked AS r
-  WHERE
-    r.rn > {int(keep_last)}
-    AND {join_pred}
-    AND t.{vf} = r.{vf}
-)
-"""
-        self._execute_sql(delete_sql).result()
 
     def execute_hook_sql(self, sql: str) -> None:
         """

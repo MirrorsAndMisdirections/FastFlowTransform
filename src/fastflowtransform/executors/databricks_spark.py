@@ -16,13 +16,13 @@ from fastflowtransform import storage
 from fastflowtransform.core import REGISTRY, Node, relation_for
 from fastflowtransform.errors import ModelExecutionError
 from fastflowtransform.executors._budget_runner import run_sql_with_budget
+from fastflowtransform.executors._query_stats_adapter import SparkDataFrameStatsAdapter
 from fastflowtransform.executors._spark_imports import (
     get_spark_functions,
     get_spark_window,
 )
 from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.executors.budget import BudgetGuard
-from fastflowtransform.executors.query_stats import QueryStats
 from fastflowtransform.logging import echo, echo_debug
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
 from fastflowtransform.snapshots import resolve_snapshot_config
@@ -571,14 +571,9 @@ class DatabricksSparkExecutor(BaseExecutor[SDF]):
                 self.spark.catalog.refreshByPath(path)
 
     def _record_spark_dataframe_stats(self, df: SDF, duration_ms: int) -> None:
-        bytes_est = self._spark_dataframe_bytes(df)
-        self._record_query_stats(
-            QueryStats(
-                bytes_processed=bytes_est,
-                rows=None,
-                duration_ms=duration_ms,
-            )
-        )
+        adapter = SparkDataFrameStatsAdapter(self._spark_dataframe_bytes)
+        stats = adapter.collect(df, duration_ms=duration_ms)
+        self._record_query_stats(stats)
 
     def _spark_dataframe_bytes(self, df: SDF) -> int | None:
         try:
