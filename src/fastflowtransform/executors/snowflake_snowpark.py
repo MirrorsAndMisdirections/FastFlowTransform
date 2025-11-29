@@ -2,26 +2,25 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextlib import suppress
 from time import perf_counter
 from typing import Any, cast
 
 import pandas as pd
-from jinja2 import Environment
 
 from fastflowtransform.core import Node, relation_for
 from fastflowtransform.executors._budget_runner import run_sql_with_budget
+from fastflowtransform.executors._snapshot_sql_mixin import SnapshotSqlMixin
+from fastflowtransform.executors._sql_identifier import SqlIdentifierMixin
 from fastflowtransform.executors.base import BaseExecutor
 from fastflowtransform.executors.budget import BudgetGuard
 from fastflowtransform.executors.query_stats import QueryStats
-from fastflowtransform.logging import echo
 from fastflowtransform.meta import ensure_meta_table, upsert_meta
-from fastflowtransform.snapshots import resolve_snapshot_config
 from fastflowtransform.typing import SNDF, SnowparkSession as Session
 
 
-class SnowflakeSnowparkExecutor(BaseExecutor[SNDF]):
+class SnowflakeSnowparkExecutor(SqlIdentifierMixin, SnapshotSqlMixin, BaseExecutor[SNDF]):
     ENGINE_NAME = "snowflake_snowpark"
     """Snowflake executor operating on Snowpark DataFrames (no pandas)."""
     _BUDGET_GUARD = BudgetGuard(
@@ -150,9 +149,25 @@ class SnowflakeSnowparkExecutor(BaseExecutor[SNDF]):
     def _q(self, s: str) -> str:
         return '"' + s.replace('"', '""') + '"'
 
+    def _quote_identifier(self, ident: str) -> str:
+        # Keep identifiers unquoted to match legacy Snowflake behaviour.
+        return ident
+
+    def _default_schema(self) -> str | None:
+        return self.schema
+
+    def _default_catalog(self) -> str | None:
+        return self.database
+
+    def _should_include_catalog(
+        self, catalog: str | None, schema: str | None, *, explicit: bool
+    ) -> bool:
+        # Always include database when present; Snowflake expects DB.SCHEMA.TABLE.
+        return bool(catalog)
+
     def _qualified(self, rel: str) -> str:
         # DATABASE.SCHEMA.TABLE  (no quotes)
-        return f"{self.database}.{self.schema}.{rel}"
+        return self._qualify_identifier(rel, quote=False)
 
     def _ensure_schema(self) -> None:
         """
@@ -327,15 +342,12 @@ class SnowflakeSnowparkExecutor(BaseExecutor[SNDF]):
         return "Snowpark"
 
     # ---- SQL hooks ----
-    def _format_relation_for_ref(self, name: str) -> str:
-        return self._qualified(relation_for(name))
-
     def _this_identifier(self, node: Node) -> str:
         """
         Identifier for {{ this }} in SQL models.
         Use fully-qualified DB.SCHEMA.TABLE so all build/read/test paths agree.
         """
-        return self._qualified(relation_for(node.name))
+        return self._qualify_identifier(relation_for(node.name), quote=False)
 
     def _format_source_reference(
         self, cfg: dict[str, Any], source_name: str, table_name: str
@@ -347,13 +359,13 @@ class SnowflakeSnowparkExecutor(BaseExecutor[SNDF]):
         if not ident:
             raise KeyError(f"Source {source_name}.{table_name} missing identifier")
 
-        db = cfg.get("database") or cfg.get("catalog") or self.database
-        sch = cfg.get("schema") or self.schema
+        sch = self._pick_schema(cfg)
+        db = self._pick_catalog(cfg, sch)
         if not db or not sch:
             raise KeyError(
                 f"Source {source_name}.{table_name} missing database/schema for Snowflake"
             )
-        return f"{db}.{sch}.{ident}"
+        return self._qualify_identifier(ident, schema=sch, catalog=db, quote=False)
 
     def _create_or_replace_view(self, target_sql: str, select_body: str, node: Node) -> None:
         self._execute_sql(f"CREATE OR REPLACE VIEW {target_sql} AS {select_body}").collect()
@@ -487,223 +499,42 @@ class SnowflakeSnowparkExecutor(BaseExecutor[SNDF]):
         cols_sql = ", ".join(f"{self._q(c)} STRING" for c in to_add)
         self._execute_sql(f"ALTER TABLE {qrel} ADD COLUMN {cols_sql}").collect()
 
-    # ── Snapshot API ─────────────────────────────────────────────────────
-    def run_snapshot_sql(self, node: Node, env: Environment) -> None:
-        """
-        Snapshot materialization for Snowflake Snowpark.
+    # ---- Snapshot API (mixin hooks) --------------------------------------
+    def _snapshot_target_identifier(self, rel_name: str) -> str:
+        return self._qualified(rel_name)
 
-        Uses the shared snapshot config resolver so all engines share the
-        same semantics and validation.
-        """
-        if node.kind != "sql":
-            raise TypeError(
-                f"Snapshot materialization is only supported for SQL models, "
-                f"got kind={node.kind!r} for {node.name}."
-            )
+    def _snapshot_current_timestamp(self) -> str:
+        return "CURRENT_TIMESTAMP()"
 
-        meta = getattr(node, "meta", {}) or {}
-        if not self._meta_is_snapshot(meta):
-            raise ValueError(f"Node {node.name} is not configured with materialized='snapshot'.")
+    def _snapshot_create_keyword(self) -> str:
+        return "CREATE OR REPLACE TABLE"
 
-        cfg = resolve_snapshot_config(node, meta)
+    def _snapshot_null_timestamp(self) -> str:
+        return "CAST(NULL AS TIMESTAMP)"
 
-        # Render model SQL and extract the SELECT body
-        rendered = self.render_sql(
-            node,
-            env,
-            ref_resolver=lambda name: self._resolve_ref(name, env),
-            source_resolver=self._resolve_source,
-        )
-        sql = self._strip_leading_config(rendered).strip()
-        body = self._selectable_body(sql).rstrip(";\n\t ")
+    def _snapshot_null_hash(self) -> str:
+        return "CAST(NULL AS VARCHAR)"
 
-        rel_name = relation_for(node.name)
-        target = self._qualified(rel_name)
+    def _snapshot_hash_expr(self, check_cols: list[str], src_alias: str) -> str:
+        concat_expr = self._snapshot_concat_expr(check_cols, src_alias)
+        return f"CAST(MD5({concat_expr}) AS VARCHAR)"
 
-        vf = BaseExecutor.SNAPSHOT_VALID_FROM_COL
-        vt = BaseExecutor.SNAPSHOT_VALID_TO_COL
-        is_cur = BaseExecutor.SNAPSHOT_IS_CURRENT_COL
-        hash_col = BaseExecutor.SNAPSHOT_HASH_COL
-        upd_meta = BaseExecutor.SNAPSHOT_UPDATED_AT_COL
+    def _snapshot_cast_as_string(self, expr: str) -> str:
+        return f"CAST({expr} AS VARCHAR)"
 
-        # ---- First run: create snapshot table ----
-        if not self.exists_relation(rel_name):
-            if cfg.strategy == "timestamp":
-                # cfg.updated_at is guaranteed non-None by resolve_snapshot_config
-                if cfg.updated_at is None:  # defensive, for type-checkers
-                    raise ValueError(
-                        "strategy='timestamp' snapshot requires a non-null updated_at column."
-                    )
-
-                create_sql = f"""
-CREATE OR REPLACE TABLE {target} AS
-SELECT
-  s.*,
-  s.{cfg.updated_at} AS {upd_meta},
-  s.{cfg.updated_at} AS {vf},
-  CAST(NULL AS TIMESTAMP) AS {vt},
-  TRUE AS {is_cur},
-  CAST(NULL AS VARCHAR) AS {hash_col}
-FROM ({body}) AS s
-"""
-            else:  # strategy == "check"
-                # hash over check_cols to detect changes
-                col_exprs = [f"COALESCE(CAST(s.{col} AS VARCHAR), '')" for col in cfg.check_cols]
-                concat_expr = " || '||' || ".join(col_exprs) or "''"
-                hash_expr = f"CAST(MD5({concat_expr}) AS VARCHAR)"
-                upd_expr = (
-                    f"s.{cfg.updated_at}" if cfg.updated_at is not None else "CURRENT_TIMESTAMP()"
-                )
-
-                create_sql = f"""
-CREATE OR REPLACE TABLE {target} AS
-SELECT
-  s.*,
-  {upd_expr} AS {upd_meta},
-  CURRENT_TIMESTAMP() AS {vf},
-  CAST(NULL AS TIMESTAMP) AS {vt},
-  TRUE AS {is_cur},
-  {hash_expr} AS {hash_col}
-FROM ({body}) AS s
-"""
-            self._execute_sql(create_sql).collect()
-            return
-
-        # ---- Incremental snapshot update ----
+    def _snapshot_source_ref(
+        self, rel_name: str, select_body: str
+    ) -> tuple[str, Callable[[], None]]:
         src_name = f"__ff_snapshot_src_{rel_name}".replace(".", "_")
+        src_quoted = self._q(src_name)
+        self._execute_sql(
+            f"CREATE OR REPLACE TEMPORARY VIEW {src_quoted} AS {select_body}"
+        ).collect()
 
-        # Use a temporary view for the current source rows
-        self._execute_sql(f"CREATE OR REPLACE TEMPORARY VIEW {src_name} AS {body}").collect()
+        def _cleanup() -> None:
+            self._execute_sql(f"DROP VIEW IF EXISTS {src_quoted}").collect()
 
-        try:
-            keys_pred = " AND ".join([f"t.{k} = s.{k}" for k in cfg.unique_key]) or "FALSE"
-
-            if cfg.strategy == "timestamp":
-                if cfg.updated_at is None:
-                    raise ValueError(
-                        "strategy='timestamp' snapshot requires a non-null updated_at column."
-                    )
-                change_condition = f"s.{cfg.updated_at} > t.{upd_meta}"
-                hash_expr_s = "NULL"
-                new_upd_expr = f"s.{cfg.updated_at}"
-                new_valid_from_expr = f"s.{cfg.updated_at}"
-                new_hash_expr = "NULL"
-            else:
-                col_exprs_s = [f"COALESCE(CAST(s.{col} AS VARCHAR), '')" for col in cfg.check_cols]
-                concat_expr_s = " || '||' || ".join(col_exprs_s) or "''"
-                hash_expr_s = f"CAST(MD5({concat_expr_s}) AS VARCHAR)"
-                change_condition = f"COALESCE({hash_expr_s}, '') <> COALESCE(t.{hash_col}, '')"
-                new_upd_expr = (
-                    f"s.{cfg.updated_at}" if cfg.updated_at is not None else "CURRENT_TIMESTAMP()"
-                )
-                new_valid_from_expr = "CURRENT_TIMESTAMP()"
-                new_hash_expr = hash_expr_s
-
-            # 1) Close changed current rows
-            close_sql = f"""
-UPDATE {target} AS t
-SET
-  {vt} = CURRENT_TIMESTAMP(),
-  {is_cur} = FALSE
-FROM {src_name} AS s
-WHERE
-  {keys_pred}
-  AND t.{is_cur} = TRUE
-  AND {change_condition}
-"""
-            self._execute_sql(close_sql).collect()
-
-            # 2) Insert new current versions (new keys or changed rows)
-            first_key = cfg.unique_key[0]
-            insert_sql = f"""
-INSERT INTO {target}
-SELECT
-  s.*,
-  {new_upd_expr} AS {upd_meta},
-  {new_valid_from_expr} AS {vf},
-  CAST(NULL AS TIMESTAMP) AS {vt},
-  TRUE AS {is_cur},
-  {new_hash_expr} AS {hash_col}
-FROM {src_name} AS s
-LEFT JOIN {target} AS t
-  ON {keys_pred}
- AND t.{is_cur} = TRUE
-WHERE
-  t.{first_key} IS NULL
-  OR {change_condition}
-"""
-            self._execute_sql(insert_sql).collect()
-        finally:
-            with suppress(Exception):
-                self._execute_sql(f"DROP VIEW IF EXISTS {src_name}").collect()
-
-    def snapshot_prune(
-        self,
-        relation: str,
-        unique_key: list[str],
-        keep_last: int,
-        *,
-        dry_run: bool = False,
-    ) -> None:
-        """
-        Delete older snapshot versions while keeping the most recent `keep_last`
-        rows per business key (including the current row).
-        """
-        if keep_last <= 0:
-            return
-
-        keys = [k for k in unique_key if k]
-        if not keys:
-            return
-
-        target = self._qualified(relation)
-        vf = BaseExecutor.SNAPSHOT_VALID_FROM_COL
-
-        part_by = ", ".join(keys)
-        key_select = ", ".join(keys)
-
-        ranked_sql = f"""
-SELECT
-  {key_select},
-  {vf},
-  ROW_NUMBER() OVER (
-    PARTITION BY {part_by}
-    ORDER BY {vf} DESC
-  ) AS rn
-FROM {target}
-"""
-
-        if dry_run:
-            sql = f"""
-WITH ranked AS (
-  {ranked_sql}
-)
-SELECT COUNT(*) AS rows_to_delete
-FROM ranked
-WHERE rn > {int(keep_last)}
-"""
-            res_raw = self._execute_sql(sql).collect()
-            # Snowflake returns a list of Row objects; treat them as tuples for typing.
-            res = cast("list[tuple[Any, ...]]", res_raw)
-            rows = int(res[0][0]) if res else 0
-
-            echo(
-                f"[DRY-RUN] snapshot_prune({relation}): would delete {rows} row(s) "
-                f"(keep_last={keep_last})"
-            )
-            return
-
-        delete_sql = f"""
-DELETE FROM {target} t
-USING (
-  {ranked_sql}
-) r
-WHERE
-  r.rn > {int(keep_last)}
-  AND {" AND ".join([f"t.{k} = r.{k}" for k in keys])}
-  AND t.{vf} = r.{vf}
-"""
-        self._execute_sql(delete_sql).collect()
+        return src_quoted, _cleanup
 
     def execute_hook_sql(self, sql: str) -> None:
         """

@@ -7,7 +7,6 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
-from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
@@ -20,6 +19,7 @@ from fastflowtransform.api import context as _http_ctx
 from fastflowtransform.config.sources import resolve_source_entry
 from fastflowtransform.core import REGISTRY, Node, relation_for
 from fastflowtransform.errors import ModelExecutionError
+from fastflowtransform.executors._query_stats_adapter import JobStatsAdapter
 from fastflowtransform.executors.budget import BudgetGuard
 from fastflowtransform.executors.query_stats import QueryStats
 from fastflowtransform.incremental import _normalize_unique_key
@@ -424,6 +424,15 @@ class BaseExecutor[TFrame](ABC):
             raise NotImplementedError("Direct DDL execution is not implemented for this executor.")
         con.execute(sql)
 
+    def _execute_sql(
+        self, sql: str, *args: Any, **kwargs: Any
+    ) -> Any:  # pragma: no cover - abstract
+        """
+        Engine-specific SQL execution hook used by shared helpers (snapshots, pruning, etc.).
+        Concrete executors override this with their own signatures and semantics.
+        """
+        raise NotImplementedError
+
     def _render_ephemeral_sql(self, name: str, env: Environment) -> str:
         """
         Render the SQL for an 'ephemeral' model and return it as a parenthesized
@@ -486,42 +495,8 @@ class BaseExecutor[TFrame](ABC):
         (BigQuery, Snowflake, Spark) can pass them here. Engines can
         override this if they want more precise logic.
         """
-
-        def _safe_int(val: Any) -> int | None:
-            try:
-                if val is None:
-                    return None
-                return int(val)
-            except Exception:
-                return None
-
-        # Heuristic attribute names - BigQuery and others may expose these.
-        bytes_processed = _safe_int(
-            getattr(job, "total_bytes_processed", None) or getattr(job, "bytes_processed", None)
-        )
-
-        rows = _safe_int(
-            getattr(job, "num_dml_affected_rows", None)
-            or getattr(job, "total_rows", None)
-            or getattr(job, "rowcount", None)
-        )
-
-        duration_ms: int | None = None
-        try:
-            started = getattr(job, "started", None)
-            ended = getattr(job, "ended", None)
-            if isinstance(started, datetime) and isinstance(ended, datetime):
-                duration_ms = int((ended - started).total_seconds() * 1000)
-        except Exception:
-            pass
-
-        self._record_query_stats(
-            QueryStats(
-                bytes_processed=bytes_processed,
-                rows=rows,
-                duration_ms=duration_ms,
-            )
-        )
+        adapter = JobStatsAdapter()
+        self._record_query_stats(adapter.collect(job))
 
     def configure_query_budget_limit(self, limit: int | None) -> None:
         """

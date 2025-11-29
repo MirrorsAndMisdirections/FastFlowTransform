@@ -5,6 +5,7 @@ from contextlib import suppress
 from time import perf_counter
 from typing import Any
 
+from fastflowtransform.executors._query_stats_adapter import QueryStatsAdapter, RowcountStatsAdapter
 from fastflowtransform.executors.budget import BudgetGuard
 from fastflowtransform.executors.query_stats import QueryStats
 
@@ -20,6 +21,7 @@ def run_sql_with_budget(
     estimate_fn: Callable[[str], int | None] | None = None,
     post_estimate_fn: Callable[[str, Any], int | None] | None = None,
     record_stats: bool = True,
+    stats_adapter: QueryStatsAdapter | None = None,
 ) -> Any:
     """
     Shared helper for guarded SQL execution with timing + stats recording.
@@ -51,36 +53,18 @@ def run_sql_with_budget(
     result = exec_fn()
     duration_ms = int((perf_counter() - started) * 1000)
 
-    rows: int | None = None
-    if rowcount_extractor is not None:
-        with suppress(Exception):
-            rows = rowcount_extractor(result)
-
-    stats = QueryStats(bytes_processed=estimated_bytes, rows=rows, duration_ms=duration_ms)
-
-    if stats.bytes_processed is None and post_estimate_fn is not None:
-        with suppress(Exception):
-            post_estimate = post_estimate_fn(sql, result)
-            if post_estimate is not None:
-                stats = QueryStats(
-                    bytes_processed=post_estimate,
-                    rows=stats.rows,
-                    duration_ms=stats.duration_ms,
-                )
-
-    if extra_stats is not None:
-        with suppress(Exception):
-            extra = extra_stats(result)
-            if extra:
-                stats = QueryStats(
-                    bytes_processed=extra.bytes_processed
-                    if extra.bytes_processed is not None
-                    else stats.bytes_processed,
-                    rows=extra.rows if extra.rows is not None else stats.rows,
-                    duration_ms=extra.duration_ms
-                    if extra.duration_ms is not None
-                    else stats.duration_ms,
-                )
+    adapter = stats_adapter
+    if adapter is None and (rowcount_extractor or post_estimate_fn or extra_stats):
+        adapter = RowcountStatsAdapter(
+            rowcount_extractor=rowcount_extractor,
+            post_estimate_fn=post_estimate_fn,
+            extra_stats=extra_stats,
+            sql=sql,
+        )
+    if adapter is None:
+        stats = QueryStats(bytes_processed=estimated_bytes, rows=None, duration_ms=duration_ms)
+    else:
+        stats = adapter.collect(result, duration_ms=duration_ms, estimated_bytes=estimated_bytes)
 
     executor._record_query_stats(stats)
     return result

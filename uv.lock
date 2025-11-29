@@ -733,7 +733,7 @@ wheels = [
 
 [[package]]
 name = "fastflowtransform"
-version = "0.6.9"
+version = "0.6.10"
 source = { editable = "." }
 dependencies = [
     { name = "duckdb" },
