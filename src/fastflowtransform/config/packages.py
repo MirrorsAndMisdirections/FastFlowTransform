@@ -1,4 +1,3 @@
-# fastflowtransform/config/packages.py
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -21,16 +20,33 @@ class PackageSpec(BaseModel):
     Or (shorthand mapping form):
 
       fft_utils: "../fft_utils"
+
+    For git-based packages:
+
+      - name: shared_package_git
+        git: "https://github.com/org/repo.git"
+        subdir: "path/inside/repo"
+        # one of the revision selectors below is optional:
+        #   - ref: "main"      (generic alias, mapped to `rev`)
+        #   - rev: "abc1234"   (commit SHA)
+        #   - tag: "v1.2.3"
+        #   - branch: "main"
+        # models_dir: "models"  # optional, default "models"
     """
 
     model_config = ConfigDict(extra="forbid")
 
     name: str
+
     # Exactly one of `path` or `git` must be set.
     path: str | None = None
     git: str | None = None
 
     # Optional git parameters (ignored for path-based packages).
+    #
+    # "ref" is a user-facing alias (branch/tag/commit); internally we map it to `rev`
+    # if no more-specific selector (rev/tag/branch) is provided.
+    ref: str | None = None
     rev: str | None = None
     tag: str | None = None
     branch: str | None = None
@@ -49,15 +65,24 @@ class PackageSpec(BaseModel):
     def _validate_source(self) -> PackageSpec:
         """
         Ensure that exactly one of `path` or `git` is set.
-        Older configs that only have `path` remain valid.
+        Also treat `ref` as a generic alias for `rev` when no other
+        more-specific selector (rev/tag/branch) is given.
         """
         has_path = bool(self.path)
         has_git = bool(self.git)
+
         if has_path == has_git:
+            # Either both set or both unset → error.
             raise ValueError(
                 f"Package '{self.name}': exactly one of 'path' or 'git' must be set "
                 "in packages.yml."
             )
+
+        # If user provided a generic `ref` but no explicit rev/tag/branch,
+        # map it to `rev` so downstream resolver can just look at rev/tag/branch.
+        if self.ref and not (self.rev or self.tag or self.branch):
+            self.rev = self.ref
+
         return self
 
 

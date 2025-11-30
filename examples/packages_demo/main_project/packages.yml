@@ -11,6 +11,6 @@ packages:
     subdir: "examples/packages_demo/shared_package_git_remote"
     models_dir: "models"
     # optional: use explicit ref / branch / tag
-    ref: "main"
+    ref: "v0.6.11"
     # optional: version constraint matched against shared_package_git_remote/project.yml
     version: ">=0.1.0,<0.2.0"
