@@ -53,6 +53,9 @@ test:
 dag:
 	env $(RUN_ENV) $(UV) run fft dag "$(PROJECT)" --env $(PROFILE_ENV) $(SELECT_FLAGS) --html
 
+deps:
+	env $(BASE_ENV) $(UV) run fft deps "$(PROJECT)"
+
 show:
 	@if [ -f "$(PROJECT)/site/dag/index.html" ]; then \
 		$(OPENER) "$(PROJECT)/site/dag/index.html" 2>/dev/null || echo "Open manually at: $(PROJECT)/site/dag/index.html"; \
@@ -76,5 +79,6 @@ demo: clean
 	+$(MAKE) run ENGINE=$(ENGINE)
 	+$(MAKE) dag ENGINE=$(ENGINE)
 	+$(MAKE) test ENGINE=$(ENGINE)
+	+$(MAKE) deps ENGINE=$(ENGINE)
 	+$(MAKE) artifacts
 	@echo "✅ Demo complete."

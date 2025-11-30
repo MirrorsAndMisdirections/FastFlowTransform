@@ -10,34 +10,60 @@ Typical use cases:
 * A central **macro library** (casting helpers, email parsing, date tricks).
 * A “starter kit” of **canonical marts** that downstream projects can add on top of.
 
+Packages can come from:
+
+* A **local path** on disk.
+* A **git repository** (with optional branch/tag/commit + subdir).
+
 ---
 
-## High-level behavior
+## 1. High-level behavior
 
 When you declare packages in `packages.yml`:
 
 1. FFT loads your **main project** as usual.
-2. For each entry in `packages.yml`, FFT:
 
-   * resolves the path on disk,
-   * reads that package’s `project.yml` (if present),
-   * loads its `models/` and macros.
-3. All package models and macros are registered into the **same namespace** as your own.
+2. It runs the **package resolver**:
+
+   * For each entry in `packages.yml` it:
+
+     * locates the package:
+
+       * local: resolves the `path` on disk.
+       * git: clones/fetches a repo into `.fastflowtransform/packages` and checks out the requested ref.
+     * reads that package’s **`project.yml`** (the package manifest):
+
+       * `name`, `version`, optional `fft_version`, optional `dependencies`, optional `models_dir`.
+     * validates:
+
+       * manifest `name` matches the `name` from `packages.yml`.
+       * `fft_version` (if present) is compatible with the running FFT version.
+       * the spec’s `version` constraint (if present) is satisfied by `manifest.version`.
+       * package dependencies (if declared) are satisfied by other packages.
+   * Writes a `packages.lock.yml` with **pinned** sources (paths / git commit SHAs).
+
+3. For each **resolved package**, FFT:
+
+   * decides which directory to treat as its `models_dir`:
+
+     * `packages.yml:models_dir` overrides `project.yml:models_dir`, default `"models"`.
+   * loads SQL / Python models and macros from that directory.
+   * registers them into the **same namespace** as your own models.
 
 From inside your project you can:
 
-* `ref('users_base.ff')` even if `users_base.ff.sql` physically lives in `../shared_package/models/…`.
-* Use macros defined under `shared_package/models/macros/*.sql` in your own models.
+* `ref('users_base.ff')` even if `users_base.ff.sql` physically lives in a package folder.
+* Use macros defined in `models/macros/*.sql` inside a package.
 
 > There is no special syntax for package references; once loaded, package models look like any other model.
 
 ---
 
-## 1. Minimal setup
+## 2. Minimal setup
 
-### 1.1. Create a reusable package
+### 2.1. Create a reusable package
 
-A package looks like a regular FFT project, but you mainly care about its `models/` and macros.
+A package is structured like a normal FFT project, but consumers mainly care about its `models/` and macros.
 
 ```text
 shared_package/
@@ -49,21 +75,30 @@ shared_package/
       users_base.ff.sql
 ```
 
-Example `project.yml` in the package:
+Example `project.yml` in the **package**:
 
 ```yaml
 name: shared_package
 version: "0.1"
+
+# Where this package’s models live relative to the package root.
+# This can be overridden by packages.yml in the consumer project.
 models_dir: models
 
-# (Optional) tests/docs/etc. are allowed here but are not special in the consumer.
-vars: {}
-tests: []
+# Optional: constrain which FFT core versions can use this package.
+# If omitted, any FFT version is allowed.
+fft_version: ">=0.6.0,<0.7.0"
+
+# Optional: dependencies on other packages (by name) if you compose packages.
+# These are validated against the set of packages declared in the consumer’s packages.yml.
+dependencies: []
 ```
 
 Example macro (`models/macros/shared_utils.sql`):
 
 ```jinja
+{# Shared SQL macros for the package #}
+
 {%- macro email_domain(expr) -%}
   lower(regexp_replace({{ expr }}, '^.*@', ''))
 {%- endmacro -%}
@@ -74,21 +109,29 @@ Example staging model (`models/staging/users_base.ff.sql`):
 ```jinja
 {{ config(
     materialized='view',
-    tags=['shared:staging', 'engine:duckdb', 'engine:postgres', 'engine:databricks_spark', 'engine:bigquery'],
+    tags=[
+        'pkg:shared_package',
+        'scope:staging',
+        'engine:duckdb',
+        'engine:postgres',
+        'engine:databricks_spark',
+        'engine:bigquery',
+    ],
 ) }}
 
 with raw_users as (
-  select
-    cast(id as integer) as user_id,
-    lower(email)        as email,
-    cast(signup_date as date) as signup_date
-  from {{ source('crm', 'users') }}
+    select
+        cast(id as integer)       as user_id,
+        lower(email)              as email,
+        cast(signup_date as date) as signup_date
+    from {{ source('crm', 'users') }}
 )
+
 select
-  user_id,
-  email,
-  {{ email_domain("email") }} as email_domain,
-  signup_date
+    user_id,
+    email,
+    {{ email_domain("email") }} as email_domain,
+    signup_date
 from raw_users;
 ```
 
@@ -96,7 +139,7 @@ This package expects the **consumer project** to define `source('crm','users')`.
 
 ---
 
-### 1.2. Declare the package in your project
+### 2.2. Declare the package in your project
 
 In your main project:
 
@@ -114,20 +157,20 @@ Create `packages.yml`:
 ```yaml
 packages:
   - name: shared_package
-    path: "../shared_package"
-    models_dir: "models"
+    path: "../shared_package"   # resolved relative to this file
+    models_dir: "models"        # optional; defaults to "models"
 ```
 
 * `name`
-  Logical name for the package (used for logs/diagnostics). Does *not* change how you `ref()` models.
+  Logical name for the package, taken from the package’s own `project.yml`. This must match the manifest; it’s used for logs, diagnostics, and dependency checks.
 * `path`
-  Filesystem location of the package folder, resolved **relative to the directory containing `packages.yml`**.
+  Filesystem location of the **package root**, resolved relative to the directory containing `packages.yml`.
 * `models_dir` (optional)
-  Subdirectory containing the package’s models. Defaults to `models` if omitted.
+  Subdirectory within the package root that contains the package’s models. Defaults to `models`. If both `project.yml:models_dir` and `packages.yml:models_dir` are set, **`packages.yml` wins**.
 
 ---
 
-### 1.3. Use package models in your project
+### 2.3. Use package models in your project
 
 Now, in `my_project/models/marts/mart_users_from_package.ff.sql`:
 
@@ -138,16 +181,17 @@ Now, in `my_project/models/marts/mart_users_from_package.ff.sql`:
 ) }}
 
 with base as (
-  select
-    email_domain,
-    signup_date
-  from {{ ref('users_base.ff') }}    -- defined in the package
+    select
+        email_domain,
+        signup_date
+    from {{ ref('users_base.ff') }}    -- defined in the shared_package
 )
+
 select
-  email_domain,
-  count(*) as user_count,
-  min(signup_date) as first_signup,
-  max(signup_date) as last_signup
+    email_domain,
+    count(*) as user_count,
+    min(signup_date) as first_signup,
+    max(signup_date) as last_signup
 from base
 group by email_domain
 order by email_domain;
@@ -161,7 +205,7 @@ fft run  . --env dev_duckdb
 fft dag  . --env dev_duckdb --html
 ```
 
-The DAG will show:
+The DAG will show something like:
 
 ```text
 crm.users (source) → users_base.ff (from package) → mart_users_from_package.ff (local)
@@ -169,7 +213,7 @@ crm.users (source) → users_base.ff (from package) → mart_users_from_package.
 
 ---
 
-## 2. `packages.yml` – configuration reference
+## 3. `packages.yml` – configuration reference
 
 `packages.yml` must live in the **project root**, next to `project.yml`:
 
@@ -181,26 +225,122 @@ my_project/
   …
 ```
 
-Structure:
+Top-level structure:
 
 ```yaml
 packages:
-  - name: <string>             # required
-    path: <string>             # required, relative or absolute path to the package root
-    models_dir: <string>       # optional, defaults to "models"
+  - name: ...
+    ...
 ```
 
-Notes:
+You can declare both **path-based** and **git-based** packages. Exactly one of `path` or `git` must be set per package.
 
-* `path` is resolved relative to `packages.yml`’s directory:
+### 3.1. Path packages
 
-  * `../shared_package` → sibling folder
-  * `vendor/my_pkg` → subfolder
-* `models_dir` allows you to keep a different structure in the package:
+```yaml
+packages:
+  - name: shared_package
+    path: "../shared_package"   # relative or absolute
+    models_dir: "models"        # optional
+    # optional semver constraint on the package’s manifest version:
+    version: ">=0.1.0,<0.2.0"
+```
 
-  * Example: `models_dir: "src/models"`.
+Fields:
 
-### Multiple packages
+* `name` (required)
+  Must match `project.yml:name` inside the package root.
+* `path` (required for path packages)
+  Relative or absolute path to the package root. Resolved relative to `packages.yml`.
+* `models_dir` (optional)
+  Models directory inside the package root. Default `"models"`.
+* `version` (optional)
+  Semver constraint for the package’s `project.yml:version`. See [4.2 Version constraints](#42-version-constraints).
+
+### 3.2. Git packages
+
+```yaml
+packages:
+  - name: shared_package_git
+    git: "https://github.com/fftlabs/fastflowtransform.git"
+
+    # Directory inside the repo that contains the package
+    subdir: "examples/packages_demo/shared_package_git_remote"
+
+    # Optional ref selectors (only one needs to be set; see notes below)
+    ref: "main"        # generic alias (branch / tag / commit)
+    # rev: "abc1234"   # explicit commit SHA
+    # tag: "v0.6.11"   # tag name
+    # branch: "main"   # branch name
+
+    models_dir: "models"
+
+    # Optional semver constraint on the package's manifest version
+    version: ">=0.1.0,<0.2.0"
+```
+
+Fields:
+
+* `name` (required)
+  Must match `project.yml:name` in the package subdir.
+* `git` (required for git packages)
+  Git URL (HTTPS or SSH, depending on your environment).
+* `subdir` (optional but recommended)
+  Path inside the repo that should be treated as the package root (relative to the repo root). If omitted, the repo root itself is the package root.
+* `ref` (optional)
+  Generic *user-facing* selector (branch, tag, or commit). If you don’t specify a more precise field (`rev` / `tag` / `branch`), `ref` is mapped internally to `rev` and passed directly to `git checkout`.
+* `rev` / `tag` / `branch` (optional)
+  More explicit selectors, used in preference to `ref` if set.
+* `models_dir` (optional)
+  Models directory inside the `subdir` root (default `"models"`).
+* `version` (optional)
+  Semver constraint for the package’s `project.yml:version`.
+
+Resolution rules:
+
+* FFT clones/fetches git packages into:
+
+  ```text
+  .fastflowtransform/packages/git/<slug>/repo
+  ```
+
+  where `<slug>` encodes the package name and git URL.
+* For each package, FFT:
+
+  * clones the repo (if missing),
+  * attempts a `git fetch --all` (best effort) if it already exists,
+  * runs `git checkout <ref>` using:
+
+    * `rev` or `tag` or `branch` (first non-empty),
+    * or `HEAD` if none are provided.
+
+If Git commands fail, you get targeted error messages:
+
+* Missing git binary → “git executable not found…”
+* Auth issues → “authentication error…”
+* Wrong repo / URL → “repository not found…”
+* Bad ref / branch / tag → “requested ref/branch/tag does not exist…”
+
+---
+
+### 3.3. Shorthand mapping form
+
+For local packages you can use a shorter mapping form:
+
+```yaml
+# Equivalent to packages: [ { name: shared_package, path: ../shared_package } ]
+
+shared_package: "../shared_package"
+other_pkg:
+  path: "../other"
+  models_dir: "dbt_models"
+```
+
+Internally this is normalized to the explicit `packages:` list.
+
+---
+
+### 3.4. Multiple packages
 
 You can declare multiple packages:
 
@@ -210,225 +350,332 @@ packages:
     path: "../shared_staging"
 
   - name: analytics_macros
-    path: "../analytics_macros"
-    models_dir: "macros_only"
+    git: "https://github.com/my-org/analytics-macros.git"
+    subdir: "packages/sql_macros"
+    models_dir: "models"
 ```
 
-All models/macros from all packages are loaded into the same project.
+All models/macros from all packages are loaded into the same logical project.
 
 ---
 
-## 3. What gets loaded (and what doesn’t)
+## 4. Manifests, versions & dependencies
 
-Currently, packages are focused on **models and macros**.
+### 4.1. Package manifests (`project.yml` inside the package)
+
+Every package has its own `project.yml` at the package root (or package `subdir` for git packages):
+
+```yaml
+name: shared_package
+version: "0.1.0"
+models_dir: "models"    # optional; may be overridden by packages.yml
+fft_version: ">=0.6.0,<0.7.0"   # optional
+
+dependencies:
+  - name: other_shared_pkg
+    version: ">=1.0.0,<2.0.0"
+    optional: false
+```
+
+FFT uses this manifest for:
+
+* `name`
+  Must match the `name` from `packages.yml`.
+* `version`
+  Compared to the spec’s `version` constraint, if provided.
+* `fft_version` (optional)
+  Semver constraint against the running FFT version. If your package only supports certain FFT versions, set this. If the constraint is not satisfied, resolution fails with a clear error.
+* `models_dir` (optional)
+  Default path for models within the package root; overridden by `packages.yml:models_dir` if set.
+* `dependencies` (optional)
+  A list of other **packages** (by name) this package expects to be present in the same project.
+
+  Each dependency entry may include:
+
+  * `name` – required, another package’s name.
+  * `version` – optional semver constraint on that package’s `project.yml:version`.
+  * `optional` – if `true`, missing dependency is allowed; otherwise it is an error.
+
+Resolution validates that:
+
+* Every non-optional dependency `name` is present in the set of packages declared in the **consumer’s** `packages.yml`.
+* If a `version` constraint is given for a dependency, the resolved dependency’s version satisfies it.
+
+---
+
+### 4.2. Version constraints
+
+Package specs and dependencies support a tiny semver subset. Version strings must be in `MAJOR.MINOR.PATCH` form (e.g. `1.2.3`).
+
+Supported constraint forms:
+
+* Bare version:
+
+  ```text
+  "1.2.3"         # equivalent to "==1.2.3"
+  ```
+
+* Comparators (can be combined with commas or spaces):
+
+  ```text
+  ">=1.2.0,<2.0.0"
+  ">1.0.0 <=2.0.0"
+  ```
+
+* `^` (caret) ranges:
+
+  ```text
+  "^1.2.3"        # >=1.2.3,<2.0.0
+  "^0.3.0"        # >=0.3.0,<0.4.0
+  "^0.0.4"        # >=0.0.4,<0.0.5
+  ```
+
+* `~` (tilde) ranges:
+
+  ```text
+  "~1.2.3"        # >=1.2.3,<1.3.0
+  ```
+
+The resolver checks:
+
+* Consumers → packages: `packages.yml:version` vs package’s `project.yml:version`.
+* Package → package: `dependencies[].version` vs the dependent package’s version.
+* Package → FFT core: `project.yml:fft_version` vs the running FFT version.
+
+If a constraint fails, you get a clear runtime error showing which package and which constraint failed.
+
+---
+
+## 5. What gets loaded (and what doesn’t)
 
 When FFT loads a package, it will:
 
-* Read the package’s `project.yml` (if present) for:
+**Loads:**
 
-  * `name`, `version` (for metadata),
-  * `models_dir` (overridden by `packages.yml` if provided).
-* Load:
+* `project.yml` manifest (for name, version, fft_version, dependencies, models_dir).
+* SQL models: `*.ff.sql` under the resolved `models_dir`.
+* Python models: `*.ff.py` under `models_dir`.
+* SQL macros: under `models_dir/macros/` (e.g. `macros/shared_utils.sql`).
+* Python helpers/macros: under `models_dir/macros_py/` (same mechanism as the main project).
 
-  * SQL models (`*.ff.sql`) from the package’s `models_dir`.
-  * Python models (`*.ff.py`) from the package’s `models_dir`.
-  * SQL macros under `models_dir/macros/` (standard Jinja macro files).
-  * Python render-time helpers/macros if your core exposes them from the package (same mechanism as the main project).
+**Does NOT load / run automatically:**
 
-And it will **not**:
+* `profiles.yml` from the package — the consumer project’s profiles are always used.
+* Seeds / sources defined in the package — these are still local to the consumer project.
+* Tests declared in the package’s `project.yml` — only tests in the **consumer project’s** `project.yml` are run on `fft test`.
 
-* Load or execute the package’s `profiles.yml` – the consumer project’s profiles are always used.
-* Automatically register package **seeds** or **sources**; those stay local to the consumer.
-* Automatically run the package’s DQ tests; only tests declared in the **consumer project’s** `project.yml` are executed on `fft test`.
-
-> In practice, package models often still refer to `source('…')` or `ref('…')`.
-> The *consumer* project is responsible for:
->
-> * defining sources in its own `sources.yml`, and
-> * wiring any extra seeds needed.
+> In practice, package models still call `source('…')` and `ref('…')`. The **consumer project** is responsible for defining sources / seeds / additional models.
 
 ---
 
-## 4. Name resolution & conflicts
+## 6. Name resolution & conflicts
 
-### 4.1. Model names
+### 6.1. Model names
 
-Once loaded, a package model is just a regular model in the registry:
+Once loaded, a package model is just a regular model:
 
-* It has a **logical name** (e.g. `users_base.ff`).
-* Its file path and package association are recorded as metadata.
+* It has a logical name (e.g. `users_base.ff`).
+* It is registered in the same global registry as your local models.
 
 Rules:
 
-* `ref('<model_name>')` has **no package prefix**. You always use the bare model name.
+* `ref('<model_name>')` never has a package prefix. You always use the model name alone.
 * Model names must be **globally unique** across:
 
   * your main project,
-  * all packages.
+  * all loaded packages.
 
-If two models with the same name are found (e.g. `users_base.ff` in both main and package), FFT raises a clear error during project loading. You must rename or decide which one you want.
+If two models share a name (e.g. `users_base.ff` in both main and package), FFT will fail loading with a clear “Duplicate model name” error. You must rename or delete one of them.
 
-### 4.2. Macros
+### 6.2. Macros
 
-Macros from packages are injected into the **same Jinja environment** as your own macros:
+Macros from packages and local macros all end up in the same Jinja environment.
 
 * Name collisions are possible.
-* If two macros share the same name, whichever is registered last will “win”.
+* “Last one wins” — whichever macro is registered last overrides earlier ones.
 
 Best practice:
 
-* Prefix shared macros with a **package-ish** prefix (e.g. `shared_email_domain`), or
-* Group them in macro files you explicitly `{% import 'macros/shared_utils.sql' as shared %}` and then call `shared.email_domain()`.
+* Prefix macro names with a package-ish prefix: `shared_email_domain`, etc.
+* Or use explicit `{% import 'macros/shared_utils.sql' as shared %}` and call `shared.email_domain()` from consumer models.
 
 ---
 
-## 5. DAGs, caching, and manifests
+## 7. Lock file: `packages.lock.yml`
 
-Once packages are loaded, the pipeline behaves like a single large project.
+After successful resolution, FFT writes a `packages.lock.yml` next to `packages.yml`:
 
-### 5.1. DAG & docs
+```yaml
+fft_version: "0.6.11"
+packages:
+  - name: shared_package
+    version: "0.1.0"
+    source:
+      kind: path
+      path: "/absolute/path/to/shared_package"
 
-* `fft dag` sees package models as part of the DAG.
-* The generated HTML docs show:
-
-  * nodes for package models,
-  * nodes for local models,
-  * edges between them.
-
-Package models typically carry an extra metadata field (`package_name`) used in the catalog/manifest; you can inspect `.fastflowtransform/target/manifest.json` if you want to differentiate them programmatically.
-
-### 5.2. Caching and fingerprints
-
-Build caching (`--cache`) treats package models like any other:
-
-* Fingerprints include:
-
-  * SQL/Python source from the **package** file,
-  * environment vars,
-  * upstream dependencies, etc.
-* If a package model’s code changes, its fingerprint changes, and:
-
-  * that model will rebuild on the next run,
-  * downstream models (local or from other packages) will also rebuild if needed.
-
-### 5.3. Tests and selectors
-
-Selectors (`--select`, `--exclude`) are agnostic to package vs. local:
-
-* You can tag package models with `tags: ['shared:staging']` and run:
-
-  ```bash
-  fft run . --env dev_duckdb --select tag:shared:staging
-  ```
-
-* You can define DQ tests in your **main project**’s `project.yml` targeting package tables:
-
-  ```yaml
-  tests:
-    - type: not_null
-      table: users_base
-      column: email
-      tags: [example:packages_demo]
-  ```
-
----
-
-## 6. Best practices
-
-### 6.1. Keep packages stable and versioned
-
-Treat a shared package like a library:
-
-* Maintain a `version` in `project.yml`.
-* Avoid backwards-incompatible changes without coordination:
-
-  * e.g. dropping columns or changing semantics in shared staging models.
-* Consider tagging or branching in Git to coordinate upgrades across consumers.
-
-(There’s no built-in package registry or version pinning yet; you control which commit of the package you point to via Git + `path`.)
-
-### 6.2. Package responsibility
-
-A good rule of thumb:
-
-* **Package:** “What does *user* mean for us?” — common cleaning, typing, normalization, derivations (e.g. `email_domain`, `customer_segment`).
-* **Consumer project:** “What do we need for *this* product/report?” — marts, joins across domains, project-specific logic.
-
-This keeps packages focused and low-churn.
-
-### 6.3. Avoid tight coupling to local schemas
-
-Shared packages shouldn’t depend on highly project-specific schemas or seeds. Instead:
-
-* Use `source('domain', 'table')` with generic names (“crm.users”, “billing.invoices”).
-* Document in the package README what sources it expects.
-* Let each consumer wire those sources to its concrete tables via its own `sources.yml`.
-
-### 6.4. Tag everything
-
-Give package models clear tags:
-
-```jinja
-{{ config(
-    tags=[
-      'pkg:shared_package',
-      'scope:staging',
-      'engine:duckdb',
-      'engine:postgres',
-    ],
-) }}
+  - name: shared_package_git
+    version: "0.1.0"
+    source:
+      kind: git
+      git: "https://github.com/fftlabs/fastflowtransform.git"
+      rev: "abc1234deadbeef..."             # resolved commit SHA
+      subdir: "examples/packages_demo/shared_package_git_remote"
 ```
 
-Then consumers can:
+Today the lock file is:
 
-* include only `tag:pkg:shared_package` in some runs,
-* or exclude them via `--exclude tag:pkg:shared_package` if they want to run only local marts.
+* **Written** after each successful resolution.
+* Useful for diagnostics, reproducibility, CI logs, etc.
+
+(Resolution is still driven by `packages.yml`; the lockfile does not yet drive resolution itself.)
 
 ---
 
-## 7. Common pitfalls & how to avoid them
+## 8. CLI: `fft deps`
 
-**❌ Package model fails: `source('crm','users')` not found**
+The `deps` command inspects packages for your project and shows their resolved status:
 
-* You’re using a package model that references a source your main project hasn’t declared.
-* Fix: add a matching `sources.yml` entry in your main project:
+```bash
+fft deps .
+```
 
-  ```yaml
-  version: 2
-  sources:
-    - name: crm
-      tables:
-        - name: users
-          identifier: seed_users
+Behavior:
+
+* Resolves the project directory.
+
+* Runs the **full** package resolver (same as `fft run` would):
+
+  * locates local path packages,
+  * clones/fetches git packages,
+  * loads `project.yml` manifests,
+  * validates version constraints and dependencies,
+  * writes `packages.lock.yml`.
+
+* Prints a small report for each package:
+
+  ```text
+  Project: /path/to/my_project
+  Packages:
+    - shared_package (0.1.0)
+        kind:       path
+        path:       /abs/path/to/shared_package
+        models_dir: models  -> /abs/path/to/shared_package/models
+        status:     OK
+
+    - shared_package_git (0.1.0)
+        kind:       git
+        git:        https://github.com/fftlabs/fastflowtransform.git
+        rev:        abc1234deadbeef...
+        subdir:     examples/packages_demo/shared_package_git_remote
+        models_dir: models  -> /abs/.../repo/examples/packages_demo/shared_package_git_remote/models
+        status:     OK
   ```
 
----
+* Exits with **non-zero** status if any package’s `models_dir` is missing or invalid.
 
-**❌ Duplicate model name between project and package**
+This is the easiest way to debug:
 
-* You have `models/staging/users_base.ff.sql` locally **and** in the package.
-* Fix: rename one of them, or drop the local one if you want to fully delegate to the package.
-
----
-
-**❌ Macro name collision**
-
-* Same macro name in package and project; behavior seems “random”.
-* Fix: rename macros or use explicit `{% import %}` and call macros with a namespace alias.
+* git connectivity / credentials,
+* bad refs (`tag` / `branch` / `rev`),
+* missing `project.yml` in a package,
+* version constraint mismatches,
+* missing `models_dir` directories.
 
 ---
 
-## Summary
+## 9. DAGs, caching, selectors
 
-Packages let you:
+Once packages are resolved, FFT essentially treats:
 
-* Factor out **shared staging** and **macro libraries**.
-* Reuse them across many projects via a simple `packages.yml`.
-* Keep execution, caching, DAGs, and tests working as if everything were one project.
+> **“main project + all packages” as one large logical project.**
 
-The mental model is:
+### 9.1. DAG & docs
 
-> “My project + all packages = one big FastFlowTransform project
-> where some models just happen to live in other directories.”
+* `fft dag` and the generated HTML docs include package models and edges between them and your local models.
+* You can inspect `.fastflowtransform/target/manifest.json` if you need to distinguish package vs local models programmatically (nodes carry metadata like their originating package).
 
-As your internal ecosystem grows, you can introduce multiple packages (per domain, per team, per capability) and let downstream projects compose them like building blocks.
+### 9.2. Caching
+
+Build caching behaves the same for package models as for local ones:
+
+* Fingerprints incorporate:
+
+  * SQL/Python source of the package model,
+  * upstream dependencies,
+  * environment, etc.
+* Changing a package model’s code changes its fingerprint and invalidates cache for that model and its downstream dependents.
+
+### 9.3. Selectors & tests
+
+Selectors (`--select`, `--exclude`) are package-agnostic:
+
+* You can tag package models:
+
+  ```jinja
+  {{ config(
+      tags=['pkg:shared_package', 'scope:staging'],
+  ) }}
+  ```
+
+* Then:
+
+  ```bash
+  fft run . --env dev_duckdb --select tag:pkg:shared_package
+  ```
+
+You can define tests in your **main project** for tables produced by package models:
+
+```yaml
+tests:
+  - type: not_null
+    table: users_base
+    column: email
+    tags: [example_packages_demo]
+```
+
+Only the tests defined in the **consumer** project’s `project.yml` are executed on `fft test`.
+
+---
+
+## 10. Best practices & pitfalls
+
+### 10.1. Treat packages like libraries
+
+* Always set a `version` in the package’s `project.yml`.
+* Use tags/releases/branches on the git repo for meaningful versions.
+* Use `packages.yml:version` constraints to avoid accidental breaking upgrades.
+
+### 10.2. Keep responsibilities clear
+
+* **Package:** shared semantics (cleaning, typing, derived fields), stable over time.
+* **Consumer project:** product/report-specific marts and joins.
+
+### 10.3. Avoid tight coupling to specific schemas
+
+* Use generic `source('domain','table')` names in packages.
+* Document expected sources in the package README.
+* Let each consumer wire those to their actual tables via their own `sources.yml`.
+
+### 10.4. Tag and namespace thoughtfully
+
+* Tag package models with something like `pkg:<name>` to make them easy to select/exclude.
+* Use macro namespaces or prefixes to reduce collisions.
+
+### 10.5. Common errors
+
+* **`Package root … has no project.yml`**
+  Your package directory (or git `subdir`) is wrong. Point `path`/`subdir` at the folder that actually contains the package’s `project.yml`.
+
+* **Git errors about authentication or unknown revision**
+  Check your git URL/credentials and branch/tag/commit. `fft deps` will show the raw git error stderr to help you debug.
+
+* **Version mismatch errors**
+  Align:
+
+  * the package’s `version` and your `packages.yml:version`,
+  * the package’s `fft_version` and your installed FFT version.
+
+---
+
+**In short:** packages let you compose FFT projects like libraries, with both local and git-backed sources, basic versioning, and a resolver + lockfile that make behavior explicit and debuggable.

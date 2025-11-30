@@ -11,18 +11,29 @@ from fastflowtransform.packages import resolve_packages
 
 def deps(project: ProjectArg = ".") -> None:
     """
-    Show packages configured in packages.yml and basic status checks.
+    Inspect packages declared in packages.yml and show their resolved status.
 
-    - Resolves project directory (must contain models/).
-    - Parses packages.yml (if present).
-    - For each package, resolves its base path and models_dir location.
-    - Prints a short report and exits with non-zero status when something is missing.
+    For the given project it will:
+
+      - Resolve the project directory.
+      - Run the full package resolver (path + git packages):
+          * locate or clone/fetch each package
+          * load its project.yml manifest (name/version/etc.)
+          * enforce version / FFT compatibility / inter-package deps
+          * write packages.lock.yml with pinned sources
+      - For each resolved package, print:
+          * name + version
+          * source kind (path | git) and concrete location
+          * models_dir and resolved models root
+      - Exit with non-zero status if any package's models_dir is missing.
     """
     proj = _resolve_project_path(project)
 
     try:
         pkgs = resolve_packages(proj)
-    except Exception as exc:  # pragma: no cover - config error path
+    except Exception as exc:  # pragma: no cover - resolution error path
+        # Keep this as a single, clear error line; resolve_packages already
+        # does step-by-step validation (git, refs, manifest, versions, etc.).
         raise typer.BadParameter(f"Failed to resolve packages: {exc}") from exc
 
     echo(f"Project: {proj}")
@@ -53,13 +64,14 @@ def deps(project: ProjectArg = ".") -> None:
         echo(f"      models_dir: {pkg.models_dir}  -> {models_root}")
         echo(f"      status:     {status}")
 
+    # Non-zero exit if any package is structurally broken
     raise typer.Exit(1 if missing else 0)
 
 
 def register(app: typer.Typer) -> None:
     app.command(
         name="deps",
-        help="Show configured packages from packages.yml and their local status.",
+        help="Show resolved packages (path/git) from packages.yml and their local status.",
     )(deps)
 
 

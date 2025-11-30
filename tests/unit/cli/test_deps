@@ -1,0 +1,81 @@
+# tests/test_cli_deps_cmd.py
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from fastflowtransform.cli import deps_cmd
+
+runner = CliRunner()
+
+
+def test_deps_no_packages(tmp_path: Path) -> None:
+    """
+    If no packages.yml exists, deps should say "No packages configured"
+    and exit with code 0.
+    """
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+
+    app = _build_app()
+    result = runner.invoke(app, ["deps", str(project_dir)])
+
+    assert result.exit_code == 0
+    out = result.stdout
+    assert "No packages configured" in out
+
+
+def test_deps_with_path_package(tmp_path: Path) -> None:
+    """
+    End-to-end-ish check for a single path package that has a valid models_dir.
+    """
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+
+    # Write packages.yml in the main project
+    (project_dir / "packages.yml").write_text(
+        """
+        packages:
+          - name: shared_package
+            path: "../shared_package"
+            models_dir: "models"
+        """,
+        encoding="utf-8",
+    )
+
+    # Create the path package that packages.yml refers to
+    pkg_root = tmp_path / "shared_package"
+    pkg_root.mkdir()
+    (pkg_root / "models").mkdir(parents=True, exist_ok=True)
+
+    # Minimal project.yml so the resolver can load a manifest
+    (pkg_root / "project.yml").write_text(
+        """
+        name: shared_package
+        version: "0.1.0"
+        models_dir: models
+        """,
+        encoding="utf-8",
+    )
+
+    app = _build_app()
+    result = runner.invoke(app, ["deps", str(project_dir)])
+
+    # models_dir exists, so deps should succeed
+    assert result.exit_code == 0
+
+    out = result.stdout
+    assert "shared_package (0.1.0)" in out
+    assert "kind:       path" in out
+    assert "models_dir: models" in out
+    assert "status:     OK" in out
+
+
+def _build_app():
+    import typer
+
+    app = typer.Typer()
+    deps_cmd.register(app)
+    return app

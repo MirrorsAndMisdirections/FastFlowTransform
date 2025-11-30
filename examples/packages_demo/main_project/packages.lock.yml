@@ -1,0 +1,14 @@
+fft_version: 0.6.11
+packages:
+- name: shared_package
+  version: '0.1'
+  source:
+    kind: path
+    path: /Users/markolekic/Dev/FlowForge/fastflowtransform/examples/packages_demo/shared_package
+- name: shared_package_git
+  version: 0.1.0
+  source:
+    kind: git
+    git: https://github.com/fftlabs/fastflowtransform.git
+    rev: a523f90bab3c9e6293a4d7a327be646521bbce06
+    subdir: examples/packages_demo/shared_package_git_remote

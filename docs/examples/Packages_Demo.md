@@ -1,13 +1,18 @@
 # Packages Demo
 
-The **packages demo** shows how to split FastFlowTransform logic into a **reusable package**
-and a **consumer project** that imports it via `packages.yml`.
+The **packages demo** shows how to split FastFlowTransform logic into:
+
+* a **reusable local package** (path-based), and
+* a **git-backed package**,
+
+and a **consumer project** that imports both via `packages.yml`.
 
 It answers:
 
-- How do I **share staging models** and macros across multiple projects?
-- How does `packages.yml` work?
-- How do I `ref()` a model that physically lives in another directory/tree?
+* How do I **share staging models** and macros across multiple projects?
+* How does `packages.yml` work for **local path** and **git** sources?
+* How do I `ref()` a model that physically lives in another directory/tree?
+* How do I see which exact versions / commits are being used?
 
 Use this as a template for building your own internal “FFT packages” repo.
 
@@ -19,13 +24,14 @@ The example lives under:
 
 ```text
 examples/packages_demo/
-  shared_package/      # reusable package
-  main_project/        # normal FFT project that consumes the package
-````
+  shared_package/             # reusable local package (path-based)
+  shared_package_git_remote/  # git-style package (lives in this repo for the demo)
+  main_project/               # normal FFT project that consumes both
+```
 
-### `shared_package` – reusable code
+### 1. `shared_package` – local reusable code
 
-This folder behaves like a **mini FFT project**:
+This folder behaves like a **mini FFT project** that’s consumed via a local path:
 
 ```text
 shared_package/
@@ -38,24 +44,59 @@ shared_package/
       users_base.ff.sql
 ```
 
-It includes:
+Key pieces:
 
-* `project.yml` – minimal config so FFT knows how to load its models.
+* `project.yml` – minimal manifest so FFT knows:
+
+  * the package `name` / `version`,
+  * where its models live (`models_dir`).
 * `models/macros/shared_utils.sql` – shared SQL macros (e.g. `email_domain(expr)`).
 * `models/staging/users_base.ff.sql` – a reusable staging model that:
 
-  * reads `source('crm', 'users')`
-  * normalizes emails
-  * derives `email_domain`.
+  * reads `source('crm', 'users')`,
+  * normalizes emails,
+  * derives `email_domain` using the shared macro.
 
-You **do not** call `fft run shared_package` directly in this demo.
-Instead, `shared_package` is loaded by the consumer project via `packages.yml`.
+In this demo you **do not** run `fft` inside `shared_package/` directly.
+It’s pulled in by `main_project` via `packages.yml`.
 
-### `main_project` – normal FFT project
+---
+
+### 2. `shared_package_git_remote` – git-backed reusable code
+
+For the git example we use a second package:
+
+```text
+shared_package_git_remote/
+  project.yml
+  models/
+    README.md
+    macros/
+      shared_utils_git.sql
+    staging/
+      users_base_git.ff.sql
+```
+
+Conceptually this folder represents a **separate git repo**. In the demo it lives in the main FFT repo so that:
+
+* `main_project` can point to the **GitHub URL** of this repo,
+* and specify `subdir: examples/packages_demo/shared_package_git_remote` to use it as a git-based package.
+
+Key ideas:
+
+* It has its own `project.yml` with a different `name` (e.g. `shared_package_git`) and `version`.
+* It has its own models / macros, distinct from `shared_package`, so you can see clearly which package a model came from.
+* For a real deployment, you would typically push this folder into a dedicated repo and update the `git:` URL in `packages.yml` accordingly.
+
+Again, you don’t run `fft` directly here; it’s consumed by `main_project` as a git package.
+
+---
+
+### 3. `main_project` – consumer FFT project
 
 ```text
 main_project/
-  .env.dev_duckdb
+  env.dev_duckdb
   Makefile
   README.md
   profiles.yml
@@ -66,6 +107,7 @@ main_project/
     README.md
     marts/
       mart_users_from_package.ff.sql
+      mart_users_from_git_package.ff.sql
   seeds/
     README.md
     seed_users.csv
@@ -74,58 +116,109 @@ main_project/
       README.md
 ```
 
-This is a regular project:
+This is a regular FFT project that:
 
-* `profiles.yml` – DuckDB connection profile (`dev_duckdb`).
-* `.env.dev_duckdb` – points DuckDB at `.local/packages_demo.duckdb`.
-* `seeds/seed_users.csv` + `sources.yml` – define `source('crm','users')`.
-* `packages.yml` – declares the dependency on `../shared_package`.
-* `models/marts/mart_users_from_package.ff.sql` – a local mart that does:
+* owns the **engine configuration** (`profiles.yml`, `env.dev_duckdb`),
+* defines **seeds** and **sources** for `crm.users`,
+* declares **package dependencies** in `packages.yml`,
+* defines **local marts** that depend on package models.
 
-  ```jinja
-  from {{ ref('users_base.ff') }}
-  ```
+Key pieces:
 
-  where `users_base.ff` is defined in the **package**, not in `main_project`.
+* `profiles.yml` – DuckDB profile (`dev_duckdb`).
+* `env.dev_duckdb` – sets `FF_DUCKDB_PATH`, `FFT_ACTIVE_ENV`, `FF_ENGINE`.
+* `seeds/seed_users.csv` + `sources.yml` – define the `crm.users` source.
+* `packages.yml` – declares both the local and git-backed packages.
+* `models/marts/mart_users_from_package.ff.sql` – mart using the local package.
+* `models/marts/mart_users_from_git_package.ff.sql` – mart using the git-backed package.
 
 ---
 
-## Key concepts
+## Declaring packages – `packages.yml`
 
-### 1. Declaring packages – `packages.yml`
-
-In `main_project/packages.yml`:
+In `main_project/packages.yml` you wire in both packages:
 
 ```yaml
 packages:
+  # Local path package
   - name: shared_package
     path: "../shared_package"
     models_dir: "models"
+    # optional: constrain acceptable versions from shared_package/project.yml
+    version: ">=0.1.0,<0.2.0"
+
+  # Git-based package (same repo, different subdir for the demo)
+  - name: shared_package_git
+    git: "https://github.com/fftlabs/fastflowtransform.git"
+
+    # Directory inside the repo that contains the package root
+    subdir: "examples/packages_demo/shared_package_git_remote"
+
+    # Optional ref selectors (you typically choose *one* of these)
+    ref: "main"
+    # rev: "abc1234"   # explicit commit SHA
+    # tag: "v0.6.11"   # tag name
+    # branch: "main"   # branch name
+
+    models_dir: "models"
+
+    # optional: version constraint matched against shared_package_git_remote/project.yml
+    version: ">=0.1.0,<0.2.0"
 ```
 
-* `name` – logical package name (for logging / internal bookkeeping).
-* `path` – where to find the package directory, relative to `packages.yml`.
-* `models_dir` – where to look for models inside the package (defaults to `models` if omitted).
+Notes:
+
+* For **path packages**, set `path` and (optionally) `models_dir`.
+* For **git packages**, set:
+
+  * `git` – repo URL,
+  * `subdir` – where the package lives inside the repo,
+  * **one** of `ref` / `rev` / `tag` / `branch` (or nothing = `HEAD`),
+  * `models_dir` if needed,
+  * optional `version` constraint.
+* Internally, `ref` is treated as a generic alias and mapped to `rev` if you don’t provide `rev` / `tag` / `branch`.
 
 At load time, the core:
 
 1. Reads `packages.yml`.
-2. For each entry, loads its `project.yml` (if present) and its `models/`.
-3. Registers all models/macros from the package **into the same namespace** as local models.
+2. For each package:
 
-From the perspective of `main_project`, `users_base.ff` looks just like any other model —
-you can `ref('users_base.ff')` without caring that it physically lives in `../shared_package`.
+   * materializes its source:
 
-### 2. Referencing package models with `ref()`
+     * path: resolve `path` relative to `packages.yml`,
+     * git: clone/fetch repo into `.fastflowtransform/packages/git/...` and `git checkout` the requested ref.
+   * loads its `project.yml` manifest:
+
+     * checks `name` and `version`,
+     * validates `fft_version` (if present) against the running FFT core,
+     * validates `version` constraints from `packages.yml`,
+     * validates inter-package `dependencies` (from the package manifest).
+   * decides which `models_dir` to use (packages.yml overrides manifest).
+3. Loads models and macros from each package and registers them into the same namespace as local models.
+
+---
+
+## Using package models with `ref()`
+
+### 1. Local path package
 
 In `main_project/models/marts/mart_users_from_package.ff.sql`:
 
 ```jinja
+{{ config(
+    materialized='table',
+    tags=[
+        'example:packages_demo',
+        'scope:mart',
+        'engine:duckdb',
+    ],
+) }}
+
 with base as (
     select
         email_domain,
         signup_date
-    from {{ ref('users_base.ff') }}
+    from {{ ref('users_base.ff') }}   -- defined in shared_package
 )
 select
     email_domain,
@@ -137,16 +230,55 @@ group by email_domain
 order by email_domain;
 ```
 
-* `users_base.ff` is defined in `shared_package/models/staging/users_base.ff.sql`.
-* Because the package is registered, `ref('users_base.ff')` resolves correctly.
-* The DAG includes both the package model and the local mart.
+* `users_base.ff` physically lives in `shared_package/models/staging/users_base.ff.sql`.
+* From `main_project` you just `ref('users_base.ff')` — no package prefix.
 
-**Important:** model names must still be globally unique. If you define a model with the same name
-in both the package and the project, you’ll get a conflict (which is what you want).
+### 2. Git-backed package
 
-### 3. Shared macros from a package
+In `main_project/models/marts/mart_users_from_git_package.ff.sql`:
 
-The package ships a simple macro file:
+```jinja
+{{ config(
+    materialized='table',
+    tags=[
+        'example:packages_demo',
+        'scope:mart',
+        'engine:duckdb',
+    ],
+) }}
+
+with base as (
+    select
+        email_domain,
+        signup_date
+    from {{ ref('users_base_git.ff') }}   -- defined in shared_package_git_remote
+)
+select
+    email_domain,
+    count(*) as user_count,
+    min(signup_date) as first_signup,
+    max(signup_date) as last_signup
+from base
+group by email_domain
+order by email_domain;
+```
+
+* `users_base_git.ff` comes from the **git-backed** package (`shared_package_git_remote`).
+* Again, the model name is **global**: `ref('users_base_git.ff')` doesn’t mention the package.
+
+**Important:** model names are globally unique across:
+
+* main project
+* all path packages
+* all git packages
+
+If two models use the same name, FFT fails with a clear “duplicate model name” error at load time.
+
+---
+
+## Shared macros from packages
+
+The local package ships a macro file, for example:
 
 ```jinja
 -- shared_package/models/macros/shared_utils.sql
@@ -155,37 +287,46 @@ The package ships a simple macro file:
 {%- endmacro -%}
 ```
 
-`users_base.ff` uses it:
+`shared_package/models/staging/users_base.ff.sql` uses it:
 
 ```jinja
 select
-  user_id,
-  email,
-  {{ email_domain("email") }} as email_domain,
-  signup_date
+    user_id,
+    email,
+    {{ email_domain("email") }} as email_domain,
+    signup_date
 from raw_users;
 ```
 
-Because macros are loaded from both the main project and all packages into the same Jinja environment:
+Similarly, the git-backed package can provide its own macros (e.g. in `shared_utils_git.sql`).
 
-* models in the **package** can use macros from the package,
-* models in the **main project** can also use those macros if you want, subject to naming rules.
+Because macros from all packages and the main project share a single Jinja environment:
+
+* package models can use package macros,
+* main project models can also use package macros,
+* name collisions are possible, and “last macro wins”.
+
+Best practice:
+
+* use tags like `pkg:shared_package`, `pkg:shared_package_git`, and/or
+* namespace macros with `{% import 'macros/shared_utils.sql' as shared %}`.
 
 ---
 
 ## Data flow
 
-The demo intentionally mirrors the basic_demo pipeline but splits staging into a package:
+The demo mirrors the basic_demo pipeline while splitting staging into packages.
+
+**Local package:**
 
 ```text
 (main_project) seeds/seed_users.csv
        │
        ├─ fft seed
        ▼
-   seed_users (DuckDB table via sources.yml → crm.users)
+   seed_users (via sources.yml → crm.users)
        │
        ├─ shared_package/models/staging/users_base.ff.sql
-       │   (materialized view)
        ▼
    users_base
        │
@@ -194,11 +335,21 @@ The demo intentionally mirrors the basic_demo pipeline but splits staging into a
    mart_users_from_package
 ```
 
-The DAG (after a run) will roughly show:
+**Git package:**
 
 ```text
-crm.users (source) → users_base.ff (package) → mart_users_from_package.ff (main_project)
+seed_users (same table)
+       │
+       ├─ shared_package_git_remote/models/staging/users_base_git.ff.sql
+       ▼
+   users_base_git
+       │
+       ├─ main_project/models/marts/mart_users_from_git_package.ff.sql
+       ▼
+   mart_users_from_git_package
 ```
+
+The DAG will show both paths, with nodes annotated by their originating files, but **no special syntax** for package references.
 
 ---
 
@@ -213,14 +364,44 @@ cd examples/packages_demo/main_project
 ### 1. Configure DuckDB env
 
 ```bash
-set -a; source .env.dev_duckdb; set +a
-# This sets:
+set -a; source env.dev_duckdb; set +a
+# Sets:
 #   FF_DUCKDB_PATH=.local/packages_demo.duckdb
 #   FFT_ACTIVE_ENV=dev_duckdb
 #   FF_ENGINE=duckdb
 ```
 
-### 2. Run the full demo
+### 2. Inspect dependencies (local + git)
+
+You can check the package resolver and git clone behavior with:
+
+```bash
+fft deps .
+```
+
+You should see output similar to:
+
+```text
+Project: /.../examples/packages_demo/main_project
+Packages:
+  - shared_package (0.1.0)
+      kind:       path
+      path:       /.../examples/packages_demo/shared_package
+      models_dir: models  -> /.../shared_package/models
+      status:     OK
+
+  - shared_package_git (0.1.0)
+      kind:       git
+      git:        https://github.com/fftlabs/fastflowtransform.git
+      rev:        abc1234deadbeef...     # resolved commit SHA
+      subdir:     examples/packages_demo/shared_package_git_remote
+      models_dir: models  -> /.../repo/examples/packages_demo/shared_package_git_remote/models
+      status:     OK
+```
+
+If anything goes wrong (missing git, auth problems, bad ref, missing `project.yml`, missing `models_dir`, …) this command will fail with a targeted error message.
+
+### 3. Run the full demo
 
 ```bash
 make demo ENGINE=duckdb
@@ -228,34 +409,23 @@ make demo ENGINE=duckdb
 
 This will:
 
-1. **clean** – drop local artifacts and DuckDB file via `cleanup_env.py`.
-
+1. **clean** – drop local artifacts and DuckDB file via `_scripts/cleanup_env.py`.
 2. **seed** – `fft seed . --env dev_duckdb`:
 
-   * loads `seeds/seed_users.csv` into DuckDB as `seed_users`.
+   * loads `seeds/seed_users.csv` as `seed_users`.
+3. **run** – `fft run . --env dev_duckdb` with example tags:
 
-3. **run** – `fft run . --env dev_duckdb` with:
-
-   ```bash
-   --select tag:example:packages_demo --select tag:engine:duckdb
-   ```
-
-   Only models tagged for this example are built:
-
-   * `users_base.ff` (from `shared_package`)
-   * `mart_users_from_package.ff` (from `main_project`)
-
+   * builds `users_base.ff` and `users_base_git.ff` from the two packages,
+   * builds `mart_users_from_package` and `mart_users_from_git_package` in the main project.
 4. **dag** – `fft dag . --env dev_duckdb --html`:
 
-   * writes HTML docs to `main_project/site/dag/index.html`.
-
+   * writes DAG HTML to `site/dag/index.html`.
 5. **test** – `fft test . --env dev_duckdb`:
 
-   * runs DQ tests from `project.yml` (`not_null`, `unique`, `greater_equal`).
+   * runs DQ tests from `project.yml` that reference both package and local tables.
+6. **artifacts** – prints locations of `manifest.json`, `catalog.json`, `run_results.json`.
 
-6. **artifacts** – prints paths to `manifest.json`, `run_results.json`, `catalog.json`.
-
-### 3. Inspect results
+### 4. Inspect results
 
 * DAG HTML:
 
@@ -267,79 +437,105 @@ This will:
 
   ```text
   examples/packages_demo/main_project/.fastflowtransform/target/manifest.json
-  examples/packages_demo/main_project/.fastflowtransform/target/run_results.json
   examples/packages_demo/main_project/.fastflowtransform/target/catalog.json
+  examples/packages_demo/main_project/.fastflowtransform/target/run_results.json
   ```
 
-* DuckDB file (if you want to open it manually):
+* DuckDB file:
 
   ```text
   examples/packages_demo/main_project/.local/packages_demo.duckdb
+  ```
+
+* Package cache (including git clones):
+
+  ```text
+  examples/packages_demo/main_project/.fastflowtransform/packages/
+    git/
+      shared_package_git_https___github.com_fftlabs_fastflowtransform.git/
+        repo/  # git checkout used for the package
   ```
 
 ---
 
 ## What this demo demonstrates
 
-1. **Package loading**
+1. **Path-based packages**
 
-   `packages.yml` allows you to point at **another tree of models** and macros and load them as if they were local.
+   - `shared_package` is resolved via a local path.
+   - Models/macros from `../shared_package` appear as if local to `main_project`.
 
-2. **Shared staging layers**
+2. **Git-based packages**
 
-   You can move “standardized” staging code (sources, cleaning, type-casting, email normalization, etc.)
-   into a central `shared_package` and reuse it from multiple projects.
+   - `shared_package_git` is resolved by:
+     - cloning a remote repo,
+     - checking out a specific ref/branch/tag/commit,
+     - using a `subdir` as the package root.
+   - The exact commit hash is written to `packages.lock.yml`.
 
-3. **Consistent naming**
+3. **Versioning and constraints**
 
-   Since packaged models live in the same logical namespace, you get early feedback if two projects try to
-   define a model with the same name.
+   - Package manifests (`project.yml`) expose `name` / `version` / `fft_version`.
+   - `packages.yml` can constrain:
+     - which **package versions** are allowed,
+     - which **FFT core versions** a package supports (via `fft_version`).
 
-4. **Separation of concerns**
+4. **Diagnostics via `fft deps`**
 
-   * Package: stable, reused logic (e.g. `users_base`).
-   * Main project: business-specific marts and reporting (`mart_users_from_package`).
+   - Single command to see:
+     - path vs git packages,
+     - clones and refs,
+     - resolved models_dir,
+     - basic validity (missing dirs, bad refs, etc.).
+
+5. **Separation of concerns**
+
+   - Packages: reusable staging and macro logic.
+   - Consumer project: seeds, sources, engine config, marts.
 
 ---
 
 ## Things to try
 
-To understand packages better, experiment with:
+1. **Change the git ref**
 
-1. **Breaking the shared model**
+   - In `packages.yml`, switch `ref: "main"` to a tag or SHA.
+   - Run `fft deps .` and see which commit is used.
+   - Re-run `make demo` and confirm behavior is still consistent.
 
-   * Edit `shared_package/models/staging/users_base.ff.sql` (e.g. remove `email_domain`).
-   * Re-run `make demo`.
-   * Watch `mart_users_from_package` fail because the column is missing — proving the dependency goes through the package.
+2. **Break the git package**
 
-2. **Adding a new shared macro**
+   - Temporarily set `branch: "this-does-not-exist"`.
+   - Run `fft deps .` and observe the “requested ref/branch/tag does not exist” error.
+   - This is how you’d debug mis-typed branch/tag names in real life.
 
-   * Add a `country_label(expr)` macro in `shared_utils.sql`.
-   * Use it in a *local* model inside `main_project` to see that macros from the package are visible in the consumer.
+3. **Introduce a version mismatch**
 
-3. **Adding another package**
+   - Change `shared_package_git_remote/project.yml:version` to something incompatible with your `packages.yml:version` constraint.
+   - Run `fft deps .` and see the “spec requires … but resolved version is …” error.
+   - This is how you enforce “only use 0.1.x of this package” across projects.
 
-   * Create `examples/packages_demo/another_package` with its own `project.yml` and models.
-   * Extend `main_project/packages.yml` with a second entry and confirm both package’s models appear in the DAG.
+4. **Add more packages**
 
-4. **Introducing a naming conflict**
-
-   * Define a model named `users_base.ff` inside `main_project/models/staging`.
-   * Reload the project; you should get a clear error about duplicate model names, which is your cue to rename or explicitly choose one.
+   - Create another mini-package under `examples/packages_demo/another_package`.
+   - Declare it in `main_project/packages.yml`.
+   - Use its models in a new mart and watch them appear in the DAG.
 
 ---
 
 ## Summary
 
-The packages demo is a minimal, concrete example of:
+The updated `packages_demo` shows:
 
-* Defining a reusable FastFlowTransform **package** (`shared_package`).
-* Wiring it into a **consumer project** (`main_project`) via `packages.yml`.
-* Building a mart that depends on a model defined outside of the project tree.
-* Running everything through the normal `fft seed`, `fft run`, `fft dag`, and `fft test` workflow.
+- How to **consume a local package** via `path` in `packages.yml`.
+- How to **consume a git-based package** via `git` + `subdir` + `ref` and validate versions.
+- How to use `fft deps` and `packages.lock.yml` to see exactly what code you’re running.
+- How package models and macros integrate into your project as if everything lived in one tree.
 
-You can adopt the same pattern to share:
+Use this pattern to gradually factor out:
 
-* Standard staging layers (CRM / ERP / web analytics),
-* Macro libraries (date helpers, casting utilities),
-* Even entire mini-marts that represent common dimensional models across teams.
+- shared staging layers (CRM, billing, web analytics),
+- macro / utility libraries,
+- and sharable marts—
+
+all while keeping local projects thin, focused, and easy to reason about.

@@ -380,7 +380,15 @@ def _materialize_package_source(
 def _ensure_git_repo(cache_dir: Path, spec: PackageSpec) -> Path:
     """
     Ensure we have a local clone for the given git package in cache_dir and
-    return the checked-out directory (HEAD at rev/tag/branch).
+    return the checked-out directory.
+
+    Semantics:
+
+      - path packages: handled in _materialize_package_source (not here)
+      - git + rev:    pinned to specific commit (no auto-upgrade)
+      - git + tag:    pinned to tag (no auto-upgrade, aside from tag being moved)
+      - git + branch: tracks origin/<branch> on each run (auto-upgrade)
+      - git with none of rev/tag/branch: just use HEAD (whatever the repo's default is)
     """
     assert spec.git
     git_root = cache_dir / "git"
@@ -394,31 +402,107 @@ def _ensure_git_repo(cache_dir: Path, spec: PackageSpec) -> Path:
         echo(f"Cloning package '{spec.name}' from {spec.git} ...")
         _run_git(["clone", "--no-tags", "--quiet", spec.git, str(repo_dir)])
     else:
-        # best-effort fetch; ignore errors (offline etc.)
+        # Always try to update remotes; failures are non-fatal (offline etc.).
         try:
-            _run_git(["-C", str(repo_dir), "fetch", "--all", "--quiet"])
+            _run_git(
+                [
+                    "-C",
+                    str(repo_dir),
+                    "fetch",
+                    "--all",
+                    "--tags",
+                    "--prune",
+                    "--quiet",
+                ]
+            )
         except Exception as exc:  # pragma: no cover
             log.debug("Git fetch failed for %s: %s", spec.git, exc)
 
-    ref = spec.rev or spec.tag or spec.branch or "HEAD"
-    echo(f"Checking out {spec.name}@{ref} ...")
-    _run_git(["-C", str(repo_dir), "checkout", "--quiet", ref])
+    # Decide which selector to use.
+    # NOTE: PackageSpec already maps `ref` → `rev` if no rev/tag/branch is set.
+    if spec.rev:
+        # Pinned commit (or generic ref treated as rev): no auto-upgrade.
+        ref = spec.rev
+        echo(f"Checking out {spec.name}@{ref} (pinned rev) ...")
+        _run_git(["-C", str(repo_dir), "checkout", "--quiet", ref])
+
+    elif spec.tag:
+        # Pinned tag: we assume tags are stable; we don't auto-reset anything.
+        ref = spec.tag
+        echo(f"Checking out {spec.name}@{ref} (tag) ...")
+        _run_git(["-C", str(repo_dir), "checkout", "--quiet", ref])
+
+    elif spec.branch:
+        # Moving branch: make local <branch> track origin/<branch> and reset to it.
+        branch = spec.branch
+        echo(f"Checking out {spec.name}@{branch} (tracking origin/{branch}) ...")
+
+        # Create or update local branch to follow origin/<branch>
+        # -B: create or reset branch to start-point
+        _run_git(
+            [
+                "-C",
+                str(repo_dir),
+                "checkout",
+                "--quiet",
+                "-B",
+                branch,
+                f"origin/{branch}",
+            ]
+        )
+        # Force working tree to that commit (avoid local drift)
+        _run_git(
+            [
+                "-C",
+                str(repo_dir),
+                "reset",
+                "--hard",
+                f"origin/{branch}",
+            ]
+        )
+
+    else:
+        # No explicit selector: just ensure we are on whatever HEAD currently is.
+        echo(f"Checking out {spec.name}@HEAD ...")
+        _run_git(["-C", str(repo_dir), "checkout", "--quiet", "HEAD"])
 
     return repo_dir
 
 
 def _run_git(args: list[str]) -> None:
     try:
-        subprocess.run(["git", *args], check=True, capture_output=True)
+        # text=True so stdout/stderr are already str, not bytes
+        subprocess.run(
+            ["git", *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
     except FileNotFoundError as exc:  # pragma: no cover
         raise RuntimeError(
             "git executable not found. Git-based packages require git to be installed and on PATH."
         ) from exc
     except subprocess.CalledProcessError as exc:
+        stdout = (exc.stdout or "").strip()
+        stderr = (exc.stderr or "").strip()
+
+        cmd_str = "git " + " ".join(args)
+
+        # Very rough classification, but enough for common cases
+        if "Authentication failed" in stderr or "Permission denied" in stderr:
+            raise RuntimeError(f"{cmd_str} failed: authentication error.\n{stderr}") from exc
+
+        if "Repository not found" in stderr:
+            raise RuntimeError(f"{cmd_str} failed: repository not found.\n{stderr}") from exc
+
+        if "did not match any file(s) known to git" in stderr or "unknown revision" in stderr:
+            raise RuntimeError(
+                f"{cmd_str} failed: requested ref/branch/tag does not exist.\n{stderr}"
+            ) from exc
+
+        # Fallback: show full stdout/stderr
         raise RuntimeError(
-            f"git command failed: git {' '.join(args)}\n"
-            f"stdout:\n{exc.stdout.decode(errors='ignore')}\n"
-            f"stderr:\n{exc.stderr.decode(errors='ignore')}"
+            f"git command failed: {cmd_str}\nstdout:\n{stdout}\nstderr:\n{stderr}"
         ) from exc
 
 
