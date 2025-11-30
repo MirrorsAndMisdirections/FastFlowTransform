@@ -1,0 +1,6 @@
+# Connection profile for the packages_demo main project (DuckDB only)
+
+dev_duckdb:
+  engine: duckdb
+  duckdb:
+    path: "{{ env('FF_DUCKDB_PATH', '.local/packages_demo.duckdb') }}"

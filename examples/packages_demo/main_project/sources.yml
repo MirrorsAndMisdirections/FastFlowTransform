@@ -1,0 +1,8 @@
+version: 2
+
+sources:
+  - name: crm
+    tables:
+      - name: users
+        identifier: seed_users
+        description: Sample users table seeded from seeds/seed_users.csv.

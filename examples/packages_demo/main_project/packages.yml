@@ -1,0 +1,16 @@
+# examples/packages_demo/main_project/packages.yml
+packages:
+  # Local path package
+  - name: shared_package
+    path: "../shared_package"
+    models_dir: "models"
+
+  # Git-based package (same repo, different subdir)
+  - name: shared_package_git
+    git: "https://github.com/fftlabs/fastflowtransform.git"
+    subdir: "examples/packages_demo/shared_package_git_remote"
+    models_dir: "models"
+    # optional: use explicit ref / branch / tag
+    ref: "main"
+    # optional: version constraint matched against shared_package_git_remote/project.yml
+    version: ">=0.1.0,<0.2.0"

@@ -1,0 +1,14 @@
+# Minimal project-style config for the shared package.
+# This folder is *not* run directly; it is loaded via packages.yml
+# from the consumer project in ./main_project.
+
+name: shared_package
+version: "0.1"
+
+# Where models and macros live within the package directory
+models_dir: models
+
+# Optional: project-level vars or tests local to the package
+vars: {}
+
+tests: []

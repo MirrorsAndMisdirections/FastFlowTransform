@@ -21,6 +21,7 @@ from pydantic import ValidationError
 
 from fastflowtransform import storage
 from fastflowtransform.config.models import validate_model_meta_strict
+from fastflowtransform.config.packages import PackageSpec, load_packages_config
 from fastflowtransform.config.project import HookSpec, parse_project_yaml_config
 from fastflowtransform.config.sources import load_sources_config
 from fastflowtransform.errors import (
@@ -29,6 +30,7 @@ from fastflowtransform.errors import (
     ModuleLoadError,
 )
 from fastflowtransform.logging import get_logger
+from fastflowtransform.packages import ResolvedPackage, resolve_packages
 
 
 def _validate_py_model_signature(func: Callable, deps: list[str], *, path: Path, name: str) -> None:
@@ -132,6 +134,8 @@ class Node:
     path: Path
     deps: list[str] = field(default_factory=list)
     meta: dict[str, Any] = field(default_factory=dict)
+    # which package this node came from (None = main project)
+    package: str | None = None
 
 
 class Registry:
@@ -147,6 +151,13 @@ class Registry:
         self.cli_vars: dict[str, Any] = {}  # CLI --vars overrides
         self.active_engine: str | None = None
         self.incremental_models: dict[str, dict[str, Any]] = {}
+
+        # package manager state
+        # - self.packages: raw specs from packages.yml (config layer)
+        # - self.resolved_packages: git/path + manifest + version/deps
+        self.packages: list[PackageSpec] = []
+        self.resolved_packages: list[ResolvedPackage] = []
+        self.package_model_roots: list[Path] = []
 
         # global hooks from project.yml
         self.on_run_start_hooks: list[HookSpec] = []
@@ -282,26 +293,107 @@ class Registry:
             )
         return current in allowed
 
+    def _resolve_package_base_path(self, project_dir: Path, pkg: PackageSpec) -> Path:
+        """
+        BACKCOMPAT helper for path-based packages - still used by some tests
+        and external callers. For git-based packages this is not used.
+        """
+        base = Path(pkg.path or "")
+        if not base.is_absolute():
+            base = (project_dir / base).resolve()
+        return base
+
+    def _load_packages_yaml(self, project_dir: Path) -> None:
+        """
+        Load packages.yml into:
+          - self.packages          (raw config specs)
+          - self.resolved_packages (git/path + manifest + versions/deps)
+          - self.package_model_roots (actual model roots to load from)
+
+        Missing / empty packages.yml → no packages.
+        """
+        logger = get_logger("registry")
+
+        # Config layer (kept for backwards-compatibility / inspection).
+        try:
+            cfg = load_packages_config(project_dir)
+        except Exception as exc:
+            raise ValueError(f"Failed to parse packages.yml: {exc}") from exc
+
+        self.packages = list(cfg.packages or [])
+
+        # Runtime resolver: git clone, manifest loading, version/deps validation.
+        try:
+            self.resolved_packages = resolve_packages(project_dir, cfg)
+        except Exception as exc:
+            # Surface as a clear configuration error
+            raise ValueError(f"Failed to resolve packages: {exc}") from exc
+
+        # Compute model roots from resolved packages (and warn if missing).
+        self.package_model_roots = []
+        for pkg in self.resolved_packages:
+            models_root = pkg.root / pkg.models_dir
+            if not models_root.exists():
+                logger.warning(
+                    "Package '%s': models_dir '%s' not found at %s; package will be ignored.",
+                    pkg.name,
+                    pkg.models_dir,
+                    models_root,
+                )
+                continue
+            if not models_root.is_dir():
+                logger.warning(
+                    (
+                        "Package '%s': models_dir '%s' is not "
+                        "a directory at %s; package will be ignored."
+                    ),
+                    pkg.name,
+                    pkg.models_dir,
+                    models_root,
+                )
+                continue
+            self.package_model_roots.append(models_root)
+
     def load_project(self, project_dir: Path) -> None:
         """Load a FastFlowTransform project from the given directory."""
         self._reset_registry_state()
         self.project_dir = project_dir
 
         models_dir = project_dir / "models"
-        self._init_jinja_env(models_dir)
 
-        # macros first, because models may use them
+        # 1) packages.yml: resolve package model roots
+        self._load_packages_yaml(project_dir)
+
+        # 2) Jinja env with multi-root loader (packages + project)
+        all_model_roots: list[Path] = []
+        if self.package_model_roots:
+            all_model_roots.extend(self.package_model_roots)
+        all_model_roots.append(models_dir)
+        self._init_jinja_env(all_model_roots)
+
+        # 3) macros: packages first, then project (project can override)
+        for pkg_root in self.package_model_roots:
+            self._load_macros(pkg_root)
+            self._load_py_macros(pkg_root)
         self._load_macros(models_dir)
         self._load_py_macros(models_dir)
 
+        # 4) project.yml + sources.yml
         self._load_sources_yaml(project_dir)
         self._load_project_yaml(project_dir)
 
-        # discover models
+        # 5) Discover models: packages first, then project
+        for pkg in self.resolved_packages:
+            models_root = pkg.root / pkg.models_dir
+            if not models_root.is_dir():
+                continue
+            self._discover_sql_models(models_root, package=pkg.name)
+            self._discover_python_models(models_root, package=pkg.name)
+
         self._discover_sql_models(models_dir)
         self._discover_python_models(models_dir)
 
-        # final validation
+        # 6) Validate deps
         self._validate_dependencies()
 
     def _reset_registry_state(self) -> None:
@@ -315,6 +407,11 @@ class Registry:
         self.macros.clear()
         self.incremental_models = {}
 
+        # packages
+        self.packages = []
+        self.resolved_packages = []
+        self.package_model_roots = []
+
         # reset storage maps
         storage.set_model_storage({})
         storage.set_seed_storage({})
@@ -325,19 +422,22 @@ class Registry:
         self.before_model_hooks = []
         self.after_model_hooks = []
 
-    def _init_jinja_env(self, models_dir: Path) -> None:
+    def _init_jinja_env(self, models_dirs: Path | list[Path]) -> None:
         """Initialize the Jinja environment for this project."""
+        if isinstance(models_dirs, Path):
+            search_paths = [str(models_dirs)]
+        else:
+            search_paths = [str(p) for p in models_dirs]
+
         self.env = Environment(
-            loader=FileSystemLoader(str(models_dir)),
+            loader=FileSystemLoader(search_paths),
             undefined=StrictUndefined,
             autoescape=False,
             trim_blocks=True,
             lstrip_blocks=True,
         )
 
-        # ---- Make project vars & helpers available in Jinja ----
-        # Note: these callables close over `self`, so they always read the
-        # latest self.cli_vars / self.project_vars even after project.yml loads.
+        # --- Jinja helpers: var(), engine(), env() ---
         def _var(key: str, default: Any | None = None) -> Any:
             # CLI --vars override project vars
             if isinstance(self.cli_vars, dict) and key in self.cli_vars:
@@ -362,7 +462,7 @@ class Registry:
         self.env.filters["var"] = _var
         self.env.filters["env"] = _env
 
-        # SQL literal helper for models *and* hooks
+        # Export sql_literal as filter as well
         self.env.filters["sql_literal"] = sql_literal
 
     def _load_sources_yaml(self, project_dir: Path) -> None:
@@ -429,7 +529,7 @@ class Registry:
             self.before_model_hooks = []
             self.after_model_hooks = []
 
-    def _discover_sql_models(self, models_dir: Path) -> None:
+    def _discover_sql_models(self, models_dir: Path, *, package: str | None = None) -> None:
         """Scan *.ff.sql files, parse config, validate meta, and register nodes."""
         for path in models_dir.rglob("*.ff.sql"):
             name = path.stem
@@ -484,9 +584,16 @@ class Registry:
             if not self._should_register_for_engine(meta, path=path):
                 continue
 
-            self._add_node_or_fail(name, "sql", path, deps, meta=meta)
+            self._add_node_or_fail(
+                name,
+                "sql",
+                path,
+                deps,
+                meta=meta,
+                package=package,
+            )
 
-    def _discover_python_models(self, models_dir: Path) -> None:
+    def _discover_python_models(self, models_dir: Path, *, package: str | None = None) -> None:
         """Scan *.ff.py files, import them, validate meta, and register decorated callables."""
         for path in models_dir.rglob("*.ff.py"):
             # Import the module so decorators can register functions
@@ -565,7 +672,14 @@ class Registry:
                 meta = cfg.model_dump(exclude_none=True)
 
                 # Register node
-                self._add_node_or_fail(name, kind, path, deps, meta=meta)
+                self._add_node_or_fail(
+                    name,
+                    kind,
+                    path,
+                    deps,
+                    meta=meta,
+                    package=package,
+                )
 
                 # Required-columns spec (for executors) stays as before
                 req = getattr(func, "__ff_require__", None)
@@ -653,18 +767,53 @@ class Registry:
         return mod
 
     def _add_node_or_fail(
-        self, name: str, kind: str, path: Path, deps: list[str], *, meta: dict[str, Any]
+        self,
+        name: str,
+        kind: str,
+        path: Path,
+        deps: list[str],
+        *,
+        meta: dict[str, Any],
+        package: str | None = None,
     ) -> None:
-        if name in self.nodes:
-            other = self.nodes[name].path
-            raise ModuleLoadError(
-                "Duplicate model name detected:\n"
-                f"• alredy registered: {other}\n"
-                f"• new model:        {path}\n"
-                "Hint: Rename one of the models (file name = node name)"
-                "or use @model(name='…') for Python."
+        """
+        Register a new DAG node.
+
+        Conflict resolution:
+          - If both existing and new nodes are from the main project (package=None):
+              raise an error (as before).
+          - If at least one of them comes from a package:
+              last wins, with a warning.
+        """
+        logger = get_logger("registry")
+        existing = self.nodes.get(name)
+        if existing:
+            if existing.package is None and package is None:
+                other = existing.path
+                raise ModuleLoadError(
+                    "Duplicate model name detected:\n"
+                    f"• already registered: {other}\n"
+                    f"• new model:        {path}\n"
+                    "Hint: Rename one of the models or use @model(name='…') for Python.",
+                )
+
+            logger.warning(
+                "Model name conflict for '%s': %s (package=%s) overrides %s (package=%s).",
+                name,
+                path,
+                package or "<project>",
+                existing.path,
+                existing.package or "<project>",
             )
-        self.nodes[name] = Node(name=name, kind=kind, path=path, deps=deps, meta=meta)
+
+        self.nodes[name] = Node(
+            name=name,
+            kind=kind,
+            path=path,
+            deps=deps,
+            meta=meta,
+            package=package,
+        )
 
     def _scan_sql_deps(self, path: Path) -> list[str]:
         txt = path.read_text(encoding="utf-8")
