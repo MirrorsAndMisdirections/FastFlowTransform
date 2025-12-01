@@ -112,6 +112,25 @@ def _build_project_yaml(ctx: _InitContext) -> str:
             '#     run_date: "2024-01-01"',
             "vars: {}",
             "",
+            "# Optional project-wide hooks that run before/after the pipeline or per model.",
+            "# See docs/Hooks.md for examples (SQL + Python) and selector usage.",
+            "hooks:",
+            "  on_run_start: []",
+            "  on_run_end: []",
+            "  before_model: []",
+            "  after_model: []",
+            "",
+            "# Optional storage & incremental defaults applied per model name.",
+            "# See docs/Project_Config.md#models for field meanings.",
+            "models:",
+            "  storage: {}",
+            "  incremental: {}",
+            "",
+            "# Optional seed storage overrides (e.g., external locations per seed).",
+            "# See docs/Project_Config.md#seeds for supported keys.",
+            "seeds:",
+            "  storage: {}",
+            "",
             "# Declare project-wide data quality checks under `tests`. "
             "See docs/Data_Quality_Tests.md.",
             "tests: []",
@@ -137,66 +156,22 @@ def _build_sources_yaml() -> str:
     )
 
 
+def _build_packages_yaml() -> str:
+    return "\n".join(
+        [
+            "# Packages bring in external models and macros. See docs/Packages.md.",
+            "packages:",
+            "  # - name: shared_macros",
+            '  #   path: "../shared_macros"',
+            '  #   models_dir: "models"',
+            "",
+        ]
+    )
+
+
 def _write_file(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-
-
-def _create_directory_notes(target: Path) -> None:
-    notes = {
-        "models/README.md": "\n".join(
-            [
-                "# Models directory",
-                "",
-                "Place SQL (`*.ff.sql`) and Python (`*.ff.py`) models here.",
-                "See docs/Config_and_Macros.md for modeling guidance and config options.",
-                "",
-            ]
-        ),
-        "seeds/README.md": "\n".join(
-            [
-                "# Seeds directory",
-                "",
-                "Add CSV or Parquet files for reproducible seeds.",
-                "Usage examples are covered in docs/Quickstart.md and "
-                "docs/Config_and_Macros.md#13-seeds-sources-and-dependencies.",
-                "",
-            ]
-        ),
-        "tests/unit/README.md": "\n".join(
-            [
-                "# Unit tests",
-                "",
-                "Define YAML unit specs as described in "
-                "docs/Config_and_Macros.md#73-model-unit-tests-fft-utest.",
-                "Invoke them with `fft utest <project> --env <profile>`.",
-                "",
-            ]
-        ),
-        "tests/dq/README.md": "\n".join(
-            [
-                "# Data quality tests",
-                "",
-                "Store custom data-quality tests that run via `fft test` "
-                "(docs/Data_Quality_Tests.md).",
-                "Use this directory for schema-bound tests separate from unit specs.",
-                "",
-            ]
-        ),
-        "docs/README.md": "\n".join(
-            [
-                "# Project documentation",
-                "",
-                "Write operator or contributor notes here and keep "
-                "them in sync with generated docs.",
-                "See docs/Technical_Overview.md#auto-docs-and-lineage "
-                "for `fft dag` / `fft docgen` guidance.",
-                "",
-            ]
-        ),
-    }
-    for rel, text in notes.items():
-        _write_file(target / rel, text)
 
 
 def _build_root_readme(ctx: _InitContext) -> str:
@@ -205,12 +180,28 @@ def _build_root_readme(ctx: _InitContext) -> str:
             "# FastFlowTransform project scaffold",
             "",
             "This project was created with `fft init`.",
+            "",
+            "What lives here:",
+            "- models/: SQL (`*.ff.sql`) and Python (`*.ff.py`) models.",
+            "  - models/macros/: Jinja SQL macros loaded automatically.",
+            "  - models/macros_py/: Python helpers exposed as Jinja globals/filters.",
+            "- seeds/: CSV/Parquet inputs for reproducible seeds (see docs/Quickstart.md).",
+            "- sources.yml: External tables for source('group','table').",
+            "- profiles.yml: Engine connections; defaults come from docs/Profiles.md.",
+            "- packages.yml: Optional shared models/macros (docs/Packages.md).",
+            "- tests/unit/: YAML specs for `fft utest` (docs/Unit_Tests.md).",
+            "- tests/dq/: Custom data-quality tests for `fft test` (docs/Data_Quality_Tests.md).",
+            "- hooks/: SQL or Python hooks referenced from project.yml (docs/Hooks.md).",
+            "- docs/: Notes plus generated DAG site when using `fft dag --html`.",
+            "",
             "Next steps:",
             "1. Update `profiles.yml` with real connection details (docs/Profiles.md).",
-            "2. Add sources in `sources.yml` and author models "
-            "under `models/` (docs/Config_and_Macros.md).",
-            "3. Seed sample data with `fft seed` and execute models "
-            "with `fft run` (docs/Quickstart.md).",
+            "2. Add sources in `sources.yml` and author models under `models/` "
+            "   (docs/Config_and_Macros.md).",
+            "3. Wire packages (optional) in `packages.yml` if you reuse shared "
+            "   models/macros (docs/Packages.md).",
+            "4. Seed sample data with `fft seed` and execute models "
+            "   with `fft run` (docs/Quickstart.md).",
             "",
         ]
     )
@@ -274,16 +265,25 @@ def init(
         engine=resolved_engine,
     )
 
-    for sub in ("models", "seeds", "tests/unit", "tests/dq", "docs"):
+    for sub in (
+        "models",
+        "models/macros",
+        "models/macros_py",
+        "seeds",
+        "tests/unit",
+        "tests/dq",
+        "hooks",
+        "docs",
+    ):
         (project_dir / sub).mkdir(parents=True, exist_ok=True)
 
     _write_file(project_dir / "project.yml", _build_project_yaml(ctx))
     _write_file(project_dir / "profiles.yml", _build_profiles_yaml(ctx))
     _write_file(project_dir / "sources.yml", _build_sources_yaml())
+    _write_file(project_dir / "packages.yml", _build_packages_yaml())
     _write_file(project_dir / "README.md", _build_root_readme(ctx))
-    _create_directory_notes(project_dir)
 
-    typer.secho(f"✓ Project skeleton created at {project_dir}", fg="green")
+    typer.secho(f"Project skeleton created at {project_dir}", fg="green")
 
 
 def register(app: typer.Typer) -> None:

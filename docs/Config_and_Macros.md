@@ -32,6 +32,7 @@ For an operational walkthrough (CLI usage, troubleshooting, pipelines) see the [
 - [2. `config()` options](#2-config-options)
 - [3. Variables with `var()`](#3-variables-with-var)
 - [4. Template context & helpers](#4-template-context-helpers)
+  - [4.1 Engine-aware stdlib helpers (`fastflowtransform.stdlib`)](#41-engine-aware-stdlib-helpers-fastflowtransformstdlib)
 - [5. Macros & reusable Jinja code](#5-macros-reusable-jinja-code)
 - [6. Materialization semantics](#6-materialization-semantics)
 - [7. Testing & quality gates](#7-testing-quality-gates)
@@ -55,22 +56,23 @@ FastFlowTransform discovers models under `<project>/models/` with two primary fl
 create or replace table users as
 select id, email
 from {{ source('crm', 'users') }};
-```
+````
 
+<a id="12-python-models-ffpy"></a>
 ### 1.2 Python models (`*.ff.py`)
 
 Use the `@model` decorator from `fastflowtransform.core` to register a callable. The decorator accepts:
 
-- `name` (optional) → overrides the logical name (defaults to stem).
-- `deps` → list of dependency nodes (file stems or logical names).
-- `requires` → column contract per dependency (validated via `validation.validate_required_columns`).
-- `materialized` (optional) → `'table' | 'view' | 'ephemeral'`; mirrors `config(materialized=...)` for SQL.
-- `tags` (optional) → convenience for attaching selection labels without writing `meta={"tags": ...}`.
+* `name` (optional) → overrides the logical name (defaults to stem).
+* `deps` → list of dependency nodes (file stems or logical names).
+* `requires` → column contract per dependency (validated via `validation.validate_required_columns`).
+* `materialized` (optional) → `'table' | 'view' | 'ephemeral'`; mirrors `config(materialized=...)` for SQL.
+* `tags` (optional) → convenience for attaching selection labels without writing `meta={"tags": ...}`.
 
 Dependencies determine the call signature:
 
-- Single dependency → function receives a single `pandas.DataFrame`.
-- Multiple dependencies → function receives `dict[str, pandas.DataFrame]` keyed by physical relation name (e.g. `"users"`).
+* Single dependency → function receives a single `pandas.DataFrame`.
+* Multiple dependencies → function receives `dict[str, pandas.DataFrame]` keyed by physical relation name (e.g. `"users"`).
 
 ```python
 # models/users_enriched.ff.py
@@ -111,16 +113,17 @@ Allowed values are case-insensitive strings or tuples. If the engine does not ma
 
 ### 1.3 Seeds, sources, and dependencies
 
-- Declare external tables in `sources.yml`; they become available via `source('group','table')`.
-- Provide reproducible inputs with CSV/Parquet seeds in `<project>/seeds/`.
-- FastFlowTransform auto-detects dependencies:
-  - SQL models → parse `ref()` / `source()` calls.
-  - Python models → use the decorator’s `deps`.
-  - Additional runtime dependencies can be expressed via `relation_for(<node>)`.
+* Declare external tables in `sources.yml`; they become available via `source('group','table')`.
+* Provide reproducible inputs with CSV/Parquet seeds in `<project>/seeds/`.
+* FastFlowTransform auto-detects dependencies:
+
+  * SQL models → parse `ref()` / `source()` calls.
+  * Python models → use the decorator’s `deps`.
+  * Additional runtime dependencies can be expressed via `relation_for(<node>)`.
 
 > **Warning:** SQL dependency detection is static. Only literal calls such as `ref('users.ff')` are registered. When you need to gate a dependency behind a variable, materialise the options in a mapping (`{'foo': ref('foo'), 'bar': ref('bar')}`) and pick from that map at runtime; a bare `ref(variable)` will not show up in the DAG.
 
-- Persistence (e.g. Spark/Databricks): configure default targets under `project.yml → models.storage` (and optionally `seeds.storage`). Example:
+* Persistence (e.g. Spark/Databricks): configure default targets under `project.yml → models.storage` (and optionally `seeds.storage`). Example:
 
   ```yaml
   models:
@@ -186,19 +189,19 @@ Call `config()` at the top of SQL models. Python models get the same options via
 
 Supported keys:
 
-| Key            | Type            | Description                                                                  |
-|----------------|-----------------|------------------------------------------------------------------------------|
-| `materialized` | `"table" \| "view" \| "ephemeral"` | Controls how FastFlowTransform persists the model. See [Materialization semantics](#6-materialization-semantics). |
-| `tags`         | `list[str]`     | Arbitrary labels surfaced in docs / selection tooling.                       |
-| `engines`      | `list[str]` or `str` | Restrict registration to the listed engines (case-insensitive). Requires the active engine to be known (profile selection or `FF_ENGINE`). |
-| (future)       | –               | Additional metadata is stored under `node.meta[...]` if added later.         |
+| Key            | Type                               | Description                                                                                                                                |
+| -------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `materialized` | `"table" \| "view" \| "ephemeral"` | Controls how FastFlowTransform persists the model. See [Materialization semantics](#6-materialization-semantics).                          |
+| `tags`         | `list[str]`                        | Arbitrary labels surfaced in docs / selection tooling.                                                                                     |
+| `engines`      | `list[str]` or `str`               | Restrict registration to the listed engines (case-insensitive). Requires the active engine to be known (profile selection or `FF_ENGINE`). |
+| (future)       | –                                  | Additional metadata is stored under `node.meta[...]` if added later.                                                                       |
 
 **Tips**
 
-- Place `config()` before any SQL text.
-- Use tags to power custom filters in docs or to drive test selection.
-- Combine `engines=[...]` with per-engine subfolders to keep one physical file per backend without name clashes. When no engine is active, FastFlowTransform raises a clear error to avoid silent skips.
-- Ephemeral models inline into downstream SQL; pick `view` for shareable logic without materializing a table.
+* Place `config()` before any SQL text.
+* Use tags to power custom filters in docs or to drive test selection.
+* Combine `engines=[...]` with per-engine subfolders to keep one physical file per backend without name clashes. When no engine is active, FastFlowTransform raises a clear error to avoid silent skips.
+* Ephemeral models inline into downstream SQL; pick `view` for shareable logic without materializing a table.
 
 ---
 
@@ -234,13 +237,14 @@ Resolution order: CLI overrides → project vars → default argument.
 
 Every model (SQL & Python) gets a rich Jinja context. Key helpers:
 
-| Helper             | Purpose                                                                                  |
-|--------------------|------------------------------------------------------------------------------------------|
-| `this`             | Object exposing `name`, `relation`, `materialized`, `schema`, `database`.                |
-| `ref("model")`     | Resolves another model’s physical relation (or inlines ephemeral SQL).                   |
-| `source("group","table")` | Resolves entries defined in `sources.yml`.                                             |
-| `relation_for(node)` (Python utility) | Maps logical node names to physical relations (helpful inside UDFs/tests). |
-| `var("key", default)` | Retrieves project/CLI variables (see above).                                           |
+| Helper                                | Purpose                                                                                                                                      |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `this`                                | Object exposing `name`, `relation`, `materialized`, `schema`, `database`.                                                                    |
+| `ref("model")`                        | Resolves another model’s physical relation (or inlines ephemeral SQL).                                                                       |
+| `source("group","table")`             | Resolves entries defined in `sources.yml`.                                                                                                   |
+| `relation_for(node)` (Python utility) | Maps logical node names to physical relations (helpful inside UDFs/tests).                                                                   |
+| `var("key", default)`                 | Retrieves project/CLI variables (see above).                                                                                                 |
+| `engine(default=None)`                | Returns the current engine key (`'duckdb'`, `'postgres'`, `'bigquery'`, `'snowflake'`, `'spark'`, …) or the provided `default` when unknown. |
 
 Example:
 
@@ -254,6 +258,206 @@ from {{ ref('users.ff') }} as u
 -- rendered relation for logging/debugging
 -- {{ this.relation }}
 ```
+
+### 4.1 Engine-aware stdlib helpers (`fastflowtransform.stdlib`)
+
+FastFlowTransform ships a small “standard library” of **engine-aware SQL helpers** in `fastflowtransform.stdlib`. These are registered into Jinja as `ff_*` helpers:
+
+```jinja
+{{ ff_date_trunc("order_ts", "day") }}
+{{ ff_date_add("order_ts", "day", 1) }}
+{{ ff_safe_cast("amount", "numeric", default="0") }}
+{{ ff_partition_filter("o.order_ts", var("from"), var("to")) }}
+{{ ff_partition_in("ds", var("partitions")) }}
+```
+
+They take care of emitting the right SQL for DuckDB, Postgres, BigQuery, Databricks/Spark, and Snowflake, based on the active engine/profile.
+
+#### Engine helpers
+
+| Helper                      | Description                                                                                                                                  | Example                                             |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `ff_engine()`               | Returns the **canonical engine key** for the current run (`'duckdb'`, `'postgres'`, `'bigquery'`, `'snowflake'`, `'spark'`, or `'generic'`). | `{{ ff_engine() }}`                                 |
+| `ff_engine_family()`        | Same as `ff_engine()` today; reserved for coarser groupings in the future.                                                                   | –                                                   |
+| `ff_is_engine(*candidates)` | Returns `true` if the current engine matches any of the given candidates (case-insensitive).                                                 | `{% if ff_is_engine('bigquery') %} ... {% endif %}` |
+
+These helpers use the same engine resolution as `config(engines=...)` (primarily `FF_ENGINE` / profile).
+
+#### Date helpers
+
+All date helpers accept a **SQL expression string**, not a Python value. You pass them column names or SQL snippets *as strings*:
+
+```jinja
+{{ ff_date_trunc("order_ts", "day") }}  -- OK
+{{ ff_date_trunc("CAST(order_ts AS TIMESTAMP)", "month") }}
+```
+
+Under the hood they emit engine-specific SQL (“golden SQL”):
+
+##### `ff_date_trunc(expr, part="day")`
+
+Build an engine-aware `DATE_TRUNC` expression.
+
+| Engine family                | Emitted SQL example                              |
+| ---------------------------- | ------------------------------------------------ |
+| DuckDB / Postgres / Redshift | `date_trunc('day', CAST(order_ts AS TIMESTAMP))` |
+| Snowflake / Spark            | `date_trunc('day', CAST(order_ts AS TIMESTAMP))` |
+| BigQuery                     | `DATE_TRUNC(CAST(order_ts AS TIMESTAMP), DAY)`   |
+| Generic / unknown            | `date_trunc('day', CAST(order_ts AS TIMESTAMP))` |
+
+Usage in a model:
+
+```sql
+select
+  {{ ff_date_trunc("order_ts", "day") }} as order_day,
+  cast(order_ts as timestamp) as order_ts
+from {{ source('sales', 'orders') }};
+```
+
+##### `ff_date_add(expr, part, amount)`
+
+Build an engine-aware “add N units to a date or timestamp” expression.
+
+Examples (per engine):
+
+* DuckDB / Postgres / Redshift:
+
+  ```sql
+  {{ ff_date_add("order_ts", "day", 1) }}
+  -- → CAST(order_ts AS TIMESTAMP) + INTERVAL '1 day'
+  ```
+
+* Spark:
+
+  ```sql
+  {{ ff_date_add("order_date", "day", 7) }}
+  -- → date_add(order_date, 7)
+  ```
+
+* Snowflake:
+
+  ```sql
+  {{ ff_date_add("order_ts", "day", 1) }}
+  -- → DATEADD(DAY, 1, TO_TIMESTAMP(order_ts))
+  ```
+
+* BigQuery:
+
+  ```sql
+  {{ ff_date_add("order_ts", "day", 1) }}
+  -- → DATE_ADD(CAST(order_ts AS TIMESTAMP), INTERVAL 1 DAY)
+  ```
+
+Heuristics:
+
+* If you already passed a `CAST(...)` / `SAFE_CAST(...)` expression as `expr`, the helper will **not** double-wrap it.
+* Otherwise, it will coerce strings to `TIMESTAMP` where needed (BigQuery, Snowflake) to avoid “VARCHAR + INTERVAL” errors.
+
+#### Safe cast helper
+
+##### `ff_safe_cast(expr, target_type, default=None)`
+
+Engine-aware “safe cast” builder. It tries to use `TRY_CAST` / `SAFE_CAST` where available and falls back to `CAST(...)` otherwise, with an optional `COALESCE` default.
+
+Semantics by engine:
+
+* DuckDB → `try_cast(expr AS type)`
+* BigQuery → `SAFE_CAST(expr AS type)`
+* Spark → `TRY_CAST(expr AS type)`
+* Snowflake → `CAST(expr AS type)`
+  (Snowflake rejects `TRY_CAST(FLOAT AS NUMBER(...))` in some cases, so we use plain `CAST` for compatibility.)
+* Postgres / Redshift / generic → `CAST(expr AS type)`
+
+Additionally, for logical numeric/decimal types (`"numeric"`, `"number"`, `"decimal"`), it normalizes the target type per engine:
+
+* BigQuery → `NUMERIC`
+* DuckDB / Postgres / Redshift → `NUMERIC`
+* Snowflake → `NUMBER(38,10)` via `CAST(...)`
+
+Examples:
+
+```sql
+select
+  {{ ff_safe_cast("amount", "numeric", default="0") }} as amount_safe
+from {{ source('sales', 'orders') }};
+```
+
+BigQuery:
+
+```sql
+COALESCE(SAFE_CAST(amount AS NUMERIC), 0)
+```
+
+DuckDB:
+
+```sql
+COALESCE(try_cast(amount AS NUMERIC), 0)
+```
+
+Snowflake:
+
+```sql
+COALESCE(CAST(amount AS NUMBER(38,10)), 0)
+```
+
+You can also use engine-specific target types directly:
+
+```sql
+{{ ff_safe_cast("col", "INT64") }}     -- BigQuery numeric type
+{{ ff_safe_cast("col", "double") }}    -- DuckDB/Snowflake/Postgres floating type
+```
+
+#### Partition helpers
+
+These work on **Python values** (dates, datetimes, strings, ints, lists) and emit SQL literals using `sql_literal` internally. They’re great for **parameterized partition filters** that stay portable across engines.
+
+##### `ff_partition_filter(column, start=None, end=None)`
+
+Build a `WHERE` predicate for a **range** of partition values.
+
+* `start` only → `col >= <start_literal>`
+* `end` only → `col <= <end_literal>`
+* both → `col BETWEEN <start_literal> AND <end_literal>`
+* neither → `"1=1"` (no-op filter)
+
+Example:
+
+```sql
+where
+  {{ ff_partition_filter(
+       "o.order_ts",
+       var("from_date", "2025-10-01"),
+       var("to_date", "2025-10-31")
+  ) }}
+```
+
+Rendered SQL (DuckDB/Postgres/BigQuery/etc.):
+
+```sql
+o.order_ts BETWEEN '2025-10-01' AND '2025-10-31'
+```
+
+##### `ff_partition_in(column, values)`
+
+Build an `IN(...)` predicate for a set of partition values.
+
+* Empty values → `"1=0"` (always false).
+* Non-empty → `col IN (<lit1>, <lit2>, ...)`.
+
+Example:
+
+```sql
+where
+  {{ ff_partition_in("ds", var("partitions", ["2025-10-01", "2025-10-02"])) }}
+```
+
+Rendered:
+
+```sql
+ds IN ('2025-10-01', '2025-10-02')
+```
+
+You can pass `list[date]`, `list[datetime]`, or plain strings; all are converted to safe SQL literals.
 
 ---
 
@@ -285,9 +489,9 @@ from {{ ref('users.ff') }};
 
 **Best practices**
 
-- Keep macros idempotent and side-effect free.
-- Group related macros per file (e.g., string utilities, date helpers).
-- Document macros with inline comments; FastFlowTransform’s generated docs list each macro with its path.
+* Keep macros idempotent and side-effect free.
+* Group related macros per file (e.g., string utilities, date helpers).
+* Document macros with inline comments; FastFlowTransform’s generated docs list each macro with its path.
 
 ---
 
@@ -295,19 +499,19 @@ from {{ ref('users.ff') }};
 
 ### SQL models
 
-| Materialization | Behaviour |
-|-----------------|-----------|
-| `table`         | `CREATE OR REPLACE TABLE … AS <SELECT …>` |
-| `view`          | `CREATE OR REPLACE VIEW … AS <SELECT …>` |
+| Materialization | Behaviour                                                       |
+| --------------- | --------------------------------------------------------------- |
+| `table`         | `CREATE OR REPLACE TABLE … AS <SELECT …>`                       |
+| `view`          | `CREATE OR REPLACE VIEW … AS <SELECT …>`                        |
 | `ephemeral`     | No object is created; downstream `ref()` expands to a subquery. |
 
 **Postgres-specific:** FastFlowTransform rewrites the “create or replace” pattern into `DROP TABLE IF EXISTS …; CREATE TABLE … AS …` for compatibility.
 
 ### Python models
 
-- Default → materialized as `table`.
-- `materialized='view'` produces an engine-specific temporary table first, then creates/overwrites a view that selects from it.
-- Ephemeral Python models are not supported.
+* Default → materialized as `table`.
+* `materialized='view'` produces an engine-specific temporary table first, then creates/overwrites a view that selects from it.
+* Ephemeral Python models are not supported.
 
 ---
 
@@ -345,9 +549,9 @@ tests:
 
 Keep transformation logic honest with small, engine-agnostic specs:
 
-- Place YAML files under `<project>/tests/unit/`.
-- Express inputs via inline rows or CSV paths.
-- Declare expected output rows plus comparison options (`order_by`, `any_order`, `ignore_columns`, `approx`).
+* Place YAML files under `<project>/tests/unit/`.
+* Express inputs via inline rows or CSV paths.
+* Declare expected output rows plus comparison options (`order_by`, `any_order`, `ignore_columns`, `approx`).
 
 ```yaml
 # tests/unit/users_enriched.yml
@@ -383,18 +587,23 @@ See the [Model Unit Tests guide](./Unit_Tests.md) for an exhaustive walkthrough 
 
 ## 8. Quick cheat sheet
 
-| Task | Snippet / Pointer |
-|------|-------------------|
-| Set materialization | `{{ config(materialized='view') }}` |
-| Add tags | `{{ config(tags=['mart','daily']) }}` |
-| Read project variable | `{{ var('run_date', '1970-01-01') }}` |
-| Current relation name | `{{ this.relation }}` |
-| Reference another model | `{{ ref('users.ff') }}` |
-| Reference source | `{{ source('crm','users') }}` |
-| Macro definition | `models/macros/*.sql` |
-| Guarantee columns (Python) | `@model(..., requires={'users': {'id','email'}})` |
-| Data-quality test | `project.yml → tests` + `fft test …` |
-| Unit test | `tests/unit/*.yml` + `fft utest …` |
+| Task                       | Snippet / Pointer                                         |
+| -------------------------- | --------------------------------------------------------- |
+| Set materialization        | `{{ config(materialized='view') }}`                       |
+| Add tags                   | `{{ config(tags=['mart','daily']) }}`                     |
+| Read project variable      | `{{ var('run_date', '1970-01-01') }}`                     |
+| Current relation name      | `{{ this.relation }}`                                     |
+| Reference another model    | `{{ ref('users.ff') }}`                                   |
+| Reference source           | `{{ source('crm','users') }}`                             |
+| Engine check (BigQuery)    | `{% if ff_is_engine('bigquery') %} ... {% endif %}`       |
+| Engine-aware truncate      | `{{ ff_date_trunc("order_ts", "day") }}`                  |
+| Engine-aware date add      | `{{ ff_date_add("order_ts", "day", 1) }}`                 |
+| Safe numeric cast          | `{{ ff_safe_cast("amount", "numeric", default="0") }}`    |
+| Partition range filter     | `{{ ff_partition_filter("ds", var("from"), var("to")) }}` |
+| Partition IN filter        | `{{ ff_partition_in("ds", var("parts", [])) }}`           |
+| Guarantee columns (Python) | `@model(..., requires={'users': {'id','email'}})`         |
+| Data-quality test          | `project.yml → tests` + `fft test …`                      |
+| Unit test                  | `tests/unit/*.yml` + `fft utest …`                        |
 
 ---
 

@@ -2,19 +2,95 @@ name: macros_demo
 version: "0.1"
 
 vars:
-  # used by macros and examples
   default_country: "DE"
 
 models: {}
-
 seeds: {}
 
 tests:
+  # dim_users
   - type: not_null
     table: dim_users
+    column: user_id
+    tags: [batch]
+
+  # fct_user_sales (existing)
+  - type: not_null
+    table: fct_user_sales
     column: user_id
     tags: [batch]
   - type: row_count_between
     table: fct_user_sales
     min_rows: 1
+    tags: [batch]
+
+  # NEW: stg_orders – tests stdlib safe_cast/date helpers
+  - type: not_null
+    table: stg_orders
+    column: user_id
+    tags: [batch]
+  - type: row_count_between
+    table: stg_orders
+    min_rows: 1
+    tags: [batch]
+
+  # amount_safe produced via ff_safe_cast should never be NULL and ≥ 0
+  - type: not_null
+    table: stg_orders
+    column: amount_safe
+    tags: [batch]
+  - type: greater_equal
+    table: stg_orders
+    column: amount_safe
+    threshold: 0.0
+    tags: [batch]
+  - type: non_negative_sum
+    table: stg_orders
+    column: amount_safe
+    tags: [batch]
+
+  # order_day produced via ff_date_trunc should never be NULL
+  - type: not_null
+    table: stg_orders
+    column: order_day
+    tags: [batch]
+
+  # stg_users (your existing checks)
+  - type: not_null
+    table: stg_users
+    column: user_id
+    tags: [batch]
+  - type: row_count_between
+    table: stg_users
+    min_rows: 1
+    tags: [batch]
+
+  # fct_user_sales_by_country – uses ff_partition_in
+  - type: not_null
+    table: fct_user_sales_by_country
+    column: user_id
+    tags: [batch]
+  - type: row_count_between
+    table: fct_user_sales_by_country
+    min_rows: 1
+    tags: [batch]
+
+  # Only DE / AT should appear (given your seed + ff_partition_in)
+  - type: accepted_values
+    table: fct_user_sales_by_country
+    column: country
+    values: ["DE", "AT"]
+    tags: [batch]
+
+  # fct_user_sales_partitioned – uses ff_partition_filter
+  - type: not_null
+    table: fct_user_sales_partitioned
+    column: user_id
+    tags: [batch]
+
+  # We know the date filter gives exactly two users (1 & 2) in the demo seeds
+  - type: row_count_between
+    table: fct_user_sales_partitioned
+    min_rows: 2
+    max_rows: 2
     tags: [batch]
