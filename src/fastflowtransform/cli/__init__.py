@@ -18,6 +18,7 @@ from fastflowtransform.cli.bootstrap import (
 )
 from fastflowtransform.cli.ci_cmd import register as _register_ci
 from fastflowtransform.cli.dag_cmd import dag, register as _register_dag
+from fastflowtransform.cli.deps_cmd import register as _register_deps
 from fastflowtransform.cli.docgen_cmd import docgen, register as _register_docgen
 from fastflowtransform.cli.docs_utils import (
     _build_docs_manifest,
@@ -134,6 +135,7 @@ _register_init(app)
 _register_snapshot(app)
 _register_source(app)
 _register_ci(app)
+_register_deps(app)
 
 
 __all__ = [

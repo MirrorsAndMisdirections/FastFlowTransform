@@ -1,0 +1,7 @@
+name: shared_package_git
+version: "0.1.0"
+models_dir: models
+
+vars: {}
+
+tests: []

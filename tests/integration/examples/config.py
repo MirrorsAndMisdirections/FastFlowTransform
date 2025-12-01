@@ -164,6 +164,14 @@ EXAMPLES: list[ExampleConfig] = [
             "bigframes": "dev_bigquery_bigframes",
         },
     ),
+    # ExampleConfig(
+    #     name="packages_demo",
+    #     path=ROOT / "examples" / "packages_demo",
+    #     make_target="demo",
+    #     env_by_engine={
+    #         "duckdb": "dev_duckdb",
+    #     },
+    # ),
     ExampleConfig(
         name="snapshot_demo",
         path=ROOT / "examples" / "snapshot_demo",

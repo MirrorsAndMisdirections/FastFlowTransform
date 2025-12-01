@@ -1,0 +1,34 @@
+# Main project configuration for the packages demo.
+
+name: packages_demo_main
+version: "0.1"
+models_dir: models
+
+docs:
+  dag_dir: site/dag
+
+vars: {}
+
+tests:
+  # Sanity checks to show that models from the package + local mart build correctly.
+
+  - type: not_null
+    table: users_base
+    column: user_id
+    tags: [example_packages_demo]
+
+  - type: unique
+    table: users_base
+    column: user_id
+    tags: [example_packages_demo]
+
+  - type: not_null
+    table: mart_users_from_package
+    column: email_domain
+    tags: [example_packages_demo]
+
+  - type: greater_equal
+    table: mart_users_from_package
+    column: user_count
+    threshold: 0
+    tags: [example_packages_demo]

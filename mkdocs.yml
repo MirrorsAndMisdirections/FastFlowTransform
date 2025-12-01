@@ -41,6 +41,7 @@ nav:
   - CI Checks & Change-Aware Runs: CI_Check.md
   - Cost Monitoring: Cost_Monitoring.md
   - Hooks: Hooks.md
+  - Packages: Packages.md
   - Troubleshooting: Troubleshooting.md
   - Examples:
       - Basic Demo: examples/Basic_Demo.md
@@ -54,6 +55,7 @@ nav:
       - Local Engine Setup: examples/Local_Engine_Setup.md
       - Snapshot Demo: examples/Snapshot_Demo.md
       - Hooks Demo: examples/Hooks_Demo.md
+      - Packages Demo: examples/Packages_Demo.md
   - API Reference: reference/
   - Contributing: Contributing.md
   - License: License.md
