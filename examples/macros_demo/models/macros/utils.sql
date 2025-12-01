@@ -1,8 +1,7 @@
 {# Reusable SQL helpers #}
 
 {%- macro email_domain(expr) -%}
-{%- set e = engine('duckdb') -%}
-{%- if e == 'bigquery' -%}
+{%- if ff_is_engine('bigquery') -%}
     lower(split({{ expr }}, '@')[SAFE_OFFSET(1)])
 {%- else -%}
     lower(split_part({{ expr }}, '@', 2))

@@ -4,7 +4,6 @@ from __future__ import annotations
 import ast
 import importlib.util
 import inspect
-import json
 import os
 import re
 import types
@@ -16,10 +15,9 @@ from typing import Any
 
 import jinja2.runtime
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
-from jinja2.runtime import Undefined as JinjaUndefined
 from pydantic import ValidationError
 
-from fastflowtransform import storage
+from fastflowtransform import stdlib as ff_stdlib, storage
 from fastflowtransform.config.models import validate_model_meta_strict
 from fastflowtransform.config.packages import PackageSpec, load_packages_config
 from fastflowtransform.config.project import HookSpec, parse_project_yaml_config
@@ -93,38 +91,6 @@ def _validate_py_model_signature(func: Callable, deps: list[str], *, path: Path,
             f"Or:      def {func.__name__}(*deps): …"
         ),
     )
-
-
-def sql_literal(value: Any) -> str:
-    """
-    Convert a Python value into a SQL literal string.
-
-    - None      -> "NULL"
-    - bool      -> "TRUE"/"FALSE"
-    - int/float -> "123" (no quotes)
-    - str       -> quoted with single quotes and escaped
-    - other     -> JSON-dumped and treated as a string literal
-    """
-    if value is None or isinstance(value, JinjaUndefined):
-        return "NULL"
-
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-
-    if isinstance(value, (int, float)):
-        return str(value)
-
-    if isinstance(value, str):
-        # Simple quote-escape for single quotes
-        escaped = value.replace("'", "''")
-        return f"'{escaped}'"
-
-    # Fallback: JSON (or str) and quote it
-    try:
-        json_text = json.dumps(value, separators=(",", ":"), sort_keys=True)
-    except TypeError:
-        json_text = str(value)
-    return "'" + json_text.replace("'", "''") + "'"
 
 
 @dataclass
@@ -463,7 +429,13 @@ class Registry:
         self.env.filters["env"] = _env
 
         # Export sql_literal as filter as well
-        self.env.filters["sql_literal"] = sql_literal
+        self.env.filters["sql_literal"] = ff_stdlib.sql_literal
+
+        # --- FastFlow stdlib: engine-aware SQL helpers -----------------
+        ff_stdlib.register_jinja(
+            self.env,
+            engine_resolver=self._current_engine,
+        )
 
     def _load_sources_yaml(self, project_dir: Path) -> None:
         """Load sources.yml (version 2) if present."""

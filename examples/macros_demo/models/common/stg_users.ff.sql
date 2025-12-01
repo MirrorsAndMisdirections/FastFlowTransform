@@ -1,6 +1,14 @@
 {{ config(
     materialized='view',
-    tags=['example:macros_demo', 'scope:common', 'engine:duckdb', 'engine:postgres', 'engine:databricks_spark', 'engine:bigquery', 'engine:snowflake_snowpark']
+    tags=[
+      'example:macros_demo', 
+      'scope:common', 
+      'engine:duckdb', 
+      'engine:postgres', 
+      'engine:databricks_spark', 
+      'engine:bigquery', 
+      'engine:snowflake_snowpark'
+    ]
 ) }}
 
 with src as (
